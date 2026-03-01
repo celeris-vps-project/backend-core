@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"backend-core/internal/identity/application"
+
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 )
