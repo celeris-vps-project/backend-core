@@ -8,6 +8,7 @@ import (
 type TokenGenerator interface {
 	Generate(user *domain.User) (string, error)
 }
+
 type PasswordHasher interface {
 	Compare(plain, hash string) bool
 	Hash(plain string) (string, error) // 留给未来的 RegisterUser 用例
@@ -38,4 +39,23 @@ func (app *AuthAppService) Login(email, plainPassword string) (string, error) {
 
 	// 3. 生成并返回 Token
 	return app.token.Generate(user)
+}
+
+func (app *AuthAppService) RegisterUser(email, plainPassword string) (string, error) {
+	// 1. 生成密码哈希
+	hash, err := app.hasher.Hash(plainPassword)
+	if err != nil {
+		return "", err
+	}
+
+	// 2. 创建新用户实体（这里简化了 ID 和状态的生成）
+	newUser := domain.ReconstituteUser("generated-id", email, hash, "active")
+
+	// 3. 保存用户到数据库（需要在 UserRepository 中实现 Save 方法）
+	if err := app.repo.Save(newUser); err != nil {
+		return "", err
+	}
+
+	// 4. 生成并返回 Token
+	return app.token.Generate(newUser)
 }

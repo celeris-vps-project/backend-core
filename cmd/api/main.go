@@ -8,16 +8,16 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"golang.org/x/crypto/bcrypt"
-	"gorm.io/driver/postgres"
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	identityHttp "backend-core/internal/indentity/interfaces/http"
 )
 
 func main() {
-	// 1. 連接 PostgreSQL (請替換為你的真實 DSN)
-	dsn := "host=localhost user=postgres password=root dbname=whmcs_killer port=5432 sslmode=disable TimeZone=Asia/Taipei"
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	// 1. 連接 SQLite (請替換為你的真實路徑)
+	dsn := "data.db"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		log.Fatalf("無法連接資料庫: %v", err)
 	}
@@ -27,9 +27,8 @@ func main() {
 
 	// 2. 實例化真實的基礎設施
 	pwdHasher := infrastructure.NewBcryptPasswordService(bcrypt.DefaultCost)
-	userRepo := infrastructure.NewPostgresUserRepo(db)
+	userRepo := infrastructure.NewSqliteUserRepo(db)
 	jwtService := infrastructure.NewJWTService("my-super-secret-key", "whmcs-killer-api")
-	pwdHasher := infrastructure.NewFakePasswordHasher() // 之前寫的假密碼庫，後續可換成 bcrypt
 
 	// 3. 裝配應用層與 Controller
 	authApp := application.NewAuthAppService(userRepo, jwtService, pwdHasher)

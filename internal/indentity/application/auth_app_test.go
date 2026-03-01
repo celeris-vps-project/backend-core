@@ -1,0 +1,98 @@
+package application
+
+import (
+	"backend-core/internal/indentity/domain"
+	"backend-core/internal/indentity/infrastructure"
+	"fmt"
+	"testing"
+
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+)
+
+type mockTokenGenerator struct {
+	token    string
+	lastUser *domain.User
+}
+
+func (m *mockTokenGenerator) Generate(user *domain.User) (string, error) {
+	m.lastUser = user
+	return m.token, nil
+}
+
+type mockPasswordHasher struct{}
+
+func (m *mockPasswordHasher) Compare(plain, hash string) bool {
+	return hash == "hash:"+plain
+}
+
+func (m *mockPasswordHasher) Hash(plain string) (string, error) {
+	return "hash:" + plain, nil
+}
+
+func newTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+
+	if err := db.AutoMigrate(&infrastructure.UserPO{}); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+
+	return db
+}
+
+func newTestApp(t *testing.T) (*AuthAppService, *infrastructure.SqliteUserRepo, *mockTokenGenerator) {
+	t.Helper()
+
+	db := newTestDB(t)
+	repo := infrastructure.NewSqliteUserRepo(db)
+	token := &mockTokenGenerator{token: "test-token"}
+	hasher := &mockPasswordHasher{}
+
+	return NewAuthAppService(repo, token, hasher), repo, token
+}
+
+func TestRegisterUser_Success(t *testing.T) {
+	app, repo, _ := newTestApp(t)
+
+	token, err := app.RegisterUser("u@example.com", "pass123")
+	if err != nil {
+		t.Fatalf("RegisterUser error: %v", err)
+	}
+	if token != "test-token" {
+		t.Fatalf("token mismatch: %s", token)
+	}
+
+	user, err := repo.FindByEmail("u@example.com")
+	if err != nil {
+		t.Fatalf("FindByEmail error: %v", err)
+	}
+	if user.PasswordHash() != "hash:pass123" {
+		t.Fatalf("password hash mismatch: %s", user.PasswordHash())
+	}
+	if user.Status() != "active" {
+		t.Fatalf("status mismatch: %s", user.Status())
+	}
+}
+
+func TestLogin_Success(t *testing.T) {
+	app, repo, _ := newTestApp(t)
+
+	existing := domain.ReconstituteUser("id-1", "login@example.com", "hash:secret", "active")
+	if err := repo.Save(existing); err != nil {
+		t.Fatalf("Save error: %v", err)
+	}
+
+	token, err := app.Login("login@example.com", "secret")
+	if err != nil {
+		t.Fatalf("Login error: %v", err)
+	}
+	if token != "test-token" {
+		t.Fatalf("token mismatch: %s", token)
+	}
+}

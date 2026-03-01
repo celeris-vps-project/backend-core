@@ -1,11 +1,11 @@
 package http
 
 import (
+	"backend-core/internal/indentity/application"
 	"context"
 
-	"backend-core/internal/identity/application"
-
 	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/common/utils"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 )
 
@@ -30,7 +30,7 @@ func (h *AuthHandler) Login(ctx context.Context, c *app.RequestContext) {
 
 	// 1. 绑定参数并校验 (如果非 email 格式或密码太短，直接报错返回)
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, app.H{"error": "参数格式错误: " + err.Error()})
+		c.JSON(consts.StatusBadRequest, utils.H{"error": "参数格式错误: " + err.Error()})
 		return
 	}
 
@@ -38,12 +38,12 @@ func (h *AuthHandler) Login(ctx context.Context, c *app.RequestContext) {
 	token, err := h.authApp.Login(req.Email, req.Password)
 	if err != nil {
 		// 这里可以根据具体的 error 类型返回 401 或 403，目前简化处理
-		c.JSON(consts.StatusUnauthorized, app.H{"error": err.Error()})
+		c.JSON(consts.StatusUnauthorized, utils.H{"error": err.Error()})
 		return
 	}
 
 	// 3. 组装成功响应
-	c.JSON(consts.StatusOK, app.H{
+	c.JSON(consts.StatusOK, utils.H{
 		"message": "登录成功",
 		"token":   token,
 	})

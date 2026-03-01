@@ -24,6 +24,21 @@ type PostgresUserRepo struct {
 	db *gorm.DB
 }
 
+func (r *PostgresUserRepo) Save(u *domain.User) error {
+	if u == nil {
+		return errors.New("user is nil")
+	}
+
+	po := UserPO{
+		ID:           u.ID(),
+		Email:        u.Email(),
+		PasswordHash: u.PasswordHash(),
+		Status:       u.Status(),
+	}
+
+	return r.db.Create(&po).Error
+}
+
 // NewPostgresUserRepo 實例化 Repo
 func NewPostgresUserRepo(db *gorm.DB) *PostgresUserRepo {
 	return &PostgresUserRepo{db: db}
@@ -45,6 +60,3 @@ func (r *PostgresUserRepo) FindByEmail(email string) (*domain.User, error) {
 	// 【關鍵點】將資料庫模型 (UserPO) 恢復為領域層的聚合根 (domain.User)
 	return domain.ReconstituteUser(po.ID, po.Email, po.PasswordHash, po.Status), nil
 }
-
-// 實戰中你還可以繼續實現 Save 方法：
-// func (r *PostgresUserRepo) Save(u *domain.User) error { ... }
