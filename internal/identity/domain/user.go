@@ -31,9 +31,3 @@ func (u *User) ID() string           { return u.id }
 func (u *User) Email() string        { return u.email }
 func (u *User) PasswordHash() string { return u.passwordHash }
 func (u *User) Status() string       { return u.status }
-
-// UserRepository 接口，定义存取契约
-type UserRepository interface {
-	FindByEmail(email string) (*User, error)
-	Save(u *User) error // 未来可能需要实现保存用户的功能
-}
