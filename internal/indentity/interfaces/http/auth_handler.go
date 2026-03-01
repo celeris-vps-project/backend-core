@@ -15,6 +15,11 @@ type LoginRequest struct {
 	Password string `json:"password" vd:"len($)>5"` // 密码长度必须大于 5
 }
 
+type RegisterRequest struct {
+	Email    string `json:"email" vd:"email"`
+	Password string `json:"password" vd:"len($)>5"`
+}
+
 type AuthHandler struct {
 	authApp *application.AuthAppService
 }
@@ -45,6 +50,27 @@ func (h *AuthHandler) Login(ctx context.Context, c *app.RequestContext) {
 	// 3. 组装成功响应
 	c.JSON(consts.StatusOK, utils.H{
 		"message": "登录成功",
+		"token":   token,
+	})
+}
+
+// Register 处理注册 HTTP 请求
+func (h *AuthHandler) Register(ctx context.Context, c *app.RequestContext) {
+	var req RegisterRequest
+
+	if err := c.BindAndValidate(&req); err != nil {
+		c.JSON(consts.StatusBadRequest, utils.H{"error": "参数格式错误: " + err.Error()})
+		return
+	}
+
+	token, err := h.authApp.RegisterUser(req.Email, req.Password)
+	if err != nil {
+		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(consts.StatusOK, utils.H{
+		"message": "注册成功",
 		"token":   token,
 	})
 }

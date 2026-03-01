@@ -6,12 +6,13 @@ import (
 	"backend-core/internal/indentity/interfaces/http/middleware"
 	"log"
 
-	"github.com/cloudwego/hertz/pkg/app/server"
-	"golang.org/x/crypto/bcrypt"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-
 	identityHttp "backend-core/internal/indentity/interfaces/http"
+
+	"github.com/cloudwego/hertz/pkg/app/server"
+	"github.com/glebarez/sqlite"
+	"github.com/hertz-contrib/cors"
+	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
 func main() {
@@ -36,9 +37,16 @@ func main() {
 
 	// 4. 配置 Hertz 路由
 	h := server.Default()
+	h.Use(cors.New(cors.Config{
+		AllowOrigins: []string{"*"},
+		AllowMethods: []string{"PUT", "PATCH", "POST", "GET", "DELETE"},
+		AllowHeaders: []string{"Origin", "Authorization", "Content-Type"},
+	}))
 
 	v1 := h.Group("/api/v1")
+
 	{
+		v1.POST("/auth/register", authHandler.Register)
 		v1.POST("/auth/login", authHandler.Login)
 	}
 
@@ -48,6 +56,6 @@ func main() {
 	{
 		// 這裡掛載需要登入的路由...
 	}
-
+	
 	h.Spin()
 }

@@ -57,6 +57,17 @@ func newTestApp(t *testing.T) (*AuthAppService, *infrastructure.SqliteUserRepo, 
 	return NewAuthAppService(repo, token, hasher), repo, token
 }
 
+func newTestAppWithJWT(t *testing.T, secret string) (*AuthAppService, *infrastructure.SqliteUserRepo, *infrastructure.JWTService) {
+	t.Helper()
+
+	db := newTestDB(t)
+	repo := infrastructure.NewSqliteUserRepo(db)
+	jwtSvc := infrastructure.NewJWTService(secret, "test-issuer")
+	hasher := &mockPasswordHasher{}
+
+	return NewAuthAppService(repo, jwtSvc, hasher), repo, jwtSvc
+}
+
 func TestRegisterUser_Success(t *testing.T) {
 	app, repo, _ := newTestApp(t)
 
@@ -94,5 +105,27 @@ func TestLogin_Success(t *testing.T) {
 	}
 	if token != "test-token" {
 		t.Fatalf("token mismatch: %s", token)
+	}
+}
+
+func TestRegisterUser_JWTSignatureValidation(t *testing.T) {
+	app, _, jwtSvc := newTestAppWithJWT(t, "secret-1")
+
+	token, err := app.RegisterUser("jwt@example.com", "pass123")
+	if err != nil {
+		t.Fatalf("RegisterUser error: %v", err)
+	}
+
+	userID, err := jwtSvc.ParseToken(token)
+	if err != nil {
+		t.Fatalf("ParseToken error: %v", err)
+	}
+	if userID != "generated-id" {
+		t.Fatalf("userID mismatch: %s", userID)
+	}
+
+	otherSvc := infrastructure.NewJWTService("secret-2", "test-issuer")
+	if _, err := otherSvc.ParseToken(token); err == nil {
+		t.Fatalf("expected signature validation error")
 	}
 }
