@@ -1,7 +1,7 @@
-package infrastructure
+package infra
 
 import (
-	"backend-core/internal/indentity/domain"
+	"backend-core/internal/identity/domain"
 	"errors"
 
 	"gorm.io/gorm"

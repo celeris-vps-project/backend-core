@@ -1,7 +1,7 @@
-package infrastructure
+package infra
 
 import (
-	"backend-core/internal/indentity/domain"
+	"backend-core/internal/identity/domain"
 	"errors"
 	"time"
 
@@ -20,7 +20,7 @@ func NewJWTService(secret string, issuer string) *JWTService {
 	}
 }
 
-// Generate 實現了 application.TokenGenerator 介面
+// Generate 實現了 app.TokenGenerator 介面
 func (s *JWTService) Generate(user *domain.User) (string, error) {
 	// 構造 JWT 的 Payload (Claims)
 	claims := jwt.RegisteredClaims{

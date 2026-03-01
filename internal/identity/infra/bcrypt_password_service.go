@@ -1,10 +1,10 @@
-package infrastructure
+package infra
 
 import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// BcryptPasswordService 实现了 application 层的接口契约
+// BcryptPasswordService 实现了 app 层的接口契约
 type BcryptPasswordService struct {
 	cost int // 计算成本，数值越大越安全，但消耗的 CPU 时间也越长
 }

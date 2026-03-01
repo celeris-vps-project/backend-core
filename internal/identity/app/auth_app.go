@@ -1,7 +1,7 @@
-package application
+package app
 
 import (
-	"backend-core/internal/indentity/domain"
+	"backend-core/internal/identity/domain"
 )
 
 // 依赖的外部服务接口 (由基础设施层实现)

@@ -1,12 +1,12 @@
 package main
 
 import (
-	"backend-core/internal/indentity/application"
-	"backend-core/internal/indentity/infrastructure"
-	"backend-core/internal/indentity/interfaces/http/middleware"
+	"backend-core/internal/identity/app"
+	"backend-core/internal/identity/infra"
+	"backend-core/internal/identity/interfaces/http/middleware"
 	"log"
 
-	identityHttp "backend-core/internal/indentity/interfaces/http"
+	identityHttp "backend-core/internal/identity/interfaces/http"
 
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/glebarez/sqlite"
@@ -24,15 +24,15 @@ func main() {
 	}
 
 	// (可選) 自動遷移表結構
-	db.AutoMigrate(&infrastructure.UserPO{})
+	db.AutoMigrate(&infra.UserPO{})
 
 	// 2. 實例化真實的基礎設施
-	pwdHasher := infrastructure.NewBcryptPasswordService(bcrypt.DefaultCost)
-	userRepo := infrastructure.NewSqliteUserRepo(db)
-	jwtService := infrastructure.NewJWTService("my-super-secret-key", "whmcs-killer-api")
+	pwdHasher := infra.NewBcryptPasswordService(bcrypt.DefaultCost)
+	userRepo := infra.NewSqliteUserRepo(db)
+	jwtService := infra.NewJWTService("my-super-secret-key", "whmcs-killer-api")
 
 	// 3. 裝配應用層與 Controller
-	authApp := application.NewAuthAppService(userRepo, jwtService, pwdHasher)
+	authApp := app.NewAuthAppService(userRepo, jwtService, pwdHasher)
 	authHandler := identityHttp.NewAuthHandler(authApp)
 
 	// 4. 配置 Hertz 路由
@@ -56,6 +56,6 @@ func main() {
 	{
 		// 這裡掛載需要登入的路由...
 	}
-	
+
 	h.Spin()
 }

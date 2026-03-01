@@ -1,7 +1,7 @@
 package middleware
 
 import (
-	"backend-core/internal/indentity/infrastructure"
+	"backend-core/internal/identity/infra"
 	"context"
 	"strings"
 
@@ -11,9 +11,9 @@ import (
 )
 
 // JWTAuthMiddleware 現在需要接收 JWTService 實例作為依賴
-func JWTAuthMiddleware(jwtSvc *infrastructure.JWTService) app.HandlerFunc {
+func JWTAuthMiddleware(jwtSvc *infra.JWTService) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
-		authHeader := string(c.Request.Header.Get("Authorization"))
+		authHeader := c.Request.Header.Get("Authorization")
 		if authHeader == "" {
 			c.JSON(consts.StatusUnauthorized, utils.H{"error": "未授權：缺失 Authorization Header"})
 			c.Abort()

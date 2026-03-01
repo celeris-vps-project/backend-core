@@ -1,8 +1,8 @@
-package application
+package app
 
 import (
-	"backend-core/internal/indentity/domain"
-	"backend-core/internal/indentity/infrastructure"
+	"backend-core/internal/identity/domain"
+	"backend-core/internal/identity/infra"
 	"fmt"
 	"testing"
 
@@ -39,30 +39,30 @@ func newTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("open sqlite: %v", err)
 	}
 
-	if err := db.AutoMigrate(&infrastructure.UserPO{}); err != nil {
+	if err := db.AutoMigrate(&infra.UserPO{}); err != nil {
 		t.Fatalf("auto migrate: %v", err)
 	}
 
 	return db
 }
 
-func newTestApp(t *testing.T) (*AuthAppService, *infrastructure.SqliteUserRepo, *mockTokenGenerator) {
+func newTestApp(t *testing.T) (*AuthAppService, *infra.SqliteUserRepo, *mockTokenGenerator) {
 	t.Helper()
 
 	db := newTestDB(t)
-	repo := infrastructure.NewSqliteUserRepo(db)
+	repo := infra.NewSqliteUserRepo(db)
 	token := &mockTokenGenerator{token: "test-token"}
 	hasher := &mockPasswordHasher{}
 
 	return NewAuthAppService(repo, token, hasher), repo, token
 }
 
-func newTestAppWithJWT(t *testing.T, secret string) (*AuthAppService, *infrastructure.SqliteUserRepo, *infrastructure.JWTService) {
+func newTestAppWithJWT(t *testing.T, secret string) (*AuthAppService, *infra.SqliteUserRepo, *infra.JWTService) {
 	t.Helper()
 
 	db := newTestDB(t)
-	repo := infrastructure.NewSqliteUserRepo(db)
-	jwtSvc := infrastructure.NewJWTService(secret, "test-issuer")
+	repo := infra.NewSqliteUserRepo(db)
+	jwtSvc := infra.NewJWTService(secret, "test-issuer")
 	hasher := &mockPasswordHasher{}
 
 	return NewAuthAppService(repo, jwtSvc, hasher), repo, jwtSvc
@@ -124,7 +124,7 @@ func TestRegisterUser_JWTSignatureValidation(t *testing.T) {
 		t.Fatalf("userID mismatch: %s", userID)
 	}
 
-	otherSvc := infrastructure.NewJWTService("secret-2", "test-issuer")
+	otherSvc := infra.NewJWTService("secret-2", "test-issuer")
 	if _, err := otherSvc.ParseToken(token); err == nil {
 		t.Fatalf("expected signature validation error")
 	}

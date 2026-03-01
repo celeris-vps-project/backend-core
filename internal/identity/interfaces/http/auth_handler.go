@@ -1,10 +1,10 @@
 package http
 
 import (
-	"backend-core/internal/indentity/application"
+	"backend-core/internal/identity/app"
 	"context"
 
-	"github.com/cloudwego/hertz/pkg/app"
+	hz_app "github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 )
@@ -21,16 +21,16 @@ type RegisterRequest struct {
 }
 
 type AuthHandler struct {
-	authApp *application.AuthAppService
+	authApp *app.AuthAppService
 }
 
-func NewAuthHandler(app *application.AuthAppService) *AuthHandler {
+func NewAuthHandler(app *app.AuthAppService) *AuthHandler {
 	return &AuthHandler{authApp: app}
 }
 
 // Login 处理登录 HTTP 请求
 // 注意 Hertz 的签名规范：(ctx context.Context, c *app.RequestContext)
-func (h *AuthHandler) Login(ctx context.Context, c *app.RequestContext) {
+func (h *AuthHandler) Login(ctx context.Context, c *hz_app.RequestContext) {
 	var req LoginRequest
 
 	// 1. 绑定参数并校验 (如果非 email 格式或密码太短，直接报错返回)
@@ -55,7 +55,7 @@ func (h *AuthHandler) Login(ctx context.Context, c *app.RequestContext) {
 }
 
 // Register 处理注册 HTTP 请求
-func (h *AuthHandler) Register(ctx context.Context, c *app.RequestContext) {
+func (h *AuthHandler) Register(ctx context.Context, c *hz_app.RequestContext) {
 	var req RegisterRequest
 
 	if err := c.BindAndValidate(&req); err != nil {
