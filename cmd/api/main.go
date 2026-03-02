@@ -1,6 +1,9 @@
 package main
 
 import (
+	billingApp "backend-core/internal/billing/app"
+	billingInfra "backend-core/internal/billing/infra"
+	billingHttp "backend-core/internal/billing/interfaces/http"
 	"backend-core/internal/identity/app"
 	"backend-core/internal/identity/infra"
 	"backend-core/internal/identity/interfaces/http/middleware"
@@ -25,6 +28,7 @@ func main() {
 
 	// (可選) 自動遷移表結構
 	db.AutoMigrate(&infra.UserPO{})
+	db.AutoMigrate(&billingInfra.InvoicePO{}, &billingInfra.LineItemPO{})
 
 	// 2. 實例化真實的基礎設施
 	pwdHasher := infra.NewBcryptPasswordService(bcrypt.DefaultCost)
@@ -34,6 +38,12 @@ func main() {
 	// 3. 裝配應用層與 Controller
 	authApp := app.NewAuthAppService(userRepo, jwtService, pwdHasher)
 	authHandler := identityHttp.NewAuthHandler(authApp)
+
+	// Billing
+	invoiceRepo := billingInfra.NewSqliteInvoiceRepo(db)
+	idGen := billingInfra.NewUUIDGenerator()
+	invoiceApp := billingApp.NewInvoiceAppService(invoiceRepo, idGen, nil) // gateway = nil for now
+	invoiceHandler := billingHttp.NewInvoiceHandler(invoiceApp)
 
 	// 4. 配置 Hertz 路由
 	h := server.Default()
@@ -54,7 +64,15 @@ func main() {
 	privateAPI := h.Group("/api/v1")
 	privateAPI.Use(middleware.JWTAuthMiddleware(jwtService))
 	{
-		// 這裡掛載需要登入的路由...
+		// Billing - Invoice routes
+		privateAPI.POST("/invoices", invoiceHandler.Create)
+		privateAPI.GET("/invoices", invoiceHandler.ListByCustomer)
+		privateAPI.GET("/invoices/:id", invoiceHandler.GetByID)
+		privateAPI.POST("/invoices/:id/line-items", invoiceHandler.AddLineItem)
+		privateAPI.PUT("/invoices/:id/tax", invoiceHandler.SetTax)
+		privateAPI.POST("/invoices/:id/issue", invoiceHandler.Issue)
+		privateAPI.POST("/invoices/:id/payments", invoiceHandler.RecordPayment)
+		privateAPI.POST("/invoices/:id/void", invoiceHandler.Void)
 	}
 
 	h.Spin()

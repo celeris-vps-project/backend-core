@@ -8,3 +8,10 @@ Run the application-layer auth tests:
 go test ./internal/indentity/application
 ```
 
+## Billing
+
+Run the billing invoice tests:
+
+```powershell
+go test ./internal/billing/...
+```
