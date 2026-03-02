@@ -20,6 +20,10 @@ func (m *mockTokenGenerator) Generate(user *domain.User) (string, error) {
 	return m.token, nil
 }
 
+func (m *mockTokenGenerator) ParseToken(tokenString string) (string, error) {
+	return "generated-id", nil
+}
+
 type mockPasswordHasher struct{}
 
 func (m *mockPasswordHasher) Compare(plain, hash string) bool {

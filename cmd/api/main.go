@@ -10,9 +10,15 @@ import (
 	instanceApp "backend-core/internal/instance/app"
 	instanceInfra "backend-core/internal/instance/infra"
 	instanceHttp "backend-core/internal/instance/interfaces/http"
+	nodeApp "backend-core/internal/node/app"
+	nodeInfra "backend-core/internal/node/infra"
+	nodeHttp "backend-core/internal/node/interfaces/http"
 	orderingApp "backend-core/internal/ordering/app"
 	orderingInfra "backend-core/internal/ordering/infra"
 	orderingHttp "backend-core/internal/ordering/interfaces/http"
+	productApp "backend-core/internal/product/app"
+	productInfra "backend-core/internal/product/infra"
+	productHttp "backend-core/internal/product/interfaces/http"
 	"log"
 
 	identityHttp "backend-core/internal/identity/interfaces/http"
@@ -37,6 +43,8 @@ func main() {
 	db.AutoMigrate(&billingInfra.InvoicePO{}, &billingInfra.LineItemPO{})
 	db.AutoMigrate(&orderingInfra.OrderPO{})
 	db.AutoMigrate(&instanceInfra.NodePO{}, &instanceInfra.InstancePO{})
+	db.AutoMigrate(&productInfra.ProductPO{})
+	db.AutoMigrate(&nodeInfra.HostNodePO{}, &nodeInfra.IPAddressPO{}, &nodeInfra.TaskPO{})
 
 	// 2. 實例化真實的基礎設施
 	pwdHasher := infra.NewBcryptPasswordService(bcrypt.DefaultCost)
@@ -64,6 +72,18 @@ func main() {
 	instApp := instanceApp.NewInstanceAppService(nodeRepo, instRepo, idGen)
 	instHandler := instanceHttp.NewInstanceHandler(instApp)
 
+	// Product
+	prodRepo := productInfra.NewSqliteProductRepo(db)
+	prodApp := productApp.NewProductAppService(prodRepo, idGen)
+	prodHandler := productHttp.NewProductHandler(prodApp)
+
+	// Node (host machines, IP pools, agent tasks)
+	hostRepo := nodeInfra.NewSqliteHostNodeRepo(db)
+	ipRepo := nodeInfra.NewSqliteIPAddressRepo(db)
+	taskRepo := nodeInfra.NewSqliteTaskRepo(db)
+	nApp := nodeApp.NewNodeAppService(hostRepo, ipRepo, taskRepo, idGen)
+	nHandler := nodeHttp.NewNodeHandler(nApp)
+
 	// 4. 配置 Hertz 路由
 	h := server.Default()
 	h.Use(cors.New(cors.Config{
@@ -81,6 +101,19 @@ func main() {
 		v1.GET("/locations", instHandler.ListLocations)
 		v1.GET("/nodes", instHandler.ListNodes)
 		v1.GET("/nodes/:id", instHandler.GetNode)
+
+		// Public - product catalog
+		v1.GET("/products", prodHandler.List)
+		v1.GET("/products/:id", prodHandler.GetByID)
+
+		// Public - host node info
+		v1.GET("/host-nodes", nHandler.ListHosts)
+		v1.GET("/host-nodes/:id", nHandler.GetHost)
+
+		// Agent endpoints (authenticated by shared secret, not JWT)
+		v1.POST("/agent/register", nHandler.AgentRegister)
+		v1.POST("/agent/heartbeat", nHandler.AgentHeartbeat)
+		v1.POST("/agent/tasks/result", nHandler.AgentTaskResult)
 	}
 
 	// 傳入真實的 jwtService 給中間件
@@ -122,6 +155,19 @@ func main() {
 		privateAPI.POST("/instances/:id/unsuspend", instHandler.Unsuspend)
 		privateAPI.POST("/instances/:id/terminate", instHandler.Terminate)
 		privateAPI.PUT("/instances/:id/ip", instHandler.AssignIP)
+
+		// Product - Admin routes
+		privateAPI.POST("/products", prodHandler.Create)
+		privateAPI.GET("/products/all", prodHandler.ListAll)
+		privateAPI.POST("/products/:id/enable", prodHandler.Enable)
+		privateAPI.POST("/products/:id/disable", prodHandler.Disable)
+		privateAPI.PUT("/products/:id/price", prodHandler.UpdatePrice)
+
+		// Host Node - Admin routes
+		privateAPI.POST("/host-nodes", nHandler.CreateHost)
+		privateAPI.POST("/host-nodes/:id/ips", nHandler.AddIP)
+		privateAPI.GET("/host-nodes/:id/ips", nHandler.ListIPs)
+		privateAPI.POST("/host-nodes/:id/tasks", nHandler.EnqueueTask)
 	}
 
 	h.Spin()
