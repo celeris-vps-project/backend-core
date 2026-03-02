@@ -7,6 +7,12 @@ import (
 	"backend-core/internal/identity/app"
 	"backend-core/internal/identity/infra"
 	"backend-core/internal/identity/interfaces/http/middleware"
+	instanceApp "backend-core/internal/instance/app"
+	instanceInfra "backend-core/internal/instance/infra"
+	instanceHttp "backend-core/internal/instance/interfaces/http"
+	orderingApp "backend-core/internal/ordering/app"
+	orderingInfra "backend-core/internal/ordering/infra"
+	orderingHttp "backend-core/internal/ordering/interfaces/http"
 	"log"
 
 	identityHttp "backend-core/internal/identity/interfaces/http"
@@ -29,6 +35,8 @@ func main() {
 	// (可選) 自動遷移表結構
 	db.AutoMigrate(&infra.UserPO{})
 	db.AutoMigrate(&billingInfra.InvoicePO{}, &billingInfra.LineItemPO{})
+	db.AutoMigrate(&orderingInfra.OrderPO{})
+	db.AutoMigrate(&instanceInfra.NodePO{}, &instanceInfra.InstancePO{})
 
 	// 2. 實例化真實的基礎設施
 	pwdHasher := infra.NewBcryptPasswordService(bcrypt.DefaultCost)
@@ -45,6 +53,17 @@ func main() {
 	invoiceApp := billingApp.NewInvoiceAppService(invoiceRepo, idGen, nil) // gateway = nil for now
 	invoiceHandler := billingHttp.NewInvoiceHandler(invoiceApp)
 
+	// Ordering
+	orderRepo := orderingInfra.NewSqliteOrderRepo(db)
+	orderApp := orderingApp.NewOrderAppService(orderRepo, idGen, nil) // provisioning = nil for now
+	orderHandler := orderingHttp.NewOrderHandler(orderApp)
+
+	// Instance
+	nodeRepo := instanceInfra.NewSqliteNodeRepo(db)
+	instRepo := instanceInfra.NewSqliteInstanceRepo(db)
+	instApp := instanceApp.NewInstanceAppService(nodeRepo, instRepo, idGen)
+	instHandler := instanceHttp.NewInstanceHandler(instApp)
+
 	// 4. 配置 Hertz 路由
 	h := server.Default()
 	h.Use(cors.New(cors.Config{
@@ -54,10 +73,14 @@ func main() {
 	}))
 
 	v1 := h.Group("/api/v1")
-
 	{
 		v1.POST("/auth/register", authHandler.Register)
 		v1.POST("/auth/login", authHandler.Login)
+
+		// Public - browse available locations & nodes
+		v1.GET("/locations", instHandler.ListLocations)
+		v1.GET("/nodes", instHandler.ListNodes)
+		v1.GET("/nodes/:id", instHandler.GetNode)
 	}
 
 	// 傳入真實的 jwtService 給中間件
@@ -73,6 +96,32 @@ func main() {
 		privateAPI.POST("/invoices/:id/issue", invoiceHandler.Issue)
 		privateAPI.POST("/invoices/:id/payments", invoiceHandler.RecordPayment)
 		privateAPI.POST("/invoices/:id/void", invoiceHandler.Void)
+
+		// Ordering - Order routes
+		privateAPI.POST("/orders", orderHandler.Create)
+		privateAPI.GET("/orders", orderHandler.ListByCustomer)
+		privateAPI.GET("/orders/:id", orderHandler.GetByID)
+		privateAPI.POST("/orders/:id/activate", orderHandler.Activate)
+		privateAPI.POST("/orders/:id/suspend", orderHandler.Suspend)
+		privateAPI.POST("/orders/:id/unsuspend", orderHandler.Unsuspend)
+		privateAPI.POST("/orders/:id/cancel", orderHandler.Cancel)
+		privateAPI.POST("/orders/:id/terminate", orderHandler.Terminate)
+
+		// Instance - Node admin routes
+		privateAPI.POST("/nodes", instHandler.CreateNode)
+		privateAPI.POST("/nodes/:id/enable", instHandler.EnableNode)
+		privateAPI.POST("/nodes/:id/disable", instHandler.DisableNode)
+
+		// Instance - Customer routes
+		privateAPI.POST("/instances", instHandler.Purchase)
+		privateAPI.GET("/instances", instHandler.ListByCustomer)
+		privateAPI.GET("/instances/:id", instHandler.GetByID)
+		privateAPI.POST("/instances/:id/start", instHandler.Start)
+		privateAPI.POST("/instances/:id/stop", instHandler.Stop)
+		privateAPI.POST("/instances/:id/suspend", instHandler.Suspend)
+		privateAPI.POST("/instances/:id/unsuspend", instHandler.Unsuspend)
+		privateAPI.POST("/instances/:id/terminate", instHandler.Terminate)
+		privateAPI.PUT("/instances/:id/ip", instHandler.AssignIP)
 	}
 
 	h.Spin()

@@ -7,6 +7,7 @@ import (
 // 依赖的外部服务接口 (由基础设施层实现)
 type TokenGenerator interface {
 	Generate(user *domain.User) (string, error)
+	ParseToken(tokenString string) (string, error) // 解析 Token 返回 UserID
 }
 
 type PasswordHasher interface {
