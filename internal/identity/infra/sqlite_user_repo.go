@@ -24,6 +24,7 @@ func (r *SqliteUserRepo) Save(u *domain.User) error {
 		Email:        u.Email(),
 		PasswordHash: u.PasswordHash(),
 		Status:       u.Status(),
+		Role:         u.Role(),
 	}
 
 	return r.db.Create(&po).Error
@@ -46,5 +47,5 @@ func (r *SqliteUserRepo) FindByEmail(email string) (*domain.User, error) {
 		return nil, err
 	}
 
-	return domain.ReconstituteUser(po.ID, po.Email, po.PasswordHash, po.Status), nil
+	return domain.ReconstituteUserWithRole(po.ID, po.Email, po.PasswordHash, po.Status, po.Role), nil
 }

@@ -23,11 +23,12 @@ func NewJWTService(secret string, issuer string) *JWTService {
 // Generate 實現了 app.TokenGenerator 介面
 func (s *JWTService) Generate(user *domain.User) (string, error) {
 	// 構造 JWT 的 Payload (Claims)
-	claims := jwt.RegisteredClaims{
-		Subject:   user.ID(), // 把 UserID 存入 sub 欄位
-		Issuer:    s.issuer,
-		ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)), // 24小時後過期
-		IssuedAt:  jwt.NewNumericDate(time.Now()),
+	claims := jwt.MapClaims{
+		"sub":  user.ID(),
+		"iss":  s.issuer,
+		"role": user.Role(),
+		"exp":  jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+		"iat":  jwt.NewNumericDate(time.Now()),
 	}
 
 	// 使用 HS256 算法簽名
@@ -61,4 +62,30 @@ func (s *JWTService) ParseToken(tokenString string) (string, error) {
 	}
 
 	return sub, nil // 成功回傳 UserID
+}
+
+// ParseTokenWithRole extracts both UserID and role from the token.
+func (s *JWTService) ParseTokenWithRole(tokenString string) (userID string, role string, err error) {
+	token, parseErr := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("unexpected signing method")
+		}
+		return s.secret, nil
+	})
+	if parseErr != nil || !token.Valid {
+		return "", "", errors.New("invalid or expired token")
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return "", "", errors.New("invalid claims payload")
+	}
+
+	sub, _ := claims.GetSubject()
+	if r, ok := claims["role"].(string); ok {
+		role = r
+	} else {
+		role = "user"
+	}
+	return sub, role, nil
 }

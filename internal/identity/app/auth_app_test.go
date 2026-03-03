@@ -103,7 +103,7 @@ func TestLogin_Success(t *testing.T) {
 		t.Fatalf("Save error: %v", err)
 	}
 
-	token, err := app.Login("login@example.com", "secret")
+	token, _, err := app.Login("login@example.com", "secret")
 	if err != nil {
 		t.Fatalf("Login error: %v", err)
 	}

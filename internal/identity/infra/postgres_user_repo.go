@@ -13,6 +13,7 @@ type UserPO struct {
 	Email        string `gorm:"uniqueIndex;column:email"`
 	PasswordHash string `gorm:"column:password_hash"`
 	Status       string `gorm:"column:status"`
+	Role         string `gorm:"column:role;default:user"`
 }
 
 // TableName 指定資料庫表名
@@ -34,6 +35,7 @@ func (r *PostgresUserRepo) Save(u *domain.User) error {
 		Email:        u.Email(),
 		PasswordHash: u.PasswordHash(),
 		Status:       u.Status(),
+		Role:         u.Role(),
 	}
 
 	return r.db.Create(&po).Error
@@ -58,5 +60,5 @@ func (r *PostgresUserRepo) FindByEmail(email string) (*domain.User, error) {
 	}
 
 	// 【關鍵點】將資料庫模型 (UserPO) 恢復為領域層的聚合根 (domain.User)
-	return domain.ReconstituteUser(po.ID, po.Email, po.PasswordHash, po.Status), nil
+	return domain.ReconstituteUserWithRole(po.ID, po.Email, po.PasswordHash, po.Status, po.Role), nil
 }

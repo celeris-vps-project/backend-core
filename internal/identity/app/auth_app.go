@@ -25,21 +25,25 @@ func NewAuthAppService(r domain.UserRepository, t TokenGenerator, h PasswordHash
 	return &AuthAppService{repo: r, token: t, hasher: h}
 }
 
-// Login 登录用例
-func (app *AuthAppService) Login(email, plainPassword string) (string, error) {
+// Login 登录用例 — returns token and role
+func (app *AuthAppService) Login(email, plainPassword string) (string, string, error) {
 	// 1. 获取实体
 	user, err := app.repo.FindByEmail(email)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	// 2. 执行领域对象的鉴权规则
 	if err := user.Authenticate(plainPassword, app.hasher.Compare); err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	// 3. 生成并返回 Token
-	return app.token.Generate(user)
+	token, err := app.token.Generate(user)
+	if err != nil {
+		return "", "", err
+	}
+	return token, user.Role(), nil
 }
 
 func (app *AuthAppService) RegisterUser(email, plainPassword string) (string, error) {

@@ -151,6 +151,9 @@ func main() {
 	privateAPI := h.Group("/api/v1")
 	privateAPI.Use(middleware.JWTAuthMiddleware(jwtService))
 	{
+		// User profile (returns user_id + role)
+		privateAPI.GET("/me", authHandler.Me)
+
 		// Billing - Invoice routes
 		privateAPI.POST("/invoices", invoiceHandler.Create)
 		privateAPI.GET("/invoices", invoiceHandler.ListByCustomer)
@@ -199,6 +202,31 @@ func main() {
 		privateAPI.POST("/host-nodes/:id/ips", nHandler.AddIP)
 		privateAPI.GET("/host-nodes/:id/ips", nHandler.ListIPs)
 		privateAPI.POST("/host-nodes/:id/tasks", nHandler.EnqueueTask)
+	}
+
+	// ---- Admin-only API routes (requires admin role) ----
+	adminAPI := h.Group("/api/v1/admin")
+	adminAPI.Use(middleware.AdminMiddleware(jwtService))
+	{
+		// Host Node management
+		adminAPI.GET("/host-nodes", nHandler.ListHosts)
+		adminAPI.GET("/host-nodes/:id", nHandler.GetHost)
+		adminAPI.POST("/host-nodes", nHandler.CreateHost)
+		adminAPI.POST("/host-nodes/:id/ips", nHandler.AddIP)
+		adminAPI.GET("/host-nodes/:id/ips", nHandler.ListIPs)
+		adminAPI.POST("/host-nodes/:id/tasks", nHandler.EnqueueTask)
+
+		// Product management
+		adminAPI.POST("/products", prodHandler.Create)
+		adminAPI.GET("/products", prodHandler.ListAll)
+		adminAPI.POST("/products/:id/enable", prodHandler.Enable)
+		adminAPI.POST("/products/:id/disable", prodHandler.Disable)
+		adminAPI.PUT("/products/:id/price", prodHandler.UpdatePrice)
+
+		// Instance management (all instances, not just current user)
+		adminAPI.POST("/nodes", instHandler.CreateNode)
+		adminAPI.POST("/nodes/:id/enable", instHandler.EnableNode)
+		adminAPI.POST("/nodes/:id/disable", instHandler.DisableNode)
 	}
 
 	// 5. Start gRPC server for agent communication

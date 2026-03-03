@@ -29,28 +29,24 @@ func NewAuthHandler(app *app.AuthAppService) *AuthHandler {
 }
 
 // Login 处理登录 HTTP 请求
-// 注意 Hertz 的签名规范：(ctx context.Context, c *app.RequestContext)
 func (h *AuthHandler) Login(ctx context.Context, c *hz_app.RequestContext) {
 	var req LoginRequest
 
-	// 1. 绑定参数并校验 (如果非 email 格式或密码太短，直接报错返回)
 	if err := c.BindAndValidate(&req); err != nil {
 		c.JSON(consts.StatusBadRequest, utils.H{"error": "参数格式错误: " + err.Error()})
 		return
 	}
 
-	// 2. 调用应用层
-	token, err := h.authApp.Login(req.Email, req.Password)
+	token, role, err := h.authApp.Login(req.Email, req.Password)
 	if err != nil {
-		// 这里可以根据具体的 error 类型返回 401 或 403，目前简化处理
 		c.JSON(consts.StatusUnauthorized, utils.H{"error": err.Error()})
 		return
 	}
 
-	// 3. 组装成功响应
 	c.JSON(consts.StatusOK, utils.H{
 		"message": "登录成功",
 		"token":   token,
+		"role":    role,
 	})
 }
 
@@ -72,5 +68,19 @@ func (h *AuthHandler) Register(ctx context.Context, c *hz_app.RequestContext) {
 	c.JSON(consts.StatusOK, utils.H{
 		"message": "注册成功",
 		"token":   token,
+		"role":    "user",
+	})
+}
+
+// Me returns the current user's profile (extracted from JWT via middleware).
+func (h *AuthHandler) Me(ctx context.Context, c *hz_app.RequestContext) {
+	userID, _ := c.Get("current_user_id")
+	role, exists := c.Get("current_user_role")
+	if !exists {
+		role = "user"
+	}
+	c.JSON(consts.StatusOK, utils.H{
+		"user_id": userID,
+		"role":    role,
 	})
 }
