@@ -1,0 +1,18 @@
+# Celeris Agent Configuration
+# Copy this file to agent.yaml and adjust as needed.
+
+node_id: "node-1"            # Unique identifier for this agent node (must match a host-node ID on the API server)
+secret: "changeme"           # Shared secret for authenticating with the API server.
+                              # Must match the 'agent.secret' value in api.yaml.
+location: "US-nyc"           # Location identifier (e.g. "DE-fra"); used when the node auto-registers
+
+grpc_address: "127.0.0.1:50051"   # gRPC address of the API server
+controller_url: "http://127.0.0.1:8888"  # Legacy HTTP controller URL (optional)
+poll_interval: 15             # Seconds between heartbeats
+
+virt_backend: "stub"          # Virtualization backend: "libvirt", "incus", or "stub"
+virt_opts: {}                 # Backend-specific options, e.g.:
+  # uri: "qemu:///system"          # for libvirt
+  # project: "default"             # for incus
+  # socket: "/var/lib/incus/unix.socket"  # for incus
+

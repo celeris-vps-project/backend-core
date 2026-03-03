@@ -10,10 +10,11 @@ import (
 type IDGenerator interface{ NewID() string }
 
 type NodeAppService struct {
-	hostRepo domain.HostNodeRepository
-	ipRepo   domain.IPAddressRepository
-	taskRepo domain.TaskRepository
-	ids      IDGenerator
+	hostRepo    domain.HostNodeRepository
+	ipRepo      domain.IPAddressRepository
+	taskRepo    domain.TaskRepository
+	ids         IDGenerator
+	agentSecret string // optional global shared secret for agent authentication
 }
 
 func NewNodeAppService(
@@ -23,6 +24,12 @@ func NewNodeAppService(
 	ids IDGenerator,
 ) *NodeAppService {
 	return &NodeAppService{hostRepo: hostRepo, ipRepo: ipRepo, taskRepo: taskRepo, ids: ids}
+}
+
+// SetAgentSecret configures a global shared secret for agent authentication.
+// When set, agents can authenticate with either the per-node secret or this global secret.
+func (s *NodeAppService) SetAgentSecret(secret string) {
+	s.agentSecret = secret
 }
 
 // ---- Host CRUD ----
@@ -50,9 +57,34 @@ func (s *NodeAppService) ListHostsByLocation(loc string) ([]*domain.HostNode, er
 func (s *NodeAppService) RegisterAgent(reg contracts.AgentRegistration) error {
 	h, err := s.hostRepo.GetByID(reg.NodeID)
 	if err != nil {
-		return err
+		// Node does not exist — only allow auto-registration with the global secret
+		if s.agentSecret == "" || reg.Secret != s.agentSecret {
+			return errors.New("app_error: invalid agent secret")
+		}
+
+		// Derive sensible defaults from the registration payload
+		code := reg.NodeID
+		location := reg.Location
+		if location == "" {
+			location = "unknown"
+		}
+		name := reg.Hostname
+		if name == "" {
+			name = reg.NodeID
+		}
+
+		h, err = domain.NewHostNode(reg.NodeID, code, location, name, s.agentSecret)
+		if err != nil {
+			return err
+		}
+		h.Register(reg.IP, reg.Version, time.Now())
+		return s.hostRepo.Save(h)
 	}
-	if !h.ValidateSecret(reg.Secret) {
+
+	// Node exists — accept either the global shared secret or the per-node secret
+	validGlobal := s.agentSecret != "" && reg.Secret == s.agentSecret
+	validPerNode := h.ValidateSecret(reg.Secret)
+	if !validGlobal && !validPerNode {
 		return errors.New("app_error: invalid agent secret")
 	}
 	h.Register(reg.IP, reg.Version, time.Now())

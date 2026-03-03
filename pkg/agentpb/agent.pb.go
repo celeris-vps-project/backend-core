@@ -28,6 +28,7 @@ type RegisterRequest struct {
 	Hostname      string                 `protobuf:"bytes,3,opt,name=hostname,proto3" json:"hostname,omitempty"`
 	Ip            string                 `protobuf:"bytes,4,opt,name=ip,proto3" json:"ip,omitempty"`
 	Version       string                 `protobuf:"bytes,5,opt,name=version,proto3" json:"version,omitempty"`
+	Location      string                 `protobuf:"bytes,6,opt,name=location,proto3" json:"location,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -93,6 +94,13 @@ func (x *RegisterRequest) GetIp() string {
 func (x *RegisterRequest) GetVersion() string {
 	if x != nil {
 		return x.Version
+	}
+	return ""
+}
+
+func (x *RegisterRequest) GetLocation() string {
+	if x != nil {
+		return x.Location
 	}
 	return ""
 }
@@ -649,13 +657,14 @@ var File_agent_v1_agent_proto protoreflect.FileDescriptor
 
 const file_agent_v1_agent_proto_rawDesc = "" +
 	"\n" +
-	"\x14agent/v1/agent.proto\x12\bagent.v1\"\x88\x01\n" +
+	"\x14agent/v1/agent.proto\x12\bagent.v1\"\xa4\x01\n" +
 	"\x0fRegisterRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x16\n" +
 	"\x06secret\x18\x02 \x01(\tR\x06secret\x12\x1a\n" +
 	"\bhostname\x18\x03 \x01(\tR\bhostname\x12\x0e\n" +
 	"\x02ip\x18\x04 \x01(\tR\x02ip\x12\x18\n" +
-	"\aversion\x18\x05 \x01(\tR\aversion\"\"\n" +
+	"\aversion\x18\x05 \x01(\tR\aversion\x12\x1a\n" +
+	"\blocation\x18\x06 \x01(\tR\blocation\"\"\n" +
 	"\x10RegisterResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xd8\x01\n" +
 	"\x10HeartbeatRequest\x12\x17\n" +

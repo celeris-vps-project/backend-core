@@ -1,6 +1,7 @@
 package main
 
 import (
+	apiConfig "backend-core/internal/api/config"
 	billingApp "backend-core/internal/billing/app"
 	billingInfra "backend-core/internal/billing/infra"
 	billingHttp "backend-core/internal/billing/interfaces/http"
@@ -21,8 +22,10 @@ import (
 	productInfra "backend-core/internal/product/infra"
 	productHttp "backend-core/internal/product/interfaces/http"
 	"backend-core/pkg/agentpb"
+	"flag"
 	"log"
 	"net"
+	"os"
 
 	identityHttp "backend-core/internal/identity/interfaces/http"
 
@@ -35,14 +38,37 @@ import (
 )
 
 func main() {
-	// 1. 連接 SQLite (請替換為你的真實路徑)
-	dsn := "data.db"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	cfgPath := flag.String("config", "api.yaml", "path to API YAML config file")
+	flag.Parse()
+
+	// Load config from YAML file; fall back to defaults if file not found
+	cfg, err := apiConfig.LoadFromFile(*cfgPath)
 	if err != nil {
-		log.Fatalf("無法連接資料庫: %v", err)
+		log.Printf("[api] could not load config file %s: %v (using defaults)", *cfgPath, err)
+		cfg = apiConfig.DefaultConfig()
 	}
 
-	// (可選) 自動遷移表結構
+	// Environment variable overrides
+	if v := os.Getenv("API_DATABASE_DSN"); v != "" {
+		cfg.Database.DSN = v
+	}
+	if v := os.Getenv("API_JWT_SECRET"); v != "" {
+		cfg.JWT.Secret = v
+	}
+	if v := os.Getenv("API_AGENT_SECRET"); v != "" {
+		cfg.Agent.Secret = v
+	}
+	if v := os.Getenv("API_GRPC_LISTEN"); v != "" {
+		cfg.GRPC.Listen = v
+	}
+
+	// 1. Connect to SQLite
+	db, err := gorm.Open(sqlite.Open(cfg.Database.DSN), &gorm.Config{})
+	if err != nil {
+		log.Fatalf("failed to connect to database: %v", err)
+	}
+
+	// Auto-migrate table schemas
 	db.AutoMigrate(&infra.UserPO{})
 	db.AutoMigrate(&billingInfra.InvoicePO{}, &billingInfra.LineItemPO{})
 	db.AutoMigrate(&orderingInfra.OrderPO{})
@@ -50,15 +76,15 @@ func main() {
 	db.AutoMigrate(&productInfra.ProductPO{})
 	db.AutoMigrate(&nodeInfra.HostNodePO{}, &nodeInfra.IPAddressPO{}, &nodeInfra.TaskPO{})
 
-	// 2. 實例化真實的基礎設施
+	// 2. Wire up infrastructure
 	pwdHasher := infra.NewBcryptPasswordService(bcrypt.DefaultCost)
 	userRepo := infra.NewSqliteUserRepo(db)
-	jwtService := infra.NewJWTService("my-super-secret-key", "whmcs-killer-api")
+	jwtService := infra.NewJWTService(cfg.JWT.Secret, cfg.JWT.Issuer)
 
-	// 3. 裝配應用層與 Controller
+	// 3. Wire up application layer
 	authApp := app.NewAuthAppService(userRepo, jwtService, pwdHasher)
 	authHandler := identityHttp.NewAuthHandler(authApp)
-
+	
 	// Billing
 	invoiceRepo := billingInfra.NewSqliteInvoiceRepo(db)
 	idGen := billingInfra.NewUUIDGenerator()
@@ -86,6 +112,7 @@ func main() {
 	ipRepo := nodeInfra.NewSqliteIPAddressRepo(db)
 	taskRepo := nodeInfra.NewSqliteTaskRepo(db)
 	nApp := nodeApp.NewNodeAppService(hostRepo, ipRepo, taskRepo, idGen)
+	nApp.SetAgentSecret(cfg.Agent.Secret)
 	nHandler := nodeHttp.NewNodeHandler(nApp)
 
 	// 4. 配置 Hertz 路由
@@ -174,15 +201,15 @@ func main() {
 		privateAPI.POST("/host-nodes/:id/tasks", nHandler.EnqueueTask)
 	}
 
-	// 5. Start gRPC server for agent communication on :50051
+	// 5. Start gRPC server for agent communication
 	grpcServer := grpc.NewServer()
 	agentpb.RegisterAgentServiceServer(grpcServer, nodeGrpc.NewAgentGRPCServer(nApp))
 	go func() {
-		lis, err := net.Listen("tcp", ":50051")
+		lis, err := net.Listen("tcp", cfg.GRPC.Listen)
 		if err != nil {
-			log.Fatalf("failed to listen on :50051: %v", err)
+			log.Fatalf("failed to listen on %s: %v", cfg.GRPC.Listen, err)
 		}
-		log.Println("[api] gRPC agent server listening on :50051")
+		log.Printf("[api] gRPC agent server listening on %s", cfg.GRPC.Listen)
 		if err := grpcServer.Serve(lis); err != nil {
 			log.Fatalf("gRPC server failed: %v", err)
 		}

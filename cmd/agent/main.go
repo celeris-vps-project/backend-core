@@ -8,19 +8,36 @@ import (
 	"backend-core/internal/agent/vm"
 	"backend-core/pkg/contracts"
 	"context"
+	"flag"
 	"log"
 	"os"
 	"time"
 )
 
 func main() {
-	cfg := config.DefaultConfig()
-	cfg.NodeID = envOrDefault("AGENT_NODE_ID", "node-1")
-	cfg.Secret = envOrDefault("AGENT_SECRET", "changeme")
-	cfg.GRPCAddress = envOrDefault("AGENT_GRPC_ADDRESS", "127.0.0.1:50051")
-	cfg.VirtBackend = envOrDefault("AGENT_VIRT_BACKEND", "stub")
+	cfgPath := flag.String("config", "agent.yaml", "path to agent YAML config file")
+	flag.Parse()
 
-	// Backend-specific options from env
+	// Load config from YAML file; fall back to defaults + env overrides if file not found
+	cfg, err := config.LoadFromFile(*cfgPath)
+	if err != nil {
+		log.Printf("[agent] could not load config file %s: %v (using defaults + env)", *cfgPath, err)
+		cfg = config.DefaultConfig()
+	}
+
+	// Environment variables override YAML values when set
+	if v := os.Getenv("AGENT_NODE_ID"); v != "" {
+		cfg.NodeID = v
+	}
+	if v := os.Getenv("AGENT_SECRET"); v != "" {
+		cfg.Secret = v
+	}
+	if v := os.Getenv("AGENT_GRPC_ADDRESS"); v != "" {
+		cfg.GRPCAddress = v
+	}
+	if v := os.Getenv("AGENT_VIRT_BACKEND"); v != "" {
+		cfg.VirtBackend = v
+	}
 	if uri := os.Getenv("AGENT_LIBVIRT_URI"); uri != "" {
 		cfg.VirtOpts["uri"] = uri
 	}
@@ -50,6 +67,7 @@ func main() {
 		NodeID:   cfg.NodeID,
 		Secret:   cfg.Secret,
 		Hostname: cfg.NodeID,
+		Location: cfg.Location,
 		IP:       "127.0.0.1",
 		Version:  "v0.1.0",
 	}
@@ -59,7 +77,7 @@ func main() {
 	} else {
 		log.Println("[agent] registered successfully")
 	}
-	
+
 	// 2. Heartbeat loop
 	ticker := time.NewTicker(time.Duration(cfg.PollInterval) * time.Second)
 	defer ticker.Stop()
@@ -82,11 +100,4 @@ func main() {
 			})
 		}
 	}
-}
-
-func envOrDefault(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }

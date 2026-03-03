@@ -27,6 +27,7 @@ func (s *AgentGRPCServer) Register(ctx context.Context, req *agentpb.RegisterReq
 		NodeID:   req.GetNodeId(),
 		Secret:   req.GetSecret(),
 		Hostname: req.GetHostname(),
+		Location: req.GetLocation(),
 		IP:       req.GetIp(),
 		Version:  req.GetVersion(),
 	}

@@ -1,0 +1,17 @@
+# Celeris API Server Configuration
+# Copy this file to api.yaml and adjust as needed.
+
+database:
+  dsn: "data.db"            # SQLite database file path
+
+jwt:
+  secret: "my-super-secret-key"    # JWT signing secret (change in production!)
+  issuer: "celeris-api"
+
+grpc:
+  listen: ":50051"           # gRPC listen address for agent communication
+
+agent:
+  secret: "changeme"         # Shared secret that agents must present to authenticate.
+                              # Must match the 'secret' value in agent.yaml.
+

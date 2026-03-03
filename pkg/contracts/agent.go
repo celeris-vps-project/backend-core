@@ -1,10 +1,11 @@
-﻿package contracts
+package contracts
 
 // AgentRegistration is sent by the agent on first connect.
 type AgentRegistration struct {
 	NodeID   string `json:"node_id"`
 	Secret   string `json:"secret"`
 	Hostname string `json:"hostname"`
+	Location string `json:"location"` // e.g. "DE-fra"; used when auto-registering a new node
 	IP       string `json:"ip"`
 	Version  string `json:"version"`
 }

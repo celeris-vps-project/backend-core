@@ -42,6 +42,7 @@ func (c *AgentClient) Register(ctx context.Context, reg contracts.AgentRegistrat
 		NodeId:   reg.NodeID,
 		Secret:   reg.Secret,
 		Hostname: reg.Hostname,
+		Location: reg.Location,
 		Ip:       reg.IP,
 		Version:  reg.Version,
 	})

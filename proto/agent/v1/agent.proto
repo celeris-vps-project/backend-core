@@ -22,6 +22,7 @@ message RegisterRequest {
   string hostname = 3;
   string ip       = 4;
   string version  = 5;
+  string location = 6;
 }
 
 message RegisterResponse {
