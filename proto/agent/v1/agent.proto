@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package agent.v1;
+
+option go_package = "backend-core/pkg/agentpb";
+
+// AgentService defines the RPCs between host-node agents and the controller.
+service AgentService {
+  // Register is called once when the agent starts.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  // Heartbeat is called periodically; the response may contain queued tasks.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  // ReportTaskResult is called after the agent finishes executing a task.
+  rpc ReportTaskResult(TaskResultRequest) returns (TaskResultResponse);
+}
+
+// ---- Registration ----
+
+message RegisterRequest {
+  string node_id  = 1;
+  string secret   = 2;
+  string hostname = 3;
+  string ip       = 4;
+  string version  = 5;
+}
+
+message RegisterResponse {
+  bool ok = 1;
+}
+
+// ---- Heartbeat ----
+
+message HeartbeatRequest {
+  string node_id     = 1;
+  double cpu_usage   = 2;
+  double mem_usage   = 3;
+  double disk_usage  = 4;
+  int64  uptime      = 5;
+  int32  vm_count    = 6;
+  string reported_at = 7;
+}
+
+message HeartbeatResponse {
+  bool          ok    = 1;
+  repeated Task tasks = 2;
+}
+
+// ---- Task ----
+
+message Task {
+  string        id          = 1;
+  string        node_id     = 2;
+  string        type        = 3;  // "provision", "deprovision", "start", etc.
+  string        status      = 4;  // "queued", "running", "completed", "failed"
+  ProvisionSpec spec        = 5;
+  string        error       = 6;
+  string        created_at  = 7;
+  string        finished_at = 8;
+}
+
+message ProvisionSpec {
+  string          instance_id  = 1;
+  string          hostname     = 2;
+  string          os           = 3;
+  int32           cpu          = 4;
+  int32           memory_mb    = 5;
+  int32           disk_gb      = 6;
+  string          ipv4         = 7;
+  string          ipv6         = 8;
+  string          virt_type    = 9;  // "kvm" or "lxc"
+  string          storage_pool = 10;
+  string          network_name = 11;
+  repeated string ssh_keys     = 12;
+}
+
+// ---- Task Result ----
+
+message TaskResultRequest {
+  string task_id     = 1;
+  string status      = 2;  // "completed" or "failed"
+  string error       = 3;
+  string ipv4        = 4;
+  string ipv6        = 5;
+  string finished_at = 6;
+}
+
+message TaskResultResponse {
+  bool ok = 1;
+}
+
