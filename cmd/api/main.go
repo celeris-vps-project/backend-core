@@ -12,6 +12,7 @@ import (
 	instanceHttp "backend-core/internal/instance/interfaces/http"
 	nodeApp "backend-core/internal/node/app"
 	nodeInfra "backend-core/internal/node/infra"
+	nodeGrpc "backend-core/internal/node/interfaces/grpc"
 	nodeHttp "backend-core/internal/node/interfaces/http"
 	orderingApp "backend-core/internal/ordering/app"
 	orderingInfra "backend-core/internal/ordering/infra"
@@ -19,7 +20,9 @@ import (
 	productApp "backend-core/internal/product/app"
 	productInfra "backend-core/internal/product/infra"
 	productHttp "backend-core/internal/product/interfaces/http"
+	"backend-core/pkg/agentpb"
 	"log"
+	"net"
 
 	identityHttp "backend-core/internal/identity/interfaces/http"
 
@@ -27,6 +30,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/hertz-contrib/cors"
 	"golang.org/x/crypto/bcrypt"
+	"google.golang.org/grpc"
 	"gorm.io/gorm"
 )
 
@@ -169,6 +173,20 @@ func main() {
 		privateAPI.GET("/host-nodes/:id/ips", nHandler.ListIPs)
 		privateAPI.POST("/host-nodes/:id/tasks", nHandler.EnqueueTask)
 	}
+
+	// 5. Start gRPC server for agent communication on :50051
+	grpcServer := grpc.NewServer()
+	agentpb.RegisterAgentServiceServer(grpcServer, nodeGrpc.NewAgentGRPCServer(nApp))
+	go func() {
+		lis, err := net.Listen("tcp", ":50051")
+		if err != nil {
+			log.Fatalf("failed to listen on :50051: %v", err)
+		}
+		log.Println("[api] gRPC agent server listening on :50051")
+		if err := grpcServer.Serve(lis); err != nil {
+			log.Fatalf("gRPC server failed: %v", err)
+		}
+	}()
 
 	h.Spin()
 }

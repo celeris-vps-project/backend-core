@@ -1,10 +1,11 @@
-﻿package config
+package config
 
 // Config holds the agent's runtime configuration.
 type Config struct {
 	NodeID        string            `json:"node_id"`
 	Secret        string            `json:"secret"`
-	ControllerURL string            `json:"controller_url"` // e.g. "http://controller:8888"
+	ControllerURL string            `json:"controller_url"` // e.g. "http://controller:8888" (legacy HTTP)
+	GRPCAddress   string            `json:"grpc_address"`   // e.g. "controller:50051"
 	PollInterval  int               `json:"poll_interval"`  // seconds between heartbeats
 	VirtBackend   string            `json:"virt_backend"`   // "libvirt", "incus", or "stub"
 	VirtOpts      map[string]string `json:"virt_opts"`      // backend-specific: {"uri":"qemu:///system"} or {"project":"default"}
@@ -14,6 +15,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		ControllerURL: "http://127.0.0.1:8888",
+		GRPCAddress:   "127.0.0.1:50051",
 		PollInterval:  15,
 		VirtBackend:   "stub",
 		VirtOpts:      map[string]string{},

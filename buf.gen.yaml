@@ -1,0 +1,10 @@
+version: v2
+plugins:
+  - local: D:\project\golang\go1.24.4\bin\protoc-gen-go.exe
+    out: .
+    opt:
+      - module=backend-core
+  - local: D:\project\golang\go1.24.4\bin\protoc-gen-go-grpc.exe
+    out: .
+    opt:
+      - module=backend-core
