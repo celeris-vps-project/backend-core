@@ -41,6 +41,9 @@ type Hypervisor interface {
 
 	// Info returns the current runtime state of a guest.
 	Info(instanceID string) (*VMInfo, error)
+
+	// List returns the runtime state of all guests on the host.
+	List() ([]*VMInfo, error)
 }
 
 // Execute dispatches a task to the appropriate Hypervisor method.

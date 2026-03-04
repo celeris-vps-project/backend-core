@@ -1,4 +1,4 @@
-﻿package infra
+package infra
 
 import (
 	"backend-core/internal/node/domain"
@@ -15,6 +15,7 @@ type HostNodePO struct {
 	ID         string     `gorm:"primaryKey;column:id"`
 	Code       string     `gorm:"uniqueIndex;column:code"`
 	Location   string     `gorm:"index;column:location"`
+	RegionID   string     `gorm:"index;column:region_id"`
 	Name       string     `gorm:"column:name"`
 	Secret     string     `gorm:"column:secret"`
 	IP         string     `gorm:"column:ip"`
@@ -26,6 +27,11 @@ type HostNodePO struct {
 	VMCount    int        `gorm:"column:vm_count"`
 	LastSeenAt *time.Time `gorm:"column:last_seen_at"`
 	CreatedAt  time.Time  `gorm:"column:created_at"`
+
+	// Capacity fields (merged from the old NodePO / "nodes" table)
+	TotalSlots int  `gorm:"column:total_slots;default:0"`
+	UsedSlots  int  `gorm:"column:used_slots;default:0"`
+	Enabled    bool `gorm:"column:enabled;default:true"`
 }
 
 func (HostNodePO) TableName() string { return "host_nodes" }
@@ -96,6 +102,30 @@ func (r *SqliteHostNodeRepo) ListAll() ([]*domain.HostNode, error) {
 func (r *SqliteHostNodeRepo) ListByLocation(loc string) ([]*domain.HostNode, error) {
 	var pos []HostNodePO
 	if err := r.db.Where("location = ?", loc).Find(&pos).Error; err != nil {
+		return nil, err
+	}
+	out := make([]*domain.HostNode, len(pos))
+	for i, po := range pos {
+		out[i] = hostToDomain(po)
+	}
+	return out, nil
+}
+
+func (r *SqliteHostNodeRepo) ListByRegionID(regionID string) ([]*domain.HostNode, error) {
+	var pos []HostNodePO
+	if err := r.db.Where("region_id = ?", regionID).Find(&pos).Error; err != nil {
+		return nil, err
+	}
+	out := make([]*domain.HostNode, len(pos))
+	for i, po := range pos {
+		out[i] = hostToDomain(po)
+	}
+	return out, nil
+}
+
+func (r *SqliteHostNodeRepo) ListEnabledByRegionID(regionID string) ([]*domain.HostNode, error) {
+	var pos []HostNodePO
+	if err := r.db.Where("region_id = ? AND enabled = ?", regionID, true).Find(&pos).Error; err != nil {
 		return nil, err
 	}
 	out := make([]*domain.HostNode, len(pos))
@@ -195,19 +225,21 @@ func (r *SqliteTaskRepo) Save(t *contracts.Task) error {
 
 func hostToDomain(po HostNodePO) *domain.HostNode {
 	return domain.ReconstituteHostNode(
-		po.ID, po.Code, po.Location, po.Name, po.Secret,
+		po.ID, po.Code, po.Location, po.RegionID, po.Name, po.Secret,
 		po.IP, po.Status, po.AgentVer,
 		po.CPUUsage, po.MemUsage, po.DiskUsage, po.VMCount,
 		po.LastSeenAt, po.CreatedAt,
+		po.TotalSlots, po.UsedSlots, po.Enabled,
 	)
 }
 
 func hostFromDomain(n *domain.HostNode) HostNodePO {
 	return HostNodePO{
-		ID: n.ID(), Code: n.Code(), Location: n.Location(), Name: n.Name(), Secret: n.Secret(),
+		ID: n.ID(), Code: n.Code(), Location: n.Location(), RegionID: n.RegionID(), Name: n.Name(), Secret: n.Secret(),
 		IP: n.IP(), Status: n.Status(), AgentVer: n.AgentVer(),
 		CPUUsage: n.CPUUsage(), MemUsage: n.MemUsage(), DiskUsage: n.DiskUsage(), VMCount: n.VMCount(),
 		LastSeenAt: n.LastSeenAt(), CreatedAt: n.CreatedAt(),
+		TotalSlots: n.TotalSlots(), UsedSlots: n.UsedSlots(), Enabled: n.Enabled(),
 	}
 }
 

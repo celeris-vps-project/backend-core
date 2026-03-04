@@ -111,3 +111,20 @@ func (d *StubDriver) Info(instanceID string) (*VMInfo, error) {
 		DiskGB:     inst.Spec.DiskGB,
 	}, nil
 }
+
+func (d *StubDriver) List() ([]*VMInfo, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	var list []*VMInfo
+	for id, inst := range d.instances {
+		list = append(list, &VMInfo{
+			InstanceID: id,
+			State:      inst.State,
+			CPU:        inst.Spec.CPU,
+			MemoryMB:   inst.Spec.MemoryMB,
+			DiskGB:     inst.Spec.DiskGB,
+		})
+	}
+	return list, nil
+}

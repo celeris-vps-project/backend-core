@@ -1,11 +1,12 @@
 package domain
 
-// NodeRepository provides persistence for nodes.
-type NodeRepository interface {
-	GetByID(id string) (*Node, error)
-	ListAll() ([]*Node, error)
-	ListByLocation(location string) ([]*Node, error)
-	Save(node *Node) error
+// NodeAllocatorRepository provides access to nodes for capacity management.
+// The underlying implementation delegates to the node bounded context's HostNodeRepository.
+type NodeAllocatorRepository interface {
+	GetByID(id string) (NodeAllocator, error)
+	ListAll() ([]NodeAllocator, error)
+	ListByLocation(location string) ([]NodeAllocator, error)
+	Save(node NodeAllocator) error
 }
 
 // InstanceRepository provides persistence for instances.

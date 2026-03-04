@@ -15,10 +15,11 @@ import (
 // ---- Request DTOs ----
 
 type CreateHostRequest struct {
-	Code     string `json:"code" vd:"len($)>0"`
-	Location string `json:"location" vd:"len($)>0"`
-	Name     string `json:"name" vd:"len($)>0"`
-	Secret   string `json:"secret" vd:"len($)>0"`
+	Code       string `json:"code" vd:"len($)>0"`
+	Location   string `json:"location" vd:"len($)>0"`
+	Name       string `json:"name" vd:"len($)>0"`
+	Secret     string `json:"secret" vd:"len($)>0"`
+	TotalSlots int    `json:"total_slots"`
 }
 
 type AddIPRequest struct {
@@ -34,19 +35,23 @@ type EnqueueTaskRequest struct {
 // ---- Response DTOs ----
 
 type HostNodeResponse struct {
-	ID        string  `json:"id"`
-	Code      string  `json:"code"`
-	Location  string  `json:"location"`
-	Name      string  `json:"name"`
-	IP        string  `json:"ip,omitempty"`
-	Status    string  `json:"status"`
-	AgentVer  string  `json:"agent_ver,omitempty"`
-	CPUUsage  float64 `json:"cpu_usage"`
-	MemUsage  float64 `json:"mem_usage"`
-	DiskUsage float64 `json:"disk_usage"`
-	VMCount   int     `json:"vm_count"`
-	LastSeen  *string `json:"last_seen_at,omitempty"`
-	CreatedAt string  `json:"created_at"`
+	ID             string  `json:"id"`
+	Code           string  `json:"code"`
+	Location       string  `json:"location"`
+	Name           string  `json:"name"`
+	IP             string  `json:"ip,omitempty"`
+	Status         string  `json:"status"`
+	AgentVer       string  `json:"agent_ver,omitempty"`
+	CPUUsage       float64 `json:"cpu_usage"`
+	MemUsage       float64 `json:"mem_usage"`
+	DiskUsage      float64 `json:"disk_usage"`
+	VMCount        int     `json:"vm_count"`
+	TotalSlots     int     `json:"total_slots"`
+	UsedSlots      int     `json:"used_slots"`
+	AvailableSlots int     `json:"available_slots"`
+	Enabled        bool    `json:"enabled"`
+	LastSeen       *string `json:"last_seen_at,omitempty"`
+	CreatedAt      string  `json:"created_at"`
 }
 
 type IPResponse struct {
@@ -71,7 +76,7 @@ func (h *NodeHandler) CreateHost(ctx context.Context, c *hz_app.RequestContext) 
 		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
 		return
 	}
-	node, err := h.svc.CreateHost(req.Code, req.Location, req.Name, req.Secret)
+	node, err := h.svc.CreateHost(req.Code, req.Location, req.Name, req.Secret, req.TotalSlots)
 	if err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
 		return
@@ -108,6 +113,36 @@ func (h *NodeHandler) GetHost(ctx context.Context, c *hz_app.RequestContext) {
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": toHostResp(node)})
+}
+
+// POST /host-nodes/:id/enable
+func (h *NodeHandler) EnableHost(ctx context.Context, c *hz_app.RequestContext) {
+	if err := h.svc.EnableHost(c.Param("id")); err != nil {
+		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		return
+	}
+	node, _ := h.svc.GetHost(c.Param("id"))
+	c.JSON(consts.StatusOK, utils.H{"data": toHostResp(node)})
+}
+
+// POST /host-nodes/:id/disable
+func (h *NodeHandler) DisableHost(ctx context.Context, c *hz_app.RequestContext) {
+	if err := h.svc.DisableHost(c.Param("id")); err != nil {
+		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		return
+	}
+	node, _ := h.svc.GetHost(c.Param("id"))
+	c.JSON(consts.StatusOK, utils.H{"data": toHostResp(node)})
+}
+
+// GET /locations
+func (h *NodeHandler) ListLocations(ctx context.Context, c *hz_app.RequestContext) {
+	locs, err := h.svc.AvailableLocations()
+	if err != nil {
+		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		return
+	}
+	c.JSON(consts.StatusOK, utils.H{"data": locs})
 }
 
 // POST /host-nodes/:id/ips
@@ -199,6 +234,54 @@ func (h *NodeHandler) AgentTaskResult(ctx context.Context, c *hz_app.RequestCont
 	c.JSON(consts.StatusOK, utils.H{"ok": true})
 }
 
+// ---- Resource Pool endpoints ----
+
+// GET /resource-pools — list physical capacity summaries grouped by region
+func (h *NodeHandler) ListResourcePools(ctx context.Context, c *hz_app.RequestContext) {
+	summaries, err := h.svc.ListPoolCapacities()
+	if err != nil {
+		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		return
+	}
+	c.JSON(consts.StatusOK, utils.H{"data": summaries})
+}
+
+// GET /resource-pools/:regionId — get a single resource pool's capacity
+func (h *NodeHandler) GetResourcePool(ctx context.Context, c *hz_app.RequestContext) {
+	pool, err := h.svc.GetResourcePool(c.Param("regionId"))
+	if err != nil {
+		c.JSON(consts.StatusNotFound, utils.H{"error": err.Error()})
+		return
+	}
+	type nodeInfo struct {
+		ID             string `json:"id"`
+		Code           string `json:"code"`
+		TotalSlots     int    `json:"total_slots"`
+		UsedSlots      int    `json:"used_slots"`
+		AvailableSlots int    `json:"available_slots"`
+		Enabled        bool   `json:"enabled"`
+	}
+	nodes := make([]nodeInfo, len(pool.Nodes()))
+	for i, n := range pool.Nodes() {
+		nodes[i] = nodeInfo{
+			ID: n.ID(), Code: n.Code(),
+			TotalSlots: n.TotalSlots(), UsedSlots: n.UsedSlots(),
+			AvailableSlots: n.AvailableSlots(), Enabled: n.Enabled(),
+		}
+	}
+	c.JSON(consts.StatusOK, utils.H{
+		"data": utils.H{
+			"region_id":       pool.RegionID(),
+			"region_code":     pool.RegionCode(),
+			"region_name":     pool.RegionName(),
+			"total_slots":     pool.TotalPhysicalSlots(),
+			"used_slots":      pool.UsedPhysicalSlots(),
+			"available_slots": pool.AvailablePhysicalSlots(),
+			"nodes":           nodes,
+		},
+	})
+}
+
 // ---- Mapping ----
 
 func toHostResp(n *domain.HostNode) HostNodeResponse {
@@ -207,6 +290,8 @@ func toHostResp(n *domain.HostNode) HostNodeResponse {
 		IP: n.IP(), Status: n.Status(), AgentVer: n.AgentVer(),
 		CPUUsage: n.CPUUsage(), MemUsage: n.MemUsage(), DiskUsage: n.DiskUsage(),
 		VMCount: n.VMCount(), CreatedAt: n.CreatedAt().Format(time.RFC3339),
+		TotalSlots: n.TotalSlots(), UsedSlots: n.UsedSlots(),
+		AvailableSlots: n.AvailableSlots(), Enabled: n.Enabled(),
 	}
 	if t := n.LastSeenAt(); t != nil {
 		s := t.Format(time.RFC3339)

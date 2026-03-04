@@ -2,25 +2,62 @@ package infra
 
 import (
 	"backend-core/internal/instance/domain"
+	nodeDomain "backend-core/internal/node/domain"
 	"errors"
 	"time"
 
 	"gorm.io/gorm"
 )
 
-// ---- Persistence Objects ----
+// ---- HostNodeAllocatorAdapter ----
+// Adapts node/domain.HostNodeRepository to satisfy instance/domain.NodeAllocatorRepository.
+// This is the anti-corruption layer between the two bounded contexts.
 
-type NodePO struct {
-	ID         string `gorm:"primaryKey;column:id"`
-	Code       string `gorm:"uniqueIndex;column:code"`
-	Location   string `gorm:"index;column:location"`
-	Name       string `gorm:"column:name"`
-	TotalSlots int    `gorm:"column:total_slots"`
-	UsedSlots  int    `gorm:"column:used_slots"`
-	Enabled    bool   `gorm:"column:enabled"`
+type HostNodeAllocatorAdapter struct {
+	hostRepo nodeDomain.HostNodeRepository
 }
 
-func (NodePO) TableName() string { return "nodes" }
+func NewHostNodeAllocatorAdapter(hostRepo nodeDomain.HostNodeRepository) *HostNodeAllocatorAdapter {
+	return &HostNodeAllocatorAdapter{hostRepo: hostRepo}
+}
+
+func (a *HostNodeAllocatorAdapter) GetByID(id string) (domain.NodeAllocator, error) {
+	return a.hostRepo.GetByID(id)
+}
+
+func (a *HostNodeAllocatorAdapter) ListAll() ([]domain.NodeAllocator, error) {
+	nodes, err := a.hostRepo.ListAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.NodeAllocator, len(nodes))
+	for i, n := range nodes {
+		out[i] = n
+	}
+	return out, nil
+}
+
+func (a *HostNodeAllocatorAdapter) ListByLocation(location string) ([]domain.NodeAllocator, error) {
+	nodes, err := a.hostRepo.ListByLocation(location)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.NodeAllocator, len(nodes))
+	for i, n := range nodes {
+		out[i] = n
+	}
+	return out, nil
+}
+
+func (a *HostNodeAllocatorAdapter) Save(node domain.NodeAllocator) error {
+	hn, ok := node.(*nodeDomain.HostNode)
+	if !ok {
+		return errors.New("infra_error: expected *HostNode")
+	}
+	return a.hostRepo.Save(hn)
+}
+
+// ---- Persistence Objects ----
 
 type InstancePO struct {
 	ID           string     `gorm:"primaryKey;column:id"`
@@ -44,52 +81,6 @@ type InstancePO struct {
 }
 
 func (InstancePO) TableName() string { return "instances" }
-
-// ---- Node Repository ----
-
-type SqliteNodeRepo struct{ db *gorm.DB }
-
-func NewSqliteNodeRepo(db *gorm.DB) *SqliteNodeRepo { return &SqliteNodeRepo{db: db} }
-
-func (r *SqliteNodeRepo) GetByID(id string) (*domain.Node, error) {
-	var po NodePO
-	if err := r.db.Where("id = ?", id).First(&po).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("node not found")
-		}
-		return nil, err
-	}
-	return nodeToDomain(po), nil
-}
-
-func (r *SqliteNodeRepo) ListAll() ([]*domain.Node, error) {
-	var pos []NodePO
-	if err := r.db.Find(&pos).Error; err != nil {
-		return nil, err
-	}
-	nodes := make([]*domain.Node, len(pos))
-	for i, po := range pos {
-		nodes[i] = nodeToDomain(po)
-	}
-	return nodes, nil
-}
-
-func (r *SqliteNodeRepo) ListByLocation(location string) ([]*domain.Node, error) {
-	var pos []NodePO
-	if err := r.db.Where("location = ?", location).Find(&pos).Error; err != nil {
-		return nil, err
-	}
-	nodes := make([]*domain.Node, len(pos))
-	for i, po := range pos {
-		nodes[i] = nodeToDomain(po)
-	}
-	return nodes, nil
-}
-
-func (r *SqliteNodeRepo) Save(node *domain.Node) error {
-	po := nodeFromDomain(node)
-	return r.db.Save(&po).Error
-}
 
 // ---- Instance Repository ----
 
@@ -138,17 +129,6 @@ func (r *SqliteInstanceRepo) Save(inst *domain.Instance) error {
 }
 
 // ---- Mapping ----
-
-func nodeToDomain(po NodePO) *domain.Node {
-	return domain.ReconstituteNode(po.ID, po.Code, po.Location, po.Name, po.TotalSlots, po.UsedSlots, po.Enabled)
-}
-
-func nodeFromDomain(n *domain.Node) NodePO {
-	return NodePO{
-		ID: n.ID(), Code: n.Code(), Location: n.Location(), Name: n.Name(),
-		TotalSlots: n.TotalSlots(), UsedSlots: n.UsedSlots(), Enabled: n.Enabled(),
-	}
-}
 
 func instanceToDomain(po InstancePO) *domain.Instance {
 	return domain.ReconstituteInstance(

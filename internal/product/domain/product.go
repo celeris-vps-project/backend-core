@@ -1,6 +1,11 @@
 ﻿package domain
 
-import "errors"
+import (
+	"errors"
+)
+
+// UnlimitedSlots is the sentinel value for unlimited inventory.
+const UnlimitedSlots = -1
 
 // BillingCycle represents how frequently a product is billed.
 type BillingCycle string
@@ -11,11 +16,26 @@ const (
 	BillingAnnually  BillingCycle = "annually"
 )
 
+// DomainEvent is the marker interface for events raised within the Product aggregate.
+type DomainEvent interface {
+	EventName() string
+}
+
 // Product defines a VPS plan available for purchase.
+//
+// Key concept: total_slots is the COMMERCIAL inventory — how many units the
+// admin wants to sell. This is independent of the physical capacity of the
+// underlying node resource pool. The admin may intentionally over-sell
+// (with a warning) and excess orders enter a pending-provisioning queue.
+//
+// A Product is mapped to a regionID (resource pool) rather than a single
+// node, enabling load-balancing across all nodes in that region.
 type Product struct {
 	id           string
 	name         string // e.g. "VPS Starter"
 	slug         string // e.g. "vps-starter"
+	location     string // e.g. "DE-fra" — legacy display label
+	regionID     string // FK to Region — determines the resource pool
 	cpu          int
 	memoryMB     int
 	diskGB       int
@@ -25,9 +45,15 @@ type Product struct {
 	billingCycle BillingCycle
 	enabled      bool
 	sortOrder    int
+	totalSlots   int // commercial inventory (how many units admin wants to sell)
+	soldSlots    int // number of slots already sold / allocated
+
+	// domainEvents collects events raised by this aggregate during a use-case.
+	// The application service reads and publishes them after persisting the aggregate.
+	domainEvents []DomainEvent
 }
 
-func NewProduct(id, name, slug string, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle BillingCycle) (*Product, error) {
+func NewProduct(id, name, slug, location string, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle BillingCycle, totalSlots int) (*Product, error) {
 	if id == "" {
 		return nil, errors.New("domain_error: product id is required")
 	}
@@ -36,6 +62,9 @@ func NewProduct(id, name, slug string, cpu, memoryMB, diskGB, bandwidthGB int, p
 	}
 	if slug == "" {
 		return nil, errors.New("domain_error: slug is required")
+	}
+	if location == "" {
+		return nil, errors.New("domain_error: location is required")
 	}
 	if cpu <= 0 {
 		return nil, errors.New("domain_error: cpu must be > 0")
@@ -52,26 +81,31 @@ func NewProduct(id, name, slug string, cpu, memoryMB, diskGB, bandwidthGB int, p
 	if currency == "" {
 		return nil, errors.New("domain_error: currency is required")
 	}
+	if totalSlots < UnlimitedSlots {
+		return nil, errors.New("domain_error: total slots must be >= -1 (-1 = unlimited)")
+	}
 	return &Product{
-		id: id, name: name, slug: slug,
+		id: id, name: name, slug: slug, location: location,
 		cpu: cpu, memoryMB: memoryMB, diskGB: diskGB, bandwidthGB: bandwidthGB,
 		priceAmount: priceAmount, currency: currency, billingCycle: cycle,
-		enabled: true, sortOrder: 0,
+		enabled: true, sortOrder: 0, totalSlots: totalSlots, soldSlots: 0,
 	}, nil
 }
 
-func ReconstituteProduct(id, name, slug string, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle BillingCycle, enabled bool, sortOrder int) *Product {
+func ReconstituteProduct(id, name, slug, location, regionID string, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle BillingCycle, enabled bool, sortOrder, totalSlots, soldSlots int) *Product {
 	return &Product{
-		id: id, name: name, slug: slug,
+		id: id, name: name, slug: slug, location: location, regionID: regionID,
 		cpu: cpu, memoryMB: memoryMB, diskGB: diskGB, bandwidthGB: bandwidthGB,
 		priceAmount: priceAmount, currency: currency, billingCycle: cycle,
-		enabled: enabled, sortOrder: sortOrder,
+		enabled: enabled, sortOrder: sortOrder, totalSlots: totalSlots, soldSlots: soldSlots,
 	}
 }
 
 func (p *Product) ID() string                 { return p.id }
 func (p *Product) Name() string               { return p.name }
 func (p *Product) Slug() string               { return p.slug }
+func (p *Product) Location() string           { return p.location }
+func (p *Product) RegionID() string           { return p.regionID }
 func (p *Product) CPU() int                   { return p.cpu }
 func (p *Product) MemoryMB() int              { return p.memoryMB }
 func (p *Product) DiskGB() int                { return p.diskGB }
@@ -81,10 +115,54 @@ func (p *Product) Currency() string           { return p.currency }
 func (p *Product) BillingCycle() BillingCycle { return p.billingCycle }
 func (p *Product) Enabled() bool              { return p.enabled }
 func (p *Product) SortOrder() int             { return p.sortOrder }
+func (p *Product) TotalSlots() int            { return p.totalSlots }
+func (p *Product) SoldSlots() int             { return p.soldSlots }
+func (p *Product) IsUnlimited() bool          { return p.totalSlots == UnlimitedSlots }
+func (p *Product) AvailableSlots() int {
+	if p.IsUnlimited() {
+		return 0
+	}
+	return p.totalSlots - p.soldSlots
+}
+
+func (p *Product) SetRegionID(regionID string) { p.regionID = regionID }
 
 func (p *Product) Enable()            { p.enabled = true }
 func (p *Product) Disable()           { p.enabled = false }
 func (p *Product) SetSortOrder(n int) { p.sortOrder = n }
+
+// SetTotalSlots adjusts the commercial inventory slots. Use -1 for unlimited.
+// The new value must not be less than the number of slots already sold
+// (unless setting to unlimited).
+func (p *Product) SetTotalSlots(n int) error {
+	if n < UnlimitedSlots {
+		return errors.New("domain_error: total slots must be >= -1 (-1 = unlimited)")
+	}
+	if n != UnlimitedSlots && n < p.soldSlots {
+		return errors.New("domain_error: total slots cannot be less than sold slots")
+	}
+	p.totalSlots = n
+	return nil
+}
+
+// ConsumeSlot decrements an available slot (e.g. on purchase).
+func (p *Product) ConsumeSlot() error {
+	if !p.IsUnlimited() && p.soldSlots >= p.totalSlots {
+		return errors.New("domain_error: no available slots")
+	}
+	p.soldSlots++
+	return nil
+}
+
+// ReleaseSlot increments an available slot (e.g. on cancellation).
+func (p *Product) ReleaseSlot() error {
+	if p.soldSlots <= 0 {
+		return errors.New("domain_error: no sold slots to release")
+	}
+	p.soldSlots--
+	return nil
+}
+
 func (p *Product) SetPrice(amount int64, currency string) error {
 	if amount <= 0 {
 		return errors.New("domain_error: price must be > 0")
@@ -95,4 +173,19 @@ func (p *Product) SetPrice(amount int64, currency string) error {
 	p.priceAmount = amount
 	p.currency = currency
 	return nil
+}
+
+// ---- Domain Event support ----
+
+// RaiseEvent records a domain event on the aggregate. These are collected
+// by the application service after persistence and published to the event bus.
+func (p *Product) RaiseEvent(e DomainEvent) {
+	p.domainEvents = append(p.domainEvents, e)
+}
+
+// CollectEvents returns and clears all pending domain events.
+func (p *Product) CollectEvents() []DomainEvent {
+	events := p.domainEvents
+	p.domainEvents = nil
+	return events
 }

@@ -11,6 +11,8 @@ type ProductPO struct {
 	ID           string `gorm:"primaryKey;column:id"`
 	Name         string `gorm:"column:name"`
 	Slug         string `gorm:"uniqueIndex;column:slug"`
+	Location     string `gorm:"column:location"`
+	RegionID     string `gorm:"index;column:region_id"`
 	CPU          int    `gorm:"column:cpu"`
 	MemoryMB     int    `gorm:"column:memory_mb"`
 	DiskGB       int    `gorm:"column:disk_gb"`
@@ -20,6 +22,8 @@ type ProductPO struct {
 	BillingCycle string `gorm:"column:billing_cycle"`
 	Enabled      bool   `gorm:"column:enabled"`
 	SortOrder    int    `gorm:"column:sort_order"`
+	TotalSlots   int    `gorm:"column:total_slots;default:0"`
+	SoldSlots    int    `gorm:"column:sold_slots;default:0"`
 }
 
 func (ProductPO) TableName() string { return "products" }
@@ -66,6 +70,14 @@ func (r *SqliteProductRepo) ListEnabled() ([]*domain.Product, error) {
 	return mapProducts(pos), nil
 }
 
+func (r *SqliteProductRepo) ListByRegionID(regionID string) ([]*domain.Product, error) {
+	var pos []ProductPO
+	if err := r.db.Where("region_id = ?", regionID).Order("sort_order ASC").Find(&pos).Error; err != nil {
+		return nil, err
+	}
+	return mapProducts(pos), nil
+}
+
 func (r *SqliteProductRepo) Save(p *domain.Product) error {
 	po := productFromDomain(p)
 	return r.db.Save(&po).Error
@@ -81,17 +93,19 @@ func mapProducts(pos []ProductPO) []*domain.Product {
 
 func productToDomain(po ProductPO) *domain.Product {
 	return domain.ReconstituteProduct(
-		po.ID, po.Name, po.Slug, po.CPU, po.MemoryMB, po.DiskGB, po.BandwidthGB,
+		po.ID, po.Name, po.Slug, po.Location, po.RegionID, po.CPU, po.MemoryMB, po.DiskGB, po.BandwidthGB,
 		po.PriceAmount, po.Currency, domain.BillingCycle(po.BillingCycle),
-		po.Enabled, po.SortOrder,
+		po.Enabled, po.SortOrder, po.TotalSlots, po.SoldSlots,
 	)
 }
 
 func productFromDomain(p *domain.Product) ProductPO {
 	return ProductPO{
-		ID: p.ID(), Name: p.Name(), Slug: p.Slug(),
-		CPU: p.CPU(), MemoryMB: p.MemoryMB(), DiskGB: p.DiskGB(), BandwidthGB: p.BandwidthGB(),
+		ID: p.ID(), Name: p.Name(), Slug: p.Slug(), Location: p.Location(),
+		RegionID: p.RegionID(),
+		CPU:      p.CPU(), MemoryMB: p.MemoryMB(), DiskGB: p.DiskGB(), BandwidthGB: p.BandwidthGB(),
 		PriceAmount: p.PriceAmount(), Currency: p.Currency(),
 		BillingCycle: string(p.BillingCycle()), Enabled: p.Enabled(), SortOrder: p.SortOrder(),
+		TotalSlots: p.TotalSlots(), SoldSlots: p.SoldSlots(),
 	}
 }

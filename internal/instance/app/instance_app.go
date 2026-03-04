@@ -10,45 +10,17 @@ type IDGenerator interface {
 }
 
 type InstanceAppService struct {
-	nodeRepo     domain.NodeRepository
+	nodeRepo     domain.NodeAllocatorRepository
 	instanceRepo domain.InstanceRepository
 	ids          IDGenerator
 }
 
 func NewInstanceAppService(
-	nodeRepo domain.NodeRepository,
+	nodeRepo domain.NodeAllocatorRepository,
 	instanceRepo domain.InstanceRepository,
 	ids IDGenerator,
 ) *InstanceAppService {
 	return &InstanceAppService{nodeRepo: nodeRepo, instanceRepo: instanceRepo, ids: ids}
-}
-
-// ---- Node operations (admin) ----
-
-func (s *InstanceAppService) CreateNode(code, location, name string, totalSlots int) (*domain.Node, error) {
-	id := s.ids.NewID()
-	node, err := domain.NewNode(id, code, location, name, totalSlots)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.nodeRepo.Save(node); err != nil {
-		return nil, err
-	}
-	return node, nil
-}
-
-func (s *InstanceAppService) GetNode(nodeID string) (*domain.Node, error) {
-	return s.nodeRepo.GetByID(nodeID)
-}
-
-// ListNodes returns all nodes.
-func (s *InstanceAppService) ListNodes() ([]*domain.Node, error) {
-	return s.nodeRepo.ListAll()
-}
-
-// ListNodesByLocation returns nodes grouped by location code (e.g. "DE-fra").
-func (s *InstanceAppService) ListNodesByLocation(location string) ([]*domain.Node, error) {
-	return s.nodeRepo.ListByLocation(location)
 }
 
 // ---- Instance purchase ----
@@ -173,60 +145,4 @@ func (s *InstanceAppService) AssignIP(instanceID, ipv4, ipv6 string) error {
 		return err
 	}
 	return s.instanceRepo.Save(inst)
-}
-
-// ---- Node admin ----
-
-func (s *InstanceAppService) EnableNode(nodeID string) error {
-	node, err := s.nodeRepo.GetByID(nodeID)
-	if err != nil {
-		return err
-	}
-	node.Enable()
-	return s.nodeRepo.Save(node)
-}
-
-func (s *InstanceAppService) DisableNode(nodeID string) error {
-	node, err := s.nodeRepo.GetByID(nodeID)
-	if err != nil {
-		return err
-	}
-	node.Disable()
-	return s.nodeRepo.Save(node)
-}
-
-// AvailableLocations returns a deduplicated list of locations that have capacity.
-func (s *InstanceAppService) AvailableLocations() ([]LocationSummary, error) {
-	nodes, err := s.nodeRepo.ListAll()
-	if err != nil {
-		return nil, err
-	}
-	locMap := make(map[string]*LocationSummary)
-	for _, n := range nodes {
-		loc := n.Location()
-		summary, ok := locMap[loc]
-		if !ok {
-			summary = &LocationSummary{Location: loc}
-			locMap[loc] = summary
-		}
-		summary.TotalNodes++
-		summary.TotalSlots += n.TotalSlots()
-		summary.AvailableSlots += n.AvailableSlots()
-		if n.HasCapacity() {
-			summary.AvailableNodes++
-		}
-	}
-	result := make([]LocationSummary, 0, len(locMap))
-	for _, v := range locMap {
-		result = append(result, *v)
-	}
-	return result, nil
-}
-
-type LocationSummary struct {
-	Location       string `json:"location"`
-	TotalNodes     int    `json:"total_nodes"`
-	AvailableNodes int    `json:"available_nodes"`
-	TotalSlots     int    `json:"total_slots"`
-	AvailableSlots int    `json:"available_slots"`
 }

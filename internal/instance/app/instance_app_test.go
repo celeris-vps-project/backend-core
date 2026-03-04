@@ -2,32 +2,38 @@ package app
 
 import (
 	"backend-core/internal/instance/domain"
+	nodeDomain "backend-core/internal/node/domain"
 	"errors"
 	"testing"
 )
 
 // ---- In-memory test doubles ----
 
-type memNodeRepo struct{ items map[string]*domain.Node }
+// memNodeAllocatorRepo implements domain.NodeAllocatorRepository using HostNode.
+type memNodeAllocatorRepo struct {
+	items map[string]*nodeDomain.HostNode
+}
 
-func newMemNodeRepo() *memNodeRepo { return &memNodeRepo{items: map[string]*domain.Node{}} }
+func newMemNodeAllocatorRepo() *memNodeAllocatorRepo {
+	return &memNodeAllocatorRepo{items: map[string]*nodeDomain.HostNode{}}
+}
 
-func (r *memNodeRepo) GetByID(id string) (*domain.Node, error) {
+func (r *memNodeAllocatorRepo) GetByID(id string) (domain.NodeAllocator, error) {
 	n, ok := r.items[id]
 	if !ok {
 		return nil, errors.New("not found")
 	}
 	return n, nil
 }
-func (r *memNodeRepo) ListAll() ([]*domain.Node, error) {
-	out := make([]*domain.Node, 0, len(r.items))
+func (r *memNodeAllocatorRepo) ListAll() ([]domain.NodeAllocator, error) {
+	out := make([]domain.NodeAllocator, 0, len(r.items))
 	for _, n := range r.items {
 		out = append(out, n)
 	}
 	return out, nil
 }
-func (r *memNodeRepo) ListByLocation(loc string) ([]*domain.Node, error) {
-	var out []*domain.Node
+func (r *memNodeAllocatorRepo) ListByLocation(loc string) ([]domain.NodeAllocator, error) {
+	var out []domain.NodeAllocator
 	for _, n := range r.items {
 		if n.Location() == loc {
 			out = append(out, n)
@@ -35,7 +41,11 @@ func (r *memNodeRepo) ListByLocation(loc string) ([]*domain.Node, error) {
 	}
 	return out, nil
 }
-func (r *memNodeRepo) Save(n *domain.Node) error { r.items[n.ID()] = n; return nil }
+func (r *memNodeAllocatorRepo) Save(n domain.NodeAllocator) error {
+	hn := n.(*nodeDomain.HostNode)
+	r.items[hn.ID()] = hn
+	return nil
+}
 
 type memInstRepo struct{ items map[string]*domain.Instance }
 
@@ -75,19 +85,24 @@ func (g *seqIDGen) NewID() string {
 	return "id-" + string(rune('0'+g.counter))
 }
 
+// createTestHostNode is a helper to create a HostNode with capacity and save it.
+func createTestHostNode(repo *memNodeAllocatorRepo, id, code, location, name string, totalSlots int) *nodeDomain.HostNode {
+	h, _ := nodeDomain.NewHostNode(id, code, location, name, "test-secret")
+	h.SetTotalSlots(totalSlots)
+	repo.items[id] = h
+	return h
+}
+
 // ---- Tests ----
 
 func TestPurchaseInstance_AllocatesSlot(t *testing.T) {
-	nodeRepo := newMemNodeRepo()
+	nodeRepo := newMemNodeAllocatorRepo()
 	instRepo := newMemInstRepo()
 	idGen := &seqIDGen{}
 	svc := NewInstanceAppService(nodeRepo, instRepo, idGen)
 
-	// Create a node with 2 slots
-	node, err := svc.CreateNode("DE-fra-01", "DE-fra", "Frankfurt #1", 2)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	// Create a host node with 2 slots
+	node := createTestHostNode(nodeRepo, "node-1", "DE-fra-01", "DE-fra", "Frankfurt #1", 2)
 
 	// Purchase first instance
 	inst1, err := svc.PurchaseInstance("cust-1", "ord-1", node.ID(), "web-01", "vps-starter", "ubuntu-22.04", 2, 2048, 40)
@@ -118,12 +133,12 @@ func TestPurchaseInstance_AllocatesSlot(t *testing.T) {
 }
 
 func TestTerminateInstance_ReleasesSlot(t *testing.T) {
-	nodeRepo := newMemNodeRepo()
+	nodeRepo := newMemNodeAllocatorRepo()
 	instRepo := newMemInstRepo()
 	idGen := &seqIDGen{}
 	svc := NewInstanceAppService(nodeRepo, instRepo, idGen)
 
-	node, _ := svc.CreateNode("US-slc-01", "US-slc", "Salt Lake City #1", 1)
+	node := createTestHostNode(nodeRepo, "node-2", "US-slc-01", "US-slc", "Salt Lake City #1", 1)
 	inst, _ := svc.PurchaseInstance("cust-1", "ord-1", node.ID(), "app-01", "vps-pro", "debian-12", 4, 8192, 100)
 
 	_ = svc.StartInstance(inst.ID())
@@ -134,24 +149,5 @@ func TestTerminateInstance_ReleasesSlot(t *testing.T) {
 	storedNode, _ := nodeRepo.GetByID(node.ID())
 	if storedNode.UsedSlots() != 0 {
 		t.Fatalf("expected 0 used slots after terminate, got %d", storedNode.UsedSlots())
-	}
-}
-
-func TestAvailableLocations(t *testing.T) {
-	nodeRepo := newMemNodeRepo()
-	instRepo := newMemInstRepo()
-	idGen := &seqIDGen{}
-	svc := NewInstanceAppService(nodeRepo, instRepo, idGen)
-
-	_, _ = svc.CreateNode("DE-fra-01", "DE-fra", "Frankfurt #1", 5)
-	_, _ = svc.CreateNode("DE-fra-02", "DE-fra", "Frankfurt #2", 3)
-	_, _ = svc.CreateNode("US-slc-01", "US-slc", "Salt Lake City #1", 10)
-
-	locs, err := svc.AvailableLocations()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(locs) != 2 {
-		t.Fatalf("expected 2 locations, got %d", len(locs))
 	}
 }

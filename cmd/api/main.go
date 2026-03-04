@@ -22,6 +22,7 @@ import (
 	productInfra "backend-core/internal/product/infra"
 	productHttp "backend-core/internal/product/interfaces/http"
 	"backend-core/pkg/agentpb"
+	"backend-core/pkg/eventbus"
 	"flag"
 	"log"
 	"net"
@@ -72,9 +73,9 @@ func main() {
 	db.AutoMigrate(&infra.UserPO{})
 	db.AutoMigrate(&billingInfra.InvoicePO{}, &billingInfra.LineItemPO{})
 	db.AutoMigrate(&orderingInfra.OrderPO{})
-	db.AutoMigrate(&instanceInfra.NodePO{}, &instanceInfra.InstancePO{})
+	db.AutoMigrate(&instanceInfra.InstancePO{})
 	db.AutoMigrate(&productInfra.ProductPO{})
-	db.AutoMigrate(&nodeInfra.HostNodePO{}, &nodeInfra.IPAddressPO{}, &nodeInfra.TaskPO{})
+	db.AutoMigrate(&nodeInfra.RegionPO{}, &nodeInfra.HostNodePO{}, &nodeInfra.IPAddressPO{}, &nodeInfra.TaskPO{})
 
 	// 2. Wire up infrastructure
 	pwdHasher := infra.NewBcryptPasswordService(bcrypt.DefaultCost)
@@ -84,7 +85,7 @@ func main() {
 	// 3. Wire up application layer
 	authApp := app.NewAuthAppService(userRepo, jwtService, pwdHasher)
 	authHandler := identityHttp.NewAuthHandler(authApp)
-	
+
 	// Billing
 	invoiceRepo := billingInfra.NewSqliteInvoiceRepo(db)
 	idGen := billingInfra.NewUUIDGenerator()
@@ -96,24 +97,42 @@ func main() {
 	orderApp := orderingApp.NewOrderAppService(orderRepo, idGen, nil) // provisioning = nil for now
 	orderHandler := orderingHttp.NewOrderHandler(orderApp)
 
-	// Instance
-	nodeRepo := instanceInfra.NewSqliteNodeRepo(db)
-	instRepo := instanceInfra.NewSqliteInstanceRepo(db)
-	instApp := instanceApp.NewInstanceAppService(nodeRepo, instRepo, idGen)
-	instHandler := instanceHttp.NewInstanceHandler(instApp)
-
-	// Product
-	prodRepo := productInfra.NewSqliteProductRepo(db)
-	prodApp := productApp.NewProductAppService(prodRepo, idGen)
-	prodHandler := productHttp.NewProductHandler(prodApp)
-
 	// Node (host machines, IP pools, agent tasks)
 	hostRepo := nodeInfra.NewSqliteHostNodeRepo(db)
 	ipRepo := nodeInfra.NewSqliteIPAddressRepo(db)
 	taskRepo := nodeInfra.NewSqliteTaskRepo(db)
-	nApp := nodeApp.NewNodeAppService(hostRepo, ipRepo, taskRepo, idGen)
+	regionRepo := nodeInfra.NewSqliteRegionRepo(db)
+	nApp := nodeApp.NewNodeAppService(hostRepo, ipRepo, taskRepo, regionRepo, idGen)
 	nApp.SetAgentSecret(cfg.Agent.Secret)
 	nHandler := nodeHttp.NewNodeHandler(nApp)
+
+	// Event Bus — in-process synchronous bus for domain event integration
+	bus := eventbus.New()
+
+	// Product (with event-driven provisioning & physical capacity checking)
+	prodRepo := productInfra.NewSqliteProductRepo(db)
+	capacityChecker := productInfra.NewNodeCapacityAdapter(hostRepo)
+	prodApp := productApp.NewProductAppService(prodRepo, idGen, bus, capacityChecker)
+	prodHandler := productHttp.NewProductHandler(prodApp)
+
+	// Provisioning Event Handler — Node domain listens to Product events
+	// When a ProductPurchasedEvent is published, this handler:
+	// 1. Builds a ResourcePool from the region's nodes
+	// 2. Selects the least-loaded node (load balancing)
+	// 3. Allocates a physical slot
+	// 4. Enqueues a provisioning task for the agent
+	provHandler := nodeApp.NewProvisioningEventHandler(hostRepo, regionRepo, taskRepo, idGen)
+	provHandler.Register(bus)
+
+	// Instance (uses adapter to delegate node capacity to the node module)
+	nodeAllocatorRepo := instanceInfra.NewHostNodeAllocatorAdapter(hostRepo)
+	instRepo := instanceInfra.NewSqliteInstanceRepo(db)
+	instApp := instanceApp.NewInstanceAppService(nodeAllocatorRepo, instRepo, idGen)
+	instHandler := instanceHttp.NewInstanceHandler(instApp)
+
+	// Region (geographic locations for nodes)
+	rApp := nodeApp.NewRegionAppService(regionRepo, idGen)
+	rHandler := nodeHttp.NewRegionHandler(rApp)
 
 	// 4. 配置 Hertz 路由
 	h := server.Default()
@@ -128,10 +147,10 @@ func main() {
 		v1.POST("/auth/register", authHandler.Register)
 		v1.POST("/auth/login", authHandler.Login)
 
-		// Public - browse available locations & nodes
-		v1.GET("/locations", instHandler.ListLocations)
-		v1.GET("/nodes", instHandler.ListNodes)
-		v1.GET("/nodes/:id", instHandler.GetNode)
+		// Public - browse available locations & nodes (served by node module)
+		v1.GET("/locations", nHandler.ListLocations)
+		v1.GET("/nodes", nHandler.ListHosts)
+		v1.GET("/nodes/:id", nHandler.GetHost)
 
 		// Public - product catalog
 		v1.GET("/products", prodHandler.List)
@@ -140,6 +159,14 @@ func main() {
 		// Public - host node info
 		v1.GET("/host-nodes", nHandler.ListHosts)
 		v1.GET("/host-nodes/:id", nHandler.GetHost)
+
+		// Public - regions (for frontend location dropdown)
+		v1.GET("/regions", rHandler.ListRegions)
+		v1.GET("/regions/:id", rHandler.GetByID)
+
+		// Public - resource pool capacity (shows physical capacity per region)
+		v1.GET("/resource-pools", nHandler.ListResourcePools)
+		v1.GET("/resource-pools/:regionId", nHandler.GetResourcePool)
 
 		// Agent endpoints (authenticated by shared secret, not JWT)
 		v1.POST("/agent/register", nHandler.AgentRegister)
@@ -174,10 +201,10 @@ func main() {
 		privateAPI.POST("/orders/:id/cancel", orderHandler.Cancel)
 		privateAPI.POST("/orders/:id/terminate", orderHandler.Terminate)
 
-		// Instance - Node admin routes
-		privateAPI.POST("/nodes", instHandler.CreateNode)
-		privateAPI.POST("/nodes/:id/enable", instHandler.EnableNode)
-		privateAPI.POST("/nodes/:id/disable", instHandler.DisableNode)
+		// Node admin routes (served by node module)
+		privateAPI.POST("/nodes", nHandler.CreateHost)
+		privateAPI.POST("/nodes/:id/enable", nHandler.EnableHost)
+		privateAPI.POST("/nodes/:id/disable", nHandler.DisableHost)
 
 		// Instance - Customer routes
 		privateAPI.POST("/instances", instHandler.Purchase)
@@ -190,12 +217,17 @@ func main() {
 		privateAPI.POST("/instances/:id/terminate", instHandler.Terminate)
 		privateAPI.PUT("/instances/:id/ip", instHandler.AssignIP)
 
+		// Product - Purchase (event-driven: consumes commercial slot → publishes event → Node provisions)
+		privateAPI.POST("/products/purchase", prodHandler.Purchase)
+
 		// Product - Admin routes
 		privateAPI.POST("/products", prodHandler.Create)
 		privateAPI.GET("/products/all", prodHandler.ListAll)
 		privateAPI.POST("/products/:id/enable", prodHandler.Enable)
 		privateAPI.POST("/products/:id/disable", prodHandler.Disable)
 		privateAPI.PUT("/products/:id/price", prodHandler.UpdatePrice)
+		privateAPI.PUT("/products/:id/stock", prodHandler.AdjustStock)
+		privateAPI.PUT("/products/:id/region", prodHandler.SetRegion)
 
 		// Host Node - Admin routes
 		privateAPI.POST("/host-nodes", nHandler.CreateHost)
@@ -222,11 +254,24 @@ func main() {
 		adminAPI.POST("/products/:id/enable", prodHandler.Enable)
 		adminAPI.POST("/products/:id/disable", prodHandler.Disable)
 		adminAPI.PUT("/products/:id/price", prodHandler.UpdatePrice)
+		adminAPI.PUT("/products/:id/stock", prodHandler.AdjustStock)
+		adminAPI.PUT("/products/:id/region", prodHandler.SetRegion)
 
-		// Instance management (all instances, not just current user)
-		adminAPI.POST("/nodes", instHandler.CreateNode)
-		adminAPI.POST("/nodes/:id/enable", instHandler.EnableNode)
-		adminAPI.POST("/nodes/:id/disable", instHandler.DisableNode)
+		// Resource Pool management (region-based node grouping)
+		adminAPI.GET("/resource-pools", nHandler.ListResourcePools)
+		adminAPI.GET("/resource-pools/:regionId", nHandler.GetResourcePool)
+
+		// Node management (admin)
+		adminAPI.POST("/nodes", nHandler.CreateHost)
+		adminAPI.POST("/nodes/:id/enable", nHandler.EnableHost)
+		adminAPI.POST("/nodes/:id/disable", nHandler.DisableHost)
+
+		// Region management
+		adminAPI.POST("/regions", rHandler.Create)
+		adminAPI.GET("/regions", rHandler.ListAll)
+		adminAPI.GET("/regions/:id", rHandler.GetByID)
+		adminAPI.POST("/regions/:id/activate", rHandler.Activate)
+		adminAPI.POST("/regions/:id/deactivate", rHandler.Deactivate)
 	}
 
 	// 5. Start gRPC server for agent communication

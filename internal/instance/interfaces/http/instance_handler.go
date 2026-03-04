@@ -13,13 +13,6 @@ import (
 
 // ---- Request DTOs ----
 
-type CreateNodeRequest struct {
-	Code       string `json:"code" vd:"len($)>0"`
-	Location   string `json:"location" vd:"len($)>0"`
-	Name       string `json:"name" vd:"len($)>0"`
-	TotalSlots int    `json:"total_slots" vd:"$>0"`
-}
-
 type PurchaseInstanceRequest struct {
 	OrderID  string `json:"order_id" vd:"len($)>0"`
 	NodeID   string `json:"node_id" vd:"len($)>0"`
@@ -37,17 +30,6 @@ type AssignIPRequest struct {
 }
 
 // ---- Response DTOs ----
-
-type NodeResponse struct {
-	ID             string `json:"id"`
-	Code           string `json:"code"`
-	Location       string `json:"location"`
-	Name           string `json:"name"`
-	TotalSlots     int    `json:"total_slots"`
-	UsedSlots      int    `json:"used_slots"`
-	AvailableSlots int    `json:"available_slots"`
-	Enabled        bool   `json:"enabled"`
-}
 
 type InstanceResponse struct {
 	ID           string  `json:"id"`
@@ -78,85 +60,6 @@ type InstanceHandler struct {
 
 func NewInstanceHandler(svc *app.InstanceAppService) *InstanceHandler {
 	return &InstanceHandler{svc: svc}
-}
-
-// ==================== Node endpoints ====================
-
-// POST /nodes
-func (h *InstanceHandler) CreateNode(ctx context.Context, c *hz_app.RequestContext) {
-	var req CreateNodeRequest
-	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
-		return
-	}
-	node, err := h.svc.CreateNode(req.Code, req.Location, req.Name, req.TotalSlots)
-	if err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
-		return
-	}
-	c.JSON(consts.StatusCreated, utils.H{"data": toNodeResp(node)})
-}
-
-// GET /nodes
-func (h *InstanceHandler) ListNodes(ctx context.Context, c *hz_app.RequestContext) {
-	location := c.Query("location")
-	var nodes []*domain.Node
-	var err error
-	if location != "" {
-		nodes, err = h.svc.ListNodesByLocation(location)
-	} else {
-		nodes, err = h.svc.ListNodes()
-	}
-	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
-		return
-	}
-	list := make([]NodeResponse, len(nodes))
-	for i, n := range nodes {
-		list[i] = toNodeResp(n)
-	}
-	c.JSON(consts.StatusOK, utils.H{"data": list})
-}
-
-// GET /nodes/:id
-func (h *InstanceHandler) GetNode(ctx context.Context, c *hz_app.RequestContext) {
-	id := c.Param("id")
-	node, err := h.svc.GetNode(id)
-	if err != nil {
-		c.JSON(consts.StatusNotFound, utils.H{"error": err.Error()})
-		return
-	}
-	c.JSON(consts.StatusOK, utils.H{"data": toNodeResp(node)})
-}
-
-// POST /nodes/:id/enable
-func (h *InstanceHandler) EnableNode(ctx context.Context, c *hz_app.RequestContext) {
-	if err := h.svc.EnableNode(c.Param("id")); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
-		return
-	}
-	node, _ := h.svc.GetNode(c.Param("id"))
-	c.JSON(consts.StatusOK, utils.H{"data": toNodeResp(node)})
-}
-
-// POST /nodes/:id/disable
-func (h *InstanceHandler) DisableNode(ctx context.Context, c *hz_app.RequestContext) {
-	if err := h.svc.DisableNode(c.Param("id")); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
-		return
-	}
-	node, _ := h.svc.GetNode(c.Param("id"))
-	c.JSON(consts.StatusOK, utils.H{"data": toNodeResp(node)})
-}
-
-// GET /locations
-func (h *InstanceHandler) ListLocations(ctx context.Context, c *hz_app.RequestContext) {
-	locs, err := h.svc.AvailableLocations()
-	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
-		return
-	}
-	c.JSON(consts.StatusOK, utils.H{"data": locs})
 }
 
 // ==================== Instance endpoints ====================
@@ -280,14 +183,6 @@ func (h *InstanceHandler) AssignIP(ctx context.Context, c *hz_app.RequestContext
 }
 
 // ---- Mapping ----
-
-func toNodeResp(n *domain.Node) NodeResponse {
-	return NodeResponse{
-		ID: n.ID(), Code: n.Code(), Location: n.Location(), Name: n.Name(),
-		TotalSlots: n.TotalSlots(), UsedSlots: n.UsedSlots(),
-		AvailableSlots: n.AvailableSlots(), Enabled: n.Enabled(),
-	}
-}
 
 func toInstResp(i *domain.Instance) InstanceResponse {
 	resp := InstanceResponse{

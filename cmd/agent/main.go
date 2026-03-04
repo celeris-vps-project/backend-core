@@ -78,13 +78,15 @@ func main() {
 		log.Println("[agent] registered successfully")
 	}
 
+	collector := monitor.NewCollector(cfg.NodeID, driver)
+
 	// 2. Heartbeat loop
 	ticker := time.NewTicker(time.Duration(cfg.PollInterval) * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		hb := monitor.Collect(cfg.NodeID)
-
+		hb := collector.Collect()
+		
 		ack, err := grpcClient.Heartbeat(ctx, hb)
 		if err != nil {
 			log.Printf("[agent] heartbeat failed: %v", err)
