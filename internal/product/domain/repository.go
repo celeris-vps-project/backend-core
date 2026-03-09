@@ -1,4 +1,4 @@
-﻿package domain
+package domain
 
 type ProductRepository interface {
 	GetByID(id string) (*Product, error)

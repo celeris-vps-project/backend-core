@@ -24,7 +24,7 @@ func NewOrderAppService(repo domain.OrderRepository, ids IDGenerator, prov domai
 
 // CreateOrder places a new VPS order in "pending" status.
 func (s *OrderAppService) CreateOrder(
-	customerID, invoiceID string,
+	customerID, productID, invoiceID string,
 	cfg domain.VPSConfig,
 	currency string,
 	priceAmount int64,
@@ -33,7 +33,7 @@ func (s *OrderAppService) CreateOrder(
 		return nil, errors.New("app_error: id generator is required")
 	}
 	id := s.ids.NewID()
-	order, err := domain.NewOrder(id, customerID, invoiceID, cfg, currency, priceAmount)
+	order, err := domain.NewOrder(id, customerID, productID, invoiceID, cfg, currency, priceAmount)
 	if err != nil {
 		return nil, err
 	}

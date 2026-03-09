@@ -11,16 +11,17 @@ package events
 // successfully purchases a product (commercial slot consumed).
 // The Node domain listens to this event to trigger physical provisioning.
 type ProductPurchasedEvent struct {
-	ProductID   string
-	ProductSlug string
-	RegionID    string // the region (resource pool) where this product is sold
-	CustomerID  string
-	OrderID     string
-	Hostname    string
-	OS          string
-	CPU         int
-	MemoryMB    int
-	DiskGB      int
+	ProductID      string
+	ProductSlug    string
+	RegionID       string // the region where this product is sold (legacy)
+	ResourcePoolID string // the resource pool this product belongs to
+	CustomerID     string
+	OrderID        string
+	Hostname       string
+	OS             string
+	CPU            int
+	MemoryMB       int
+	DiskGB         int
 }
 
 func (ProductPurchasedEvent) EventName() string { return "product.purchased" }
@@ -57,3 +58,20 @@ type ProvisioningFailedEvent struct {
 }
 
 func (ProvisioningFailedEvent) EventName() string { return "node.provisioning_failed" }
+
+// NodeStateUpdatedEvent is emitted whenever a node's runtime state changes
+// (agent registration or heartbeat). The WebSocket hub listens to this event
+// to push real-time updates to connected admin clients.
+type NodeStateUpdatedEvent struct {
+	NodeID    string  `json:"node_id"`
+	Status    string  `json:"status"`
+	IP        string  `json:"ip,omitempty"`
+	AgentVer  string  `json:"agent_ver,omitempty"`
+	CPUUsage  float64 `json:"cpu_usage"`
+	MemUsage  float64 `json:"mem_usage"`
+	DiskUsage float64 `json:"disk_usage"`
+	VMCount   int     `json:"vm_count"`
+	LastSeen  string  `json:"last_seen_at"`
+}
+
+func (NodeStateUpdatedEvent) EventName() string { return "node.state_updated" }

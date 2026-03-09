@@ -12,7 +12,6 @@ type Config struct {
 	Database DatabaseConfig `json:"database" yaml:"database"`
 	JWT      JWTConfig      `json:"jwt" yaml:"jwt"`
 	GRPC     GRPCConfig     `json:"grpc" yaml:"grpc"`
-	Agent    AgentConfig    `json:"agent" yaml:"agent"`
 }
 
 // DatabaseConfig holds database connection settings.
@@ -31,11 +30,6 @@ type GRPCConfig struct {
 	Listen string `json:"listen" yaml:"listen"` // e.g. ":50051"
 }
 
-// AgentConfig holds the shared secret that agents must present.
-type AgentConfig struct {
-	Secret string `json:"secret" yaml:"secret"` // shared secret for agent authentication
-}
-
 // DefaultConfig returns sensible defaults for development.
 func DefaultConfig() Config {
 	return Config{
@@ -48,9 +42,6 @@ func DefaultConfig() Config {
 		},
 		GRPC: GRPCConfig{
 			Listen: ":50051",
-		},
-		Agent: AgentConfig{
-			Secret: "changeme",
 		},
 	}
 }

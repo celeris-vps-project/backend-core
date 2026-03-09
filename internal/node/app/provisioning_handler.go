@@ -5,6 +5,7 @@ import (
 	"backend-core/pkg/contracts"
 	"backend-core/pkg/eventbus"
 	"backend-core/pkg/events"
+	"errors"
 	"log"
 	"time"
 )
@@ -13,26 +14,26 @@ import (
 // Product bounded context and triggers physical provisioning on the Node side.
 //
 // This is the event-driven bridge: Product.PurchaseProduct() publishes
-// ProductPurchasedEvent → this handler picks a node from the region pool,
+// ProductPurchasedEvent → this handler picks a node from the resource pool,
 // allocates a physical slot, and enqueues a provisioning task for the agent.
 type ProvisioningEventHandler struct {
-	hostRepo   domain.HostNodeRepository
-	regionRepo domain.RegionRepository
-	taskRepo   domain.TaskRepository
-	ids        IDGenerator
+	hostRepo domain.HostNodeRepository
+	poolRepo domain.ResourcePoolRepository
+	taskRepo domain.TaskRepository
+	ids      IDGenerator
 }
 
 func NewProvisioningEventHandler(
 	hostRepo domain.HostNodeRepository,
-	regionRepo domain.RegionRepository,
+	poolRepo domain.ResourcePoolRepository,
 	taskRepo domain.TaskRepository,
 	ids IDGenerator,
 ) *ProvisioningEventHandler {
 	return &ProvisioningEventHandler{
-		hostRepo:   hostRepo,
-		regionRepo: regionRepo,
-		taskRepo:   taskRepo,
-		ids:        ids,
+		hostRepo: hostRepo,
+		poolRepo: poolRepo,
+		taskRepo: taskRepo,
+		ids:      ids,
 	}
 }
 
@@ -43,14 +44,10 @@ func (h *ProvisioningEventHandler) Register(bus *eventbus.EventBus) {
 }
 
 // onProductPurchased handles the ProductPurchasedEvent:
-//  1. Builds a ResourcePool from the region's enabled nodes.
+//  1. Builds a ResourcePool from the pool's enabled nodes.
 //  2. Selects the least-loaded node (load balancing).
 //  3. Allocates a physical slot on that node.
 //  4. Enqueues a provisioning task for the agent.
-//
-// If no physical capacity is available, the task is still created with a
-// "queued" status — it enters the pending-provisioning queue and will be
-// picked up when capacity becomes available (or an admin adds nodes).
 func (h *ProvisioningEventHandler) onProductPurchased(evt eventbus.Event) {
 	e, ok := evt.(events.ProductPurchasedEvent)
 	if !ok {
@@ -60,10 +57,10 @@ func (h *ProvisioningEventHandler) onProductPurchased(evt eventbus.Event) {
 	log.Printf("[provisioning] handling ProductPurchasedEvent: product=%s region=%s customer=%s order=%s",
 		e.ProductID, e.RegionID, e.CustomerID, e.OrderID)
 
-	// 1. Build the resource pool for the target region
-	pool, err := h.buildPool(e.RegionID)
+	// 1. Build the resource pool — try ResourcePoolID first, fall back to RegionID
+	pool, err := h.buildPool(e.ResourcePoolID, e.RegionID)
 	if err != nil {
-		log.Printf("[provisioning] WARNING: could not build resource pool for region %s: %v — task will be queued without node assignment", e.RegionID, err)
+		log.Printf("[provisioning] WARNING: could not build resource pool: %v — task will be queued without node assignment", err)
 		h.enqueuePendingTask(e, "")
 		return
 	}
@@ -71,8 +68,7 @@ func (h *ProvisioningEventHandler) onProductPurchased(evt eventbus.Event) {
 	// 2. Select the best node (least-loaded with capacity)
 	node, err := pool.SelectNode()
 	if err != nil {
-		// No capacity — queue for later provisioning (pending-provisioning queue)
-		log.Printf("[provisioning] WARNING: no available nodes in region %s — task queued for pending provisioning", e.RegionID)
+		log.Printf("[provisioning] WARNING: no available nodes in pool %s — task queued for pending provisioning", pool.Name())
 		h.enqueuePendingTask(e, "")
 		return
 	}
@@ -111,8 +107,27 @@ func (h *ProvisioningEventHandler) onProductPurchased(evt eventbus.Event) {
 		return
 	}
 
-	log.Printf("[provisioning] SUCCESS: provisioning task %s enqueued on node %s (region %s) for order %s",
-		task.ID, node.Code(), e.RegionID, e.OrderID)
+	log.Printf("[provisioning] SUCCESS: provisioning task %s enqueued on node %s (pool %s) for order %s",
+		task.ID, node.Code(), pool.Name(), e.OrderID)
+
+	// ── MVP MOCK: auto-complete the task since there is no real agent ──
+	// When a real agent is connected, remove this block — the agent will
+	// pick up the task via heartbeat and report completion.
+	h.mockCompleteTask(task, node.ID())
+}
+
+// mockCompleteTask immediately marks a provisioning task as completed and
+// publishes a ProvisioningCompletedEvent. This simulates what the agent
+// would do after actually creating a VM. Remove this when real agents are
+// integrated.
+func (h *ProvisioningEventHandler) mockCompleteTask(task *contracts.Task, nodeID string) {
+	task.Status = contracts.TaskStatusCompleted
+	task.FinishedAt = timeNowRFC3339()
+	if err := h.taskRepo.Save(task); err != nil {
+		log.Printf("[provisioning-mock] ERROR: failed to mark task %s as completed: %v", task.ID, err)
+		return
+	}
+	log.Printf("[provisioning-mock] task %s auto-completed (mock mode, no real agent)", task.ID)
 }
 
 // onProductSlotReleased handles cancellation/termination — could release
@@ -124,25 +139,46 @@ func (h *ProvisioningEventHandler) onProductSlotReleased(evt eventbus.Event) {
 	}
 	log.Printf("[provisioning] handling ProductSlotReleasedEvent: product=%s region=%s order=%s",
 		e.ProductID, e.RegionID, e.OrderID)
-	// TODO: find the instance for this order, release the node slot,
-	// and check if there are pending tasks that can now be fulfilled.
 }
 
-// buildPool constructs a ResourcePool for the given region.
-func (h *ProvisioningEventHandler) buildPool(regionID string) (*domain.ResourcePool, error) {
-	region, err := h.regionRepo.GetByID(regionID)
-	if err != nil {
-		return nil, err
+// buildPool constructs a ResourcePool with its enabled nodes.
+// It tries the explicit pool ID first, then falls back to finding a pool by region.
+func (h *ProvisioningEventHandler) buildPool(poolID, regionID string) (*domain.ResourcePool, error) {
+	if poolID != "" {
+		pool, err := h.poolRepo.GetByID(poolID)
+		if err != nil {
+			return nil, err
+		}
+		nodes, err := h.hostRepo.ListEnabledByResourcePoolID(poolID)
+		if err != nil {
+			return nil, err
+		}
+		pool.WithNodes(nodes)
+		return pool, nil
 	}
-	nodes, err := h.hostRepo.ListEnabledByRegionID(regionID)
-	if err != nil {
-		return nil, err
+
+	// Fallback: find pools by regionID and use the first active one
+	if regionID != "" {
+		pools, err := h.poolRepo.GetByRegionID(regionID)
+		if err != nil {
+			return nil, err
+		}
+		for _, pool := range pools {
+			if pool.IsActive() {
+				nodes, err := h.hostRepo.ListEnabledByResourcePoolID(pool.ID())
+				if err != nil {
+					continue
+				}
+				pool.WithNodes(nodes)
+				return pool, nil
+			}
+		}
 	}
-	return domain.NewResourcePool(region.ID(), region.Code(), region.Name(), nodes), nil
+
+	return nil, errors.New("provisioning: no resource pool found for provisioning")
 }
 
 // enqueuePendingTask creates a task without a node assignment (pending provisioning queue).
-// These tasks can be retried when new capacity is added to the pool.
 func (h *ProvisioningEventHandler) enqueuePendingTask(e events.ProductPurchasedEvent, nodeID string) {
 	instanceID := h.ids.NewID()
 	task := &contracts.Task{

@@ -43,6 +43,7 @@ require (
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/gorilla/securecookie v1.1.2 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/hertz-contrib/websocket v0.2.0 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/klauspost/compress v1.18.4 // indirect

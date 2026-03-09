@@ -15,7 +15,7 @@ import (
 
 type PurchaseInstanceRequest struct {
 	OrderID  string `json:"order_id" vd:"len($)>0"`
-	NodeID   string `json:"node_id" vd:"len($)>0"`
+	Region   string `json:"region" vd:"len($)>0"`
 	Hostname string `json:"hostname" vd:"len($)>0"`
 	Plan     string `json:"plan" vd:"len($)>0"`
 	OS       string `json:"os" vd:"len($)>0"`
@@ -77,7 +77,7 @@ func (h *InstanceHandler) Purchase(ctx context.Context, c *hz_app.RequestContext
 		return
 	}
 	inst, err := h.svc.PurchaseInstance(
-		customerID.(string), req.OrderID, req.NodeID,
+		customerID.(string), req.OrderID, req.Region,
 		req.Hostname, req.Plan, req.OS,
 		req.CPU, req.MemoryMB, req.DiskGB,
 	)

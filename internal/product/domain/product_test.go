@@ -1,4 +1,4 @@
-﻿package domain
+package domain
 
 import "testing"
 
@@ -134,8 +134,8 @@ func TestNewProduct_UnlimitedSlots(t *testing.T) {
 	if !p.IsUnlimited() {
 		t.Fatal("expected product to be unlimited")
 	}
-	if p.AvailableSlots() != 0 {
-		t.Fatalf("expected available slots 0 for unlimited product, got %d", p.AvailableSlots())
+	if p.AvailableSlots() != UnlimitedSlots {
+		t.Fatalf("expected available slots %d (unlimited) for unlimited product, got %d", UnlimitedSlots, p.AvailableSlots())
 	}
 
 	// Should be able to consume slots without limit
@@ -147,9 +147,9 @@ func TestNewProduct_UnlimitedSlots(t *testing.T) {
 	if p.SoldSlots() != 100 {
 		t.Fatalf("expected sold slots 100, got %d", p.SoldSlots())
 	}
-	// AvailableSlots stays 0 even after consuming
-	if p.AvailableSlots() != 0 {
-		t.Fatalf("expected available slots 0 for unlimited product after sales, got %d", p.AvailableSlots())
+	// AvailableSlots stays UnlimitedSlots even after consuming
+	if p.AvailableSlots() != UnlimitedSlots {
+		t.Fatalf("expected available slots %d (unlimited) for unlimited product after sales, got %d", UnlimitedSlots, p.AvailableSlots())
 	}
 }
 
@@ -168,8 +168,8 @@ func TestProduct_SetTotalSlots_Unlimited(t *testing.T) {
 	if !p.IsUnlimited() {
 		t.Fatal("expected product to be unlimited")
 	}
-	if p.AvailableSlots() != 0 {
-		t.Fatalf("expected available slots 0 for unlimited product, got %d", p.AvailableSlots())
+	if p.AvailableSlots() != UnlimitedSlots {
+		t.Fatalf("expected available slots %d (unlimited) for unlimited product, got %d", UnlimitedSlots, p.AvailableSlots())
 	}
 
 	// Switch back to finite — must be >= sold slots

@@ -1,8 +1,10 @@
-﻿package app
+package app
 
 import (
 	"backend-core/internal/node/domain"
 	"backend-core/pkg/contracts"
+	"backend-core/pkg/eventbus"
+	"backend-core/pkg/events"
 	"errors"
 	"log"
 	"time"
@@ -11,12 +13,15 @@ import (
 type IDGenerator interface{ NewID() string }
 
 type NodeAppService struct {
-	hostRepo    domain.HostNodeRepository
-	ipRepo      domain.IPAddressRepository
-	taskRepo    domain.TaskRepository
-	regionRepo  domain.RegionRepository
-	ids         IDGenerator
-	agentSecret string // optional global shared secret for agent authentication
+	hostRepo   domain.HostNodeRepository
+	ipRepo     domain.IPAddressRepository
+	taskRepo   domain.TaskRepository
+	regionRepo domain.RegionRepository
+	poolRepo   domain.ResourcePoolRepository
+	btRepo     domain.BootstrapTokenRepository // bootstrap token storage
+	stateCache domain.NodeStateCache
+	ids        IDGenerator
+	bus        *eventbus.EventBus
 }
 
 func NewNodeAppService(
@@ -24,18 +29,28 @@ func NewNodeAppService(
 	ipRepo domain.IPAddressRepository,
 	taskRepo domain.TaskRepository,
 	regionRepo domain.RegionRepository,
+	poolRepo domain.ResourcePoolRepository,
+	btRepo domain.BootstrapTokenRepository,
+	stateCache domain.NodeStateCache,
 	ids IDGenerator,
+	bus *eventbus.EventBus,
 ) *NodeAppService {
-	return &NodeAppService{hostRepo: hostRepo, ipRepo: ipRepo, taskRepo: taskRepo, regionRepo: regionRepo, ids: ids}
+	return &NodeAppService{
+		hostRepo: hostRepo, ipRepo: ipRepo, taskRepo: taskRepo,
+		regionRepo: regionRepo, poolRepo: poolRepo, btRepo: btRepo,
+		stateCache: stateCache,
+		ids:        ids, bus: bus,
+	}
 }
 
-// SetAgentSecret configures a global shared secret for agent authentication.
-// When set, agents can authenticate with either the per-node secret or this global secret.
-func (s *NodeAppService) SetAgentSecret(secret string) {
-	s.agentSecret = secret
+// StateCache returns the cache for external consumers (e.g. HTTP handlers).
+func (s *NodeAppService) StateCache() domain.NodeStateCache {
+	return s.stateCache
 }
 
-// ---- Host CRUD ----
+// ──────────────────────────────────────────────────────────────────────
+// Host CRUD
+// ──────────────────────────────────────────────────────────────────────
 
 func (s *NodeAppService) CreateHost(code, location, name, secret string, totalSlots int) (*domain.HostNode, error) {
 	id := s.ids.NewID()
@@ -46,6 +61,12 @@ func (s *NodeAppService) CreateHost(code, location, name, secret string, totalSl
 	if totalSlots > 0 {
 		h.SetTotalSlots(totalSlots)
 	}
+
+	// Auto-create region from location and link it to the node
+	if regionID := s.ensureRegion(location); regionID != "" {
+		h.SetRegionID(regionID)
+	}
+
 	if err := s.hostRepo.Save(h); err != nil {
 		return nil, err
 	}
@@ -58,7 +79,9 @@ func (s *NodeAppService) ListHostsByLocation(loc string) ([]*domain.HostNode, er
 	return s.hostRepo.ListByLocation(loc)
 }
 
-// ---- Host capacity management (merged from old instance/app node ops) ----
+// ──────────────────────────────────────────────────────────────────────
+// Host capacity management
+// ──────────────────────────────────────────────────────────────────────
 
 func (s *NodeAppService) EnableHost(id string) error {
 	h, err := s.hostRepo.GetByID(id)
@@ -138,48 +161,75 @@ type LocationSummary struct {
 	AvailableSlots int    `json:"available_slots"`
 }
 
-// ---- Agent registration & heartbeat ----
+// ──────────────────────────────────────────────────────────────────────
+// Agent registration & heartbeat (writes to CACHE, not database)
+// ──────────────────────────────────────────────────────────────────────
 
-func (s *NodeAppService) RegisterAgent(reg contracts.AgentRegistration) error {
-	// Resolve (or auto-create) the region for this agent's location
-	regionID := s.ensureRegion(reg.Location)
-
-	h, err := s.hostRepo.GetByID(reg.NodeID)
+func (s *NodeAppService) RegisterAgent(reg contracts.AgentRegistration) (*contracts.RegistrationResult, error) {
+	// 1. Validate the bootstrap token
+	bt, err := s.btRepo.GetByToken(reg.BootstrapToken)
 	if err != nil {
-		// Node does not exist — only allow auto-registration with the global secret
-		if s.agentSecret == "" || reg.Secret != s.agentSecret {
-			return errors.New("app_error: invalid agent secret")
-		}
-
-		// Derive sensible defaults from the registration payload
-		code := reg.NodeID
-		location := reg.Location
-		if location == "" {
-			location = "unknown"
-		}
-		name := reg.Hostname
-		if name == "" {
-			name = reg.NodeID
-		}
-
-		h, err = domain.NewHostNode(reg.NodeID, code, location, name, s.agentSecret)
-		if err != nil {
-			return err
-		}
-		h.SetRegionID(regionID)
-		h.Register(reg.IP, reg.Version, time.Now())
-		return s.hostRepo.Save(h)
+		return nil, errors.New("app_error: invalid bootstrap token")
+	}
+	if !bt.IsValid() {
+		return nil, errors.New("app_error: bootstrap token expired or already used")
 	}
 
-	// Node exists — accept either the global shared secret or the per-node secret
-	validGlobal := s.agentSecret != "" && reg.Secret == s.agentSecret
-	validPerNode := h.ValidateSecret(reg.Secret)
-	if !validGlobal && !validPerNode {
-		return errors.New("app_error: invalid agent secret")
+	// 2. Resolve the target node from the bootstrap token's binding.
+	//    The node MUST already exist (created via the admin panel).
+	nodeID := bt.NodeID()
+	h, err := s.hostRepo.GetByID(nodeID)
+	if err != nil {
+		return nil, errors.New("app_error: node bound to bootstrap token not found — create it in the admin panel first")
 	}
-	h.SetRegionID(regionID)
-	h.Register(reg.IP, reg.Version, time.Now())
-	return s.hostRepo.Save(h)
+
+	// 3. Generate a permanent node token
+	nodeToken, err := domain.GenerateNodeToken()
+	if err != nil {
+		return nil, errors.New("app_error: failed to generate node token")
+	}
+
+	// 4. Issue a new permanent node token; all other node config (location,
+	//    total_slots, region, etc.) is managed via the admin panel and must
+	//    NOT be overridden by the agent.
+	h.SetNodeToken(nodeToken)
+	if err := s.hostRepo.Save(h); err != nil {
+		return nil, err
+	}
+
+	// 5. Consume the bootstrap token (uses its own bound nodeID)
+	if err := bt.Consume(); err != nil {
+		return nil, err
+	}
+	if err := s.btRepo.Save(bt); err != nil {
+		return nil, err
+	}
+
+	// 6. Write runtime state to cache
+	now := time.Now()
+	state := &domain.NodeState{
+		Status:     domain.HostStatusOnline,
+		IP:         reg.IP,
+		AgentVer:   reg.Version,
+		LastSeenAt: now,
+	}
+	if err := s.stateCache.SetNodeState(nodeID, state); err != nil {
+		return nil, err
+	}
+
+	// 7. Publish real-time event
+	if s.bus != nil {
+		s.bus.Publish(events.NodeStateUpdatedEvent{
+			NodeID:   nodeID,
+			Status:   state.Status,
+			IP:       state.IP,
+			AgentVer: state.AgentVer,
+			LastSeen: now.Format(time.RFC3339),
+		})
+	}
+
+	log.Printf("[node] agent registered for node %s via bootstrap token %s", nodeID, bt.ID())
+	return &contracts.RegistrationResult{NodeID: nodeID, NodeToken: nodeToken}, nil
 }
 
 // ensureRegion looks up a region by the location code. If none exists, it
@@ -212,13 +262,45 @@ func (s *NodeAppService) ensureRegion(location string) string {
 }
 
 func (s *NodeAppService) Heartbeat(hb contracts.Heartbeat) (*contracts.HeartbeatAck, error) {
-	h, err := s.hostRepo.GetByID(hb.NodeID)
+	// Verify the node exists in the database
+	_, err := s.hostRepo.GetByID(hb.NodeID)
 	if err != nil {
 		return nil, err
 	}
-	h.RecordHeartbeat(hb.CPUUsage, hb.MemUsage, hb.DiskUsage, hb.VMCount, time.Now())
-	if err := s.hostRepo.Save(h); err != nil {
+
+	// Update runtime state in cache only (no database write)
+	now := time.Now()
+	// Preserve existing state fields (IP, AgentVer) if available
+	existing, _ := s.stateCache.GetNodeState(hb.NodeID)
+	state := &domain.NodeState{
+		Status:     domain.HostStatusOnline,
+		CPUUsage:   hb.CPUUsage,
+		MemUsage:   hb.MemUsage,
+		DiskUsage:  hb.DiskUsage,
+		VMCount:    hb.VMCount,
+		LastSeenAt: now,
+	}
+	if existing != nil {
+		state.IP = existing.IP
+		state.AgentVer = existing.AgentVer
+	}
+	if err := s.stateCache.SetNodeState(hb.NodeID, state); err != nil {
 		return nil, err
+	}
+
+	// Publish real-time event for WebSocket subscribers
+	if s.bus != nil {
+		s.bus.Publish(events.NodeStateUpdatedEvent{
+			NodeID:    hb.NodeID,
+			Status:    state.Status,
+			IP:        state.IP,
+			AgentVer:  state.AgentVer,
+			CPUUsage:  state.CPUUsage,
+			MemUsage:  state.MemUsage,
+			DiskUsage: state.DiskUsage,
+			VMCount:   state.VMCount,
+			LastSeen:  now.Format(time.RFC3339),
+		})
 	}
 
 	// Return any queued tasks for this node
@@ -229,7 +311,9 @@ func (s *NodeAppService) Heartbeat(hb contracts.Heartbeat) (*contracts.Heartbeat
 	return &contracts.HeartbeatAck{OK: true, Tasks: tasks}, nil
 }
 
-// ---- Task result callback ----
+// ──────────────────────────────────────────────────────────────────────
+// Task result callback
+// ──────────────────────────────────────────────────────────────────────
 
 func (s *NodeAppService) ReportTaskResult(result contracts.TaskResult) error {
 	task, err := s.taskRepo.GetByID(result.TaskID)
@@ -242,7 +326,9 @@ func (s *NodeAppService) ReportTaskResult(result contracts.TaskResult) error {
 	return s.taskRepo.Save(task)
 }
 
-// ---- Enqueue a task (called by instance domain or internally) ----
+// ──────────────────────────────────────────────────────────────────────
+// Enqueue a task (called by instance domain or internally)
+// ──────────────────────────────────────────────────────────────────────
 
 func (s *NodeAppService) EnqueueTask(nodeID string, taskType contracts.TaskType, spec contracts.ProvisionSpec) (*contracts.Task, error) {
 	task := &contracts.Task{
@@ -259,7 +345,9 @@ func (s *NodeAppService) EnqueueTask(nodeID string, taskType contracts.TaskType,
 	return task, nil
 }
 
-// ---- IP management ----
+// ──────────────────────────────────────────────────────────────────────
+// IP management
+// ──────────────────────────────────────────────────────────────────────
 
 func (s *NodeAppService) AddIP(nodeID, address string, version int) (*domain.IPAddress, error) {
 	id := s.ids.NewID()
@@ -300,28 +388,156 @@ func (s *NodeAppService) ReleaseIP(ipID string) error {
 	return s.ipRepo.Save(ip)
 }
 
-// ---- Resource Pool (Region-based node grouping) ----
+// ──────────────────────────────────────────────────────────────────────
+// Region CRUD (absorbed from former RegionAppService)
+// ──────────────────────────────────────────────────────────────────────
 
-// GetResourcePool builds a ResourcePool view for the given region,
-// aggregating capacity across all enabled nodes in that region.
-func (s *NodeAppService) GetResourcePool(regionID string) (*domain.ResourcePool, error) {
-	region, err := s.regionRepo.GetByID(regionID)
+func (s *NodeAppService) CreateRegion(code, name, flagIcon string) (*domain.Region, error) {
+	id := s.ids.NewID()
+	r, err := domain.NewRegion(id, code, name, flagIcon)
 	if err != nil {
 		return nil, err
 	}
-	nodes, err := s.hostRepo.ListEnabledByRegionID(regionID)
+	if err := s.regionRepo.Save(r); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+func (s *NodeAppService) GetRegion(id string) (*domain.Region, error) {
+	return s.regionRepo.GetByID(id)
+}
+
+func (s *NodeAppService) ListRegions() ([]*domain.Region, error) {
+	return s.regionRepo.ListAll()
+}
+
+func (s *NodeAppService) ListActiveRegions() ([]*domain.Region, error) {
+	return s.regionRepo.ListActive()
+}
+
+func (s *NodeAppService) ActivateRegion(id string) error {
+	r, err := s.regionRepo.GetByID(id)
+	if err != nil {
+		return err
+	}
+	r.Activate()
+	return s.regionRepo.Save(r)
+}
+
+func (s *NodeAppService) DeactivateRegion(id string) error {
+	r, err := s.regionRepo.GetByID(id)
+	if err != nil {
+		return err
+	}
+	r.Deactivate()
+	return s.regionRepo.Save(r)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Resource Pool CRUD
+// ──────────────────────────────────────────────────────────────────────
+
+func (s *NodeAppService) CreateResourcePool(name, regionID string) (*domain.ResourcePool, error) {
+	id := s.ids.NewID()
+	pool, err := domain.NewResourcePool(id, name, regionID)
 	if err != nil {
 		return nil, err
 	}
-	return domain.NewResourcePool(region.ID(), region.Code(), region.Name(), nodes), nil
+	if err := s.poolRepo.Save(pool); err != nil {
+		return nil, err
+	}
+	return pool, nil
+}
+
+func (s *NodeAppService) GetResourcePool(poolID string) (*domain.ResourcePool, error) {
+	pool, err := s.poolRepo.GetByID(poolID)
+	if err != nil {
+		return nil, err
+	}
+	// Attach nodes for the capacity view
+	nodes, err := s.hostRepo.ListEnabledByResourcePoolID(poolID)
+	if err != nil {
+		return pool, nil // return pool without nodes on error
+	}
+	pool.WithNodes(nodes)
+	return pool, nil
+}
+
+func (s *NodeAppService) ListResourcePools() ([]*domain.ResourcePool, error) {
+	return s.poolRepo.ListAll()
+}
+
+func (s *NodeAppService) ListActiveResourcePools() ([]*domain.ResourcePool, error) {
+	return s.poolRepo.ListActive()
+}
+
+func (s *NodeAppService) UpdateResourcePool(poolID, name, regionID string) (*domain.ResourcePool, error) {
+	pool, err := s.poolRepo.GetByID(poolID)
+	if err != nil {
+		return nil, err
+	}
+	if name != "" {
+		pool.SetName(name)
+	}
+	if regionID != "" {
+		pool.SetRegionID(regionID)
+	}
+	if err := s.poolRepo.Save(pool); err != nil {
+		return nil, err
+	}
+	return pool, nil
+}
+
+func (s *NodeAppService) ActivateResourcePool(id string) error {
+	pool, err := s.poolRepo.GetByID(id)
+	if err != nil {
+		return err
+	}
+	pool.Activate()
+	return s.poolRepo.Save(pool)
+}
+
+func (s *NodeAppService) DeactivateResourcePool(id string) error {
+	pool, err := s.poolRepo.GetByID(id)
+	if err != nil {
+		return err
+	}
+	pool.Deactivate()
+	return s.poolRepo.Save(pool)
+}
+
+// AssignNodeToPool binds a host node to a resource pool.
+func (s *NodeAppService) AssignNodeToPool(nodeID, poolID string) error {
+	h, err := s.hostRepo.GetByID(nodeID)
+	if err != nil {
+		return err
+	}
+	// Verify pool exists
+	if _, err := s.poolRepo.GetByID(poolID); err != nil {
+		return err
+	}
+	h.SetResourcePoolID(poolID)
+	return s.hostRepo.Save(h)
+}
+
+// RemoveNodeFromPool unbinds a host node from its resource pool.
+func (s *NodeAppService) RemoveNodeFromPool(nodeID string) error {
+	h, err := s.hostRepo.GetByID(nodeID)
+	if err != nil {
+		return err
+	}
+	h.SetResourcePoolID("")
+	return s.hostRepo.Save(h)
 }
 
 // PoolCapacitySummary is a read-model for the admin panel showing physical
-// capacity of a region-based resource pool.
+// capacity of a resource pool.
 type PoolCapacitySummary struct {
+	PoolID         string `json:"pool_id"`
+	PoolName       string `json:"pool_name"`
 	RegionID       string `json:"region_id"`
-	RegionCode     string `json:"region_code"`
-	RegionName     string `json:"region_name"`
+	Status         string `json:"status"`
 	TotalNodes     int    `json:"total_nodes"`
 	EnabledNodes   int    `json:"enabled_nodes"`
 	TotalSlots     int    `json:"total_slots"`
@@ -329,33 +545,89 @@ type PoolCapacitySummary struct {
 	AvailableSlots int    `json:"available_slots"`
 }
 
-// ListPoolCapacities returns a capacity summary for every active region.
+// ListPoolCapacities returns a capacity summary for every active resource pool.
 func (s *NodeAppService) ListPoolCapacities() ([]PoolCapacitySummary, error) {
-	regions, err := s.regionRepo.ListActive()
+	pools, err := s.poolRepo.ListAll()
 	if err != nil {
 		return nil, err
 	}
-	summaries := make([]PoolCapacitySummary, 0, len(regions))
-	for _, r := range regions {
-		allNodes, err := s.hostRepo.ListByRegionID(r.ID())
+	summaries := make([]PoolCapacitySummary, 0, len(pools))
+	for _, p := range pools {
+		allNodes, err := s.hostRepo.ListByResourcePoolID(p.ID())
 		if err != nil {
 			continue
 		}
-		enabledNodes, err := s.hostRepo.ListEnabledByRegionID(r.ID())
+		enabledNodes, err := s.hostRepo.ListEnabledByResourcePoolID(p.ID())
 		if err != nil {
 			continue
 		}
-		pool := domain.NewResourcePool(r.ID(), r.Code(), r.Name(), enabledNodes)
+		p.WithNodes(enabledNodes)
 		summaries = append(summaries, PoolCapacitySummary{
-			RegionID:       r.ID(),
-			RegionCode:     r.Code(),
-			RegionName:     r.Name(),
+			PoolID:         p.ID(),
+			PoolName:       p.Name(),
+			RegionID:       p.RegionID(),
+			Status:         p.Status(),
 			TotalNodes:     len(allNodes),
 			EnabledNodes:   len(enabledNodes),
-			TotalSlots:     pool.TotalPhysicalSlots(),
-			UsedSlots:      pool.UsedPhysicalSlots(),
-			AvailableSlots: pool.AvailablePhysicalSlots(),
+			TotalSlots:     p.TotalPhysicalSlots(),
+			UsedSlots:      p.UsedPhysicalSlots(),
+			AvailableSlots: p.AvailablePhysicalSlots(),
 		})
 	}
 	return summaries, nil
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Node Token Authentication (used by gRPC interceptor)
+// ──────────────────────────────────────────────────────────────────────
+
+// ValidateNodeToken looks up a host node by its permanent token.
+// Returns the node ID if valid, or an error if the token is unknown/revoked.
+func (s *NodeAppService) ValidateNodeToken(token string) (string, error) {
+	h, err := s.hostRepo.GetByNodeToken(token)
+	if err != nil {
+		return "", errors.New("app_error: invalid node token")
+	}
+	return h.ID(), nil
+}
+
+// RevokeNodeToken clears the permanent node token, forcing the agent to re-bootstrap.
+func (s *NodeAppService) RevokeNodeToken(nodeID string) error {
+	h, err := s.hostRepo.GetByID(nodeID)
+	if err != nil {
+		return err
+	}
+	h.RevokeNodeToken()
+	return s.hostRepo.Save(h)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Bootstrap Token Management (admin API)
+// ──────────────────────────────────────────────────────────────────────
+
+// CreateBootstrapToken creates a new one-time-use bootstrap token bound to a specific node.
+func (s *NodeAppService) CreateBootstrapToken(nodeID string, ttl time.Duration, description string) (*domain.BootstrapToken, error) {
+	// Verify the target node exists
+	if _, err := s.hostRepo.GetByID(nodeID); err != nil {
+		return nil, errors.New("app_error: target node not found")
+	}
+	id := s.ids.NewID()
+	bt, err := domain.NewBootstrapToken(id, nodeID, ttl, description)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.btRepo.Save(bt); err != nil {
+		return nil, err
+	}
+	return bt, nil
+}
+
+// ListBootstrapTokens returns all bootstrap tokens (for admin dashboard).
+func (s *NodeAppService) ListBootstrapTokens() ([]*domain.BootstrapToken, error) {
+	return s.btRepo.ListAll()
+}
+
+// RevokeBootstrapToken deletes a bootstrap token so it can no longer be used.
+func (s *NodeAppService) RevokeBootstrapToken(id string) error {
+	return s.btRepo.Delete(id)
 }

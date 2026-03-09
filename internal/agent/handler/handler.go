@@ -1,4 +1,4 @@
-﻿package handler
+package handler
 
 import (
 	"backend-core/internal/agent/vm"

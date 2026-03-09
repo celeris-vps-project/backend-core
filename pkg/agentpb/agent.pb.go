@@ -22,15 +22,15 @@ const (
 )
 
 type RegisterRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	Secret        string                 `protobuf:"bytes,2,opt,name=secret,proto3" json:"secret,omitempty"`
-	Hostname      string                 `protobuf:"bytes,3,opt,name=hostname,proto3" json:"hostname,omitempty"`
-	Ip            string                 `protobuf:"bytes,4,opt,name=ip,proto3" json:"ip,omitempty"`
-	Version       string                 `protobuf:"bytes,5,opt,name=version,proto3" json:"version,omitempty"`
-	Location      string                 `protobuf:"bytes,6,opt,name=location,proto3" json:"location,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	BootstrapToken string                 `protobuf:"bytes,2,opt,name=bootstrap_token,json=bootstrapToken,proto3" json:"bootstrap_token,omitempty"` // one-time bootstrap token
+	Hostname       string                 `protobuf:"bytes,3,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	Ip             string                 `protobuf:"bytes,4,opt,name=ip,proto3" json:"ip,omitempty"`
+	Version        string                 `protobuf:"bytes,5,opt,name=version,proto3" json:"version,omitempty"`
+	Location       string                 `protobuf:"bytes,6,opt,name=location,proto3" json:"location,omitempty"`
+	TotalSlots     int32                  `protobuf:"varint,7,opt,name=total_slots,json=totalSlots,proto3" json:"total_slots,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RegisterRequest) Reset() {
@@ -63,16 +63,9 @@ func (*RegisterRequest) Descriptor() ([]byte, []int) {
 	return file_agent_v1_agent_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *RegisterRequest) GetNodeId() string {
+func (x *RegisterRequest) GetBootstrapToken() string {
 	if x != nil {
-		return x.NodeId
-	}
-	return ""
-}
-
-func (x *RegisterRequest) GetSecret() string {
-	if x != nil {
-		return x.Secret
+		return x.BootstrapToken
 	}
 	return ""
 }
@@ -105,9 +98,18 @@ func (x *RegisterRequest) GetLocation() string {
 	return ""
 }
 
+func (x *RegisterRequest) GetTotalSlots() int32 {
+	if x != nil {
+		return x.TotalSlots
+	}
+	return 0
+}
+
 type RegisterResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	NodeToken     string                 `protobuf:"bytes,2,opt,name=node_token,json=nodeToken,proto3" json:"node_token,omitempty"` // permanent node credential returned on successful registration
+	NodeId        string                 `protobuf:"bytes,3,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`          // the host node ID bound to this agent
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -147,6 +149,20 @@ func (x *RegisterResponse) GetOk() bool {
 		return x.Ok
 	}
 	return false
+}
+
+func (x *RegisterResponse) GetNodeToken() string {
+	if x != nil {
+		return x.NodeToken
+	}
+	return ""
+}
+
+func (x *RegisterResponse) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
 }
 
 type HeartbeatRequest struct {
@@ -657,16 +673,20 @@ var File_agent_v1_agent_proto protoreflect.FileDescriptor
 
 const file_agent_v1_agent_proto_rawDesc = "" +
 	"\n" +
-	"\x14agent/v1/agent.proto\x12\bagent.v1\"\xa4\x01\n" +
-	"\x0fRegisterRequest\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x16\n" +
-	"\x06secret\x18\x02 \x01(\tR\x06secret\x12\x1a\n" +
+	"\x14agent/v1/agent.proto\x12\bagent.v1\"\xc3\x01\n" +
+	"\x0fRegisterRequest\x12'\n" +
+	"\x0fbootstrap_token\x18\x02 \x01(\tR\x0ebootstrapToken\x12\x1a\n" +
 	"\bhostname\x18\x03 \x01(\tR\bhostname\x12\x0e\n" +
 	"\x02ip\x18\x04 \x01(\tR\x02ip\x12\x18\n" +
 	"\aversion\x18\x05 \x01(\tR\aversion\x12\x1a\n" +
-	"\blocation\x18\x06 \x01(\tR\blocation\"\"\n" +
+	"\blocation\x18\x06 \x01(\tR\blocation\x12\x1f\n" +
+	"\vtotal_slots\x18\a \x01(\x05R\n" +
+	"totalSlotsJ\x04\b\x01\x10\x02\"Z\n" +
 	"\x10RegisterResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xd8\x01\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x1d\n" +
+	"\n" +
+	"node_token\x18\x02 \x01(\tR\tnodeToken\x12\x17\n" +
+	"\anode_id\x18\x03 \x01(\tR\x06nodeId\"\xd8\x01\n" +
 	"\x10HeartbeatRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1b\n" +
 	"\tcpu_usage\x18\x02 \x01(\x01R\bcpuUsage\x12\x1b\n" +

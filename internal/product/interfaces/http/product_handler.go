@@ -1,4 +1,4 @@
-﻿package http
+package http
 
 import (
 	"backend-core/internal/product/app"
@@ -11,18 +11,20 @@ import (
 )
 
 type CreateProductRequest struct {
-	Name         string `json:"name" vd:"len($)>0"`
-	Slug         string `json:"slug" vd:"len($)>0"`
-	Location     string `json:"location" vd:"len($)>0"`
-	RegionID     string `json:"region_id"` // optional — binds product to a resource pool
-	CPU          int    `json:"cpu" vd:"$>0"`
-	MemoryMB     int    `json:"memory_mb" vd:"$>0"`
-	DiskGB       int    `json:"disk_gb" vd:"$>0"`
-	BandwidthGB  int    `json:"bandwidth_gb"`
-	PriceAmount  int64  `json:"price_amount" vd:"$>0"`
-	Currency     string `json:"currency" vd:"len($)>0"`
-	BillingCycle string `json:"billing_cycle" vd:"len($)>0"`
-	TotalSlots   int    `json:"total_slots"`
+	Name           string `json:"name" vd:"len($)>0"`
+	Slug           string `json:"slug" vd:"len($)>0"`
+	Location       string `json:"location"`
+	GroupID        string `json:"group_id"`
+	RegionID       string `json:"region_id"`
+	ResourcePoolID string `json:"resource_pool_id"`
+	CPU            int    `json:"cpu" vd:"$>0"`
+	MemoryMB       int    `json:"memory_mb" vd:"$>0"`
+	DiskGB         int    `json:"disk_gb" vd:"$>0"`
+	BandwidthGB    int    `json:"bandwidth_gb"`
+	PriceAmount    int64  `json:"price_amount" vd:"$>0"`
+	Currency       string `json:"currency" vd:"len($)>0"`
+	BillingCycle   string `json:"billing_cycle" vd:"len($)>0"`
+	TotalSlots     int    `json:"total_slots"`
 }
 
 type PurchaseProductRequest struct {
@@ -51,7 +53,9 @@ type ProductResponse struct {
 	Name           string `json:"name"`
 	Slug           string `json:"slug"`
 	Location       string `json:"location"`
+	GroupID        string `json:"group_id,omitempty"`
 	RegionID       string `json:"region_id,omitempty"`
+	ResourcePoolID string `json:"resource_pool_id,omitempty"`
 	CPU            int    `json:"cpu"`
 	MemoryMB       int    `json:"memory_mb"`
 	DiskGB         int    `json:"disk_gb"`
@@ -64,6 +68,7 @@ type ProductResponse struct {
 	TotalSlots     int    `json:"total_slots"`
 	SoldSlots      int    `json:"sold_slots"`
 	AvailableSlots int    `json:"available_slots"`
+	IsUnlimited    bool   `json:"is_unlimited"`
 }
 
 // AdjustStockResponse includes an optional warning for the admin frontend.
@@ -88,7 +93,7 @@ func (h *ProductHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
 		return
 	}
-	p, err := h.svc.CreateProduct(req.Name, req.Slug, req.Location, req.RegionID, req.CPU, req.MemoryMB, req.DiskGB, req.BandwidthGB, req.PriceAmount, req.Currency, domain.BillingCycle(req.BillingCycle), req.TotalSlots)
+	p, err := h.svc.CreateProduct(req.Name, req.Slug, req.Location, req.GroupID, req.RegionID, req.ResourcePoolID, req.CPU, req.MemoryMB, req.DiskGB, req.BandwidthGB, req.PriceAmount, req.Currency, domain.BillingCycle(req.BillingCycle), req.TotalSlots)
 	if err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
 		return
@@ -230,10 +235,11 @@ func (h *ProductHandler) SetRegion(ctx context.Context, c *hz_app.RequestContext
 func toProductResp(p *domain.Product) ProductResponse {
 	return ProductResponse{
 		ID: p.ID(), Name: p.Name(), Slug: p.Slug(), Location: p.Location(),
-		RegionID: p.RegionID(),
-		CPU:      p.CPU(), MemoryMB: p.MemoryMB(), DiskGB: p.DiskGB(), BandwidthGB: p.BandwidthGB(),
+		GroupID: p.GroupID(), RegionID: p.RegionID(), ResourcePoolID: p.ResourcePoolID(),
+		CPU: p.CPU(), MemoryMB: p.MemoryMB(), DiskGB: p.DiskGB(), BandwidthGB: p.BandwidthGB(),
 		PriceAmount: p.PriceAmount(), Currency: p.Currency(),
 		BillingCycle: string(p.BillingCycle()), Enabled: p.Enabled(), SortOrder: p.SortOrder(),
 		TotalSlots: p.TotalSlots(), SoldSlots: p.SoldSlots(), AvailableSlots: p.AvailableSlots(),
+		IsUnlimited: p.IsUnlimited(),
 	}
 }

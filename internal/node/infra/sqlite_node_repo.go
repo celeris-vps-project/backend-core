@@ -11,22 +11,19 @@ import (
 
 // ---- Persistence Objects ----
 
+// HostNodePO stores persistent configuration and capacity data only.
+// Runtime state (status, CPU/mem/disk usage, etc.) is NOT stored here —
+// it lives in the NodeStateCache.
 type HostNodePO struct {
-	ID         string     `gorm:"primaryKey;column:id"`
-	Code       string     `gorm:"uniqueIndex;column:code"`
-	Location   string     `gorm:"index;column:location"`
-	RegionID   string     `gorm:"index;column:region_id"`
-	Name       string     `gorm:"column:name"`
-	Secret     string     `gorm:"column:secret"`
-	IP         string     `gorm:"column:ip"`
-	Status     string     `gorm:"column:status"`
-	AgentVer   string     `gorm:"column:agent_ver"`
-	CPUUsage   float64    `gorm:"column:cpu_usage"`
-	MemUsage   float64    `gorm:"column:mem_usage"`
-	DiskUsage  float64    `gorm:"column:disk_usage"`
-	VMCount    int        `gorm:"column:vm_count"`
-	LastSeenAt *time.Time `gorm:"column:last_seen_at"`
-	CreatedAt  time.Time  `gorm:"column:created_at"`
+	ID             string    `gorm:"primaryKey;column:id"`
+	Code           string    `gorm:"uniqueIndex;column:code"`
+	Location       string    `gorm:"index;column:location"`
+	RegionID       string    `gorm:"index;column:region_id"`
+	ResourcePoolID string    `gorm:"index;column:resource_pool_id"`
+	Name           string    `gorm:"column:name"`
+	Secret         string    `gorm:"column:secret"`
+	NodeToken      string    `gorm:"column:node_token;index"`
+	CreatedAt      time.Time `gorm:"column:created_at"`
 
 	// Capacity fields (merged from the old NodePO / "nodes" table)
 	TotalSlots int  `gorm:"column:total_slots;default:0"`
@@ -87,6 +84,17 @@ func (r *SqliteHostNodeRepo) GetByCode(code string) (*domain.HostNode, error) {
 	return hostToDomain(po), nil
 }
 
+func (r *SqliteHostNodeRepo) GetByNodeToken(token string) (*domain.HostNode, error) {
+	var po HostNodePO
+	if err := r.db.Where("node_token = ? AND node_token != ''", token).First(&po).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("host node not found")
+		}
+		return nil, err
+	}
+	return hostToDomain(po), nil
+}
+
 func (r *SqliteHostNodeRepo) ListAll() ([]*domain.HostNode, error) {
 	var pos []HostNodePO
 	if err := r.db.Find(&pos).Error; err != nil {
@@ -126,6 +134,30 @@ func (r *SqliteHostNodeRepo) ListByRegionID(regionID string) ([]*domain.HostNode
 func (r *SqliteHostNodeRepo) ListEnabledByRegionID(regionID string) ([]*domain.HostNode, error) {
 	var pos []HostNodePO
 	if err := r.db.Where("region_id = ? AND enabled = ?", regionID, true).Find(&pos).Error; err != nil {
+		return nil, err
+	}
+	out := make([]*domain.HostNode, len(pos))
+	for i, po := range pos {
+		out[i] = hostToDomain(po)
+	}
+	return out, nil
+}
+
+func (r *SqliteHostNodeRepo) ListByResourcePoolID(poolID string) ([]*domain.HostNode, error) {
+	var pos []HostNodePO
+	if err := r.db.Where("resource_pool_id = ?", poolID).Find(&pos).Error; err != nil {
+		return nil, err
+	}
+	out := make([]*domain.HostNode, len(pos))
+	for i, po := range pos {
+		out[i] = hostToDomain(po)
+	}
+	return out, nil
+}
+
+func (r *SqliteHostNodeRepo) ListEnabledByResourcePoolID(poolID string) ([]*domain.HostNode, error) {
+	var pos []HostNodePO
+	if err := r.db.Where("resource_pool_id = ? AND enabled = ?", poolID, true).Find(&pos).Error; err != nil {
 		return nil, err
 	}
 	out := make([]*domain.HostNode, len(pos))
@@ -225,20 +257,18 @@ func (r *SqliteTaskRepo) Save(t *contracts.Task) error {
 
 func hostToDomain(po HostNodePO) *domain.HostNode {
 	return domain.ReconstituteHostNode(
-		po.ID, po.Code, po.Location, po.RegionID, po.Name, po.Secret,
-		po.IP, po.Status, po.AgentVer,
-		po.CPUUsage, po.MemUsage, po.DiskUsage, po.VMCount,
-		po.LastSeenAt, po.CreatedAt,
+		po.ID, po.Code, po.Location, po.RegionID, po.ResourcePoolID, po.Name, po.Secret, po.NodeToken,
+		po.CreatedAt,
 		po.TotalSlots, po.UsedSlots, po.Enabled,
 	)
 }
 
 func hostFromDomain(n *domain.HostNode) HostNodePO {
 	return HostNodePO{
-		ID: n.ID(), Code: n.Code(), Location: n.Location(), RegionID: n.RegionID(), Name: n.Name(), Secret: n.Secret(),
-		IP: n.IP(), Status: n.Status(), AgentVer: n.AgentVer(),
-		CPUUsage: n.CPUUsage(), MemUsage: n.MemUsage(), DiskUsage: n.DiskUsage(), VMCount: n.VMCount(),
-		LastSeenAt: n.LastSeenAt(), CreatedAt: n.CreatedAt(),
+		ID: n.ID(), Code: n.Code(), Location: n.Location(), RegionID: n.RegionID(),
+		ResourcePoolID: n.ResourcePoolID(), Name: n.Name(), Secret: n.Secret(),
+		NodeToken:  n.NodeToken(),
+		CreatedAt:  n.CreatedAt(),
 		TotalSlots: n.TotalSlots(), UsedSlots: n.UsedSlots(), Enabled: n.Enabled(),
 	}
 }

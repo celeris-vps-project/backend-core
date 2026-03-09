@@ -1,4 +1,4 @@
-﻿package vm
+package vm
 
 import (
 	"backend-core/pkg/contracts"

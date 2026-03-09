@@ -99,13 +99,13 @@ func TestPurchaseInstance_AllocatesSlot(t *testing.T) {
 	nodeRepo := newMemNodeAllocatorRepo()
 	instRepo := newMemInstRepo()
 	idGen := &seqIDGen{}
-	svc := NewInstanceAppService(nodeRepo, instRepo, idGen)
+	svc := NewInstanceAppService(nodeRepo, instRepo, idGen, nil)
 
 	// Create a host node with 2 slots
 	node := createTestHostNode(nodeRepo, "node-1", "DE-fra-01", "DE-fra", "Frankfurt #1", 2)
 
-	// Purchase first instance
-	inst1, err := svc.PurchaseInstance("cust-1", "ord-1", node.ID(), "web-01", "vps-starter", "ubuntu-22.04", 2, 2048, 40)
+	// Purchase first instance (by region, not node ID)
+	inst1, err := svc.PurchaseInstance("cust-1", "ord-1", "DE-fra", "web-01", "vps-starter", "ubuntu-22.04", 2, 2048, 40)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -114,13 +114,13 @@ func TestPurchaseInstance_AllocatesSlot(t *testing.T) {
 	}
 
 	// Purchase second instance
-	_, err = svc.PurchaseInstance("cust-2", "ord-2", node.ID(), "web-02", "vps-starter", "ubuntu-22.04", 2, 2048, 40)
+	_, err = svc.PurchaseInstance("cust-2", "ord-2", "DE-fra", "web-02", "vps-starter", "ubuntu-22.04", 2, 2048, 40)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Third should fail — no capacity
-	_, err = svc.PurchaseInstance("cust-3", "ord-3", node.ID(), "web-03", "vps-starter", "ubuntu-22.04", 2, 2048, 40)
+	_, err = svc.PurchaseInstance("cust-3", "ord-3", "DE-fra", "web-03", "vps-starter", "ubuntu-22.04", 2, 2048, 40)
 	if err == nil {
 		t.Fatal("expected error for no capacity")
 	}
@@ -136,17 +136,17 @@ func TestTerminateInstance_ReleasesSlot(t *testing.T) {
 	nodeRepo := newMemNodeAllocatorRepo()
 	instRepo := newMemInstRepo()
 	idGen := &seqIDGen{}
-	svc := NewInstanceAppService(nodeRepo, instRepo, idGen)
+	svc := NewInstanceAppService(nodeRepo, instRepo, idGen, nil)
 
-	node := createTestHostNode(nodeRepo, "node-2", "US-slc-01", "US-slc", "Salt Lake City #1", 1)
-	inst, _ := svc.PurchaseInstance("cust-1", "ord-1", node.ID(), "app-01", "vps-pro", "debian-12", 4, 8192, 100)
+	_ = createTestHostNode(nodeRepo, "node-2", "US-slc-01", "US-slc", "Salt Lake City #1", 1)
+	inst, _ := svc.PurchaseInstance("cust-1", "ord-1", "US-slc", "app-01", "vps-pro", "debian-12", 4, 8192, 100)
 
 	_ = svc.StartInstance(inst.ID())
 	if err := svc.TerminateInstance(inst.ID()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	storedNode, _ := nodeRepo.GetByID(node.ID())
+	storedNode, _ := nodeRepo.GetByID("node-2")
 	if storedNode.UsedSlots() != 0 {
 		t.Fatalf("expected 0 used slots after terminate, got %d", storedNode.UsedSlots())
 	}

@@ -1,4 +1,4 @@
-﻿package domain
+package domain
 
 import (
 	"errors"
@@ -31,25 +31,26 @@ type DomainEvent interface {
 // A Product is mapped to a regionID (resource pool) rather than a single
 // node, enabling load-balancing across all nodes in that region.
 type Product struct {
-	id           string
-	name         string // e.g. "VPS Starter"
-	slug         string // e.g. "vps-starter"
-	location     string // e.g. "DE-fra" — legacy display label
-	regionID     string // FK to Region — determines the resource pool
-	cpu          int
-	memoryMB     int
-	diskGB       int
-	bandwidthGB  int
-	priceAmount  int64 // minor units per cycle
-	currency     string
-	billingCycle BillingCycle
-	enabled      bool
-	sortOrder    int
-	totalSlots   int // commercial inventory (how many units admin wants to sell)
-	soldSlots    int // number of slots already sold / allocated
+	id             string
+	name           string // e.g. "VPS Starter"
+	slug           string // e.g. "vps-starter"
+	location       string // e.g. "DE-fra" — legacy display label
+	groupID        string // FK to Group — product category
+	regionID       string // FK to Region — legacy
+	resourcePoolID string // FK to ResourcePool — determines the resource pool for provisioning
+	cpu            int
+	memoryMB       int
+	diskGB         int
+	bandwidthGB    int
+	priceAmount    int64 // minor units per cycle
+	currency       string
+	billingCycle   BillingCycle
+	enabled        bool
+	sortOrder      int
+	totalSlots     int // commercial inventory (how many units admin wants to sell)
+	soldSlots      int // number of slots already sold / allocated
 
 	// domainEvents collects events raised by this aggregate during a use-case.
-	// The application service reads and publishes them after persisting the aggregate.
 	domainEvents []DomainEvent
 }
 
@@ -62,9 +63,6 @@ func NewProduct(id, name, slug, location string, cpu, memoryMB, diskGB, bandwidt
 	}
 	if slug == "" {
 		return nil, errors.New("domain_error: slug is required")
-	}
-	if location == "" {
-		return nil, errors.New("domain_error: location is required")
 	}
 	if cpu <= 0 {
 		return nil, errors.New("domain_error: cpu must be > 0")
@@ -92,10 +90,11 @@ func NewProduct(id, name, slug, location string, cpu, memoryMB, diskGB, bandwidt
 	}, nil
 }
 
-func ReconstituteProduct(id, name, slug, location, regionID string, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle BillingCycle, enabled bool, sortOrder, totalSlots, soldSlots int) *Product {
+func ReconstituteProduct(id, name, slug, location, groupID, regionID, resourcePoolID string, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle BillingCycle, enabled bool, sortOrder, totalSlots, soldSlots int) *Product {
 	return &Product{
-		id: id, name: name, slug: slug, location: location, regionID: regionID,
-		cpu: cpu, memoryMB: memoryMB, diskGB: diskGB, bandwidthGB: bandwidthGB,
+		id: id, name: name, slug: slug, location: location, groupID: groupID, regionID: regionID,
+		resourcePoolID: resourcePoolID,
+		cpu:            cpu, memoryMB: memoryMB, diskGB: diskGB, bandwidthGB: bandwidthGB,
 		priceAmount: priceAmount, currency: currency, billingCycle: cycle,
 		enabled: enabled, sortOrder: sortOrder, totalSlots: totalSlots, soldSlots: soldSlots,
 	}
@@ -105,6 +104,7 @@ func (p *Product) ID() string                 { return p.id }
 func (p *Product) Name() string               { return p.name }
 func (p *Product) Slug() string               { return p.slug }
 func (p *Product) Location() string           { return p.location }
+func (p *Product) GroupID() string             { return p.groupID }
 func (p *Product) RegionID() string           { return p.regionID }
 func (p *Product) CPU() int                   { return p.cpu }
 func (p *Product) MemoryMB() int              { return p.memoryMB }
@@ -120,12 +120,15 @@ func (p *Product) SoldSlots() int             { return p.soldSlots }
 func (p *Product) IsUnlimited() bool          { return p.totalSlots == UnlimitedSlots }
 func (p *Product) AvailableSlots() int {
 	if p.IsUnlimited() {
-		return 0
+		return UnlimitedSlots
 	}
 	return p.totalSlots - p.soldSlots
 }
 
-func (p *Product) SetRegionID(regionID string) { p.regionID = regionID }
+func (p *Product) SetGroupID(groupID string)        { p.groupID = groupID }
+func (p *Product) SetRegionID(regionID string)     { p.regionID = regionID }
+func (p *Product) ResourcePoolID() string          { return p.resourcePoolID }
+func (p *Product) SetResourcePoolID(poolID string) { p.resourcePoolID = poolID }
 
 func (p *Product) Enable()            { p.enabled = true }
 func (p *Product) Disable()           { p.enabled = false }

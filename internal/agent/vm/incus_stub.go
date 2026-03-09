@@ -1,4 +1,4 @@
-﻿//go:build !(linux && incus)
+//go:build !(linux && incus)
 
 package vm
 

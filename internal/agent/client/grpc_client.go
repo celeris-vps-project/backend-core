@@ -1,20 +1,24 @@
-package client
+﻿package client
 
 import (
 	"backend-core/pkg/agentpb"
 	"backend-core/pkg/contracts"
 	"context"
 	"fmt"
+	"sync"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 )
 
 // AgentClient wraps the generated gRPC client with methods that accept and
 // return the shared contracts types.
 type AgentClient struct {
-	conn *grpc.ClientConn
-	svc  agentpb.AgentServiceClient
+	conn      *grpc.ClientConn
+	svc       agentpb.AgentServiceClient
+	mu        sync.RWMutex
+	nodeToken string // permanent credential, set after registration or loaded from file
 }
 
 // Dial creates a new AgentClient connected to the given gRPC address.
@@ -36,22 +40,55 @@ func (c *AgentClient) Close() error {
 	return c.conn.Close()
 }
 
-// Register sends the agent registration request to the controller.
-func (c *AgentClient) Register(ctx context.Context, reg contracts.AgentRegistration) error {
-	_, err := c.svc.Register(ctx, &agentpb.RegisterRequest{
-		NodeId:   reg.NodeID,
-		Secret:   reg.Secret,
-		Hostname: reg.Hostname,
-		Location: reg.Location,
-		Ip:       reg.IP,
-		Version:  reg.Version,
+// SetNodeToken sets the permanent node credential for authenticating
+// subsequent Heartbeat and ReportTaskResult RPCs.
+func (c *AgentClient) SetNodeToken(token string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.nodeToken = token
+}
+
+// NodeToken returns the current node token.
+func (c *AgentClient) NodeToken() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.nodeToken
+}
+
+// authCtx attaches the node-token metadata to outgoing gRPC calls.
+func (c *AgentClient) authCtx(ctx context.Context) context.Context {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.nodeToken != "" {
+		return metadata.AppendToOutgoingContext(ctx, "node-token", c.nodeToken)
+	}
+	return ctx
+}
+
+// Register sends the agent bootstrap registration request to the controller.
+// On success it returns the registration result containing the node ID and permanent token.
+func (c *AgentClient) Register(ctx context.Context, reg contracts.AgentRegistration) (*contracts.RegistrationResult, error) {
+	resp, err := c.svc.Register(ctx, &agentpb.RegisterRequest{
+		BootstrapToken: reg.BootstrapToken,
+		Hostname:       reg.Hostname,
+		Ip:             reg.IP,
+		Version:        reg.Version,
 	})
-	return err
+	if err != nil {
+		return nil, err
+	}
+	nodeToken := resp.GetNodeToken()
+	c.SetNodeToken(nodeToken)
+	return &contracts.RegistrationResult{
+		NodeID:    resp.GetNodeId(),
+		NodeToken: nodeToken,
+	}, nil
 }
 
 // Heartbeat sends a heartbeat and returns the ack (with optional queued tasks).
+// The node-token is automatically attached via gRPC metadata.
 func (c *AgentClient) Heartbeat(ctx context.Context, hb contracts.Heartbeat) (*contracts.HeartbeatAck, error) {
-	resp, err := c.svc.Heartbeat(ctx, &agentpb.HeartbeatRequest{
+	resp, err := c.svc.Heartbeat(c.authCtx(ctx), &agentpb.HeartbeatRequest{
 		NodeId:     hb.NodeID,
 		CpuUsage:   hb.CPUUsage,
 		MemUsage:   hb.MemUsage,
@@ -70,8 +107,9 @@ func (c *AgentClient) Heartbeat(ctx context.Context, hb contracts.Heartbeat) (*c
 }
 
 // ReportTaskResult sends a task result back to the controller.
+// The node-token is automatically attached via gRPC metadata.
 func (c *AgentClient) ReportTaskResult(ctx context.Context, result contracts.TaskResult) error {
-	_, err := c.svc.ReportTaskResult(ctx, &agentpb.TaskResultRequest{
+	_, err := c.svc.ReportTaskResult(c.authCtx(ctx), &agentpb.TaskResultRequest{
 		TaskId:     result.TaskID,
 		Status:     string(result.Status),
 		Error:      result.Error,
@@ -82,7 +120,7 @@ func (c *AgentClient) ReportTaskResult(ctx context.Context, result contracts.Tas
 	return err
 }
 
-// ---- proto → contracts mapping helpers ----
+// ---- proto �?contracts mapping helpers ----
 
 func protoToTasks(pts []*agentpb.Task) []contracts.Task {
 	out := make([]contracts.Task, len(pts))

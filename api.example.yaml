@@ -11,7 +11,7 @@ jwt:
 grpc:
   listen: ":50051"           # gRPC listen address for agent communication
 
-agent:
-  secret: "changeme"         # Shared secret that agents must present to authenticate.
-                              # Must match the 'secret' value in agent.yaml.
+# Agent authentication is now handled via bootstrap tokens (created via
+# the admin API: POST /admin/bootstrap-tokens) and permanent node tokens
+# issued during registration. The old static agent.secret is no longer used.
 

@@ -16,7 +16,7 @@ func newTestVPSConfig(t *testing.T) VPSConfig {
 
 func TestOrderLifecycle_ActivateAndSuspend(t *testing.T) {
 	cfg := newTestVPSConfig(t)
-	order, err := NewOrder("ord-1", "cust-1", "inv-1", cfg, "USD", 999)
+	order, err := NewOrder("ord-1", "cust-1", "prod-1", "inv-1", cfg, "USD", 999)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestOrderLifecycle_ActivateAndSuspend(t *testing.T) {
 
 func TestOrderLifecycle_Cancel(t *testing.T) {
 	cfg := newTestVPSConfig(t)
-	order, err := NewOrder("ord-2", "cust-1", "inv-2", cfg, "USD", 500)
+	order, err := NewOrder("ord-2", "cust-1", "prod-2", "inv-2", cfg, "USD", 500)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestOrderLifecycle_Cancel(t *testing.T) {
 
 func TestOrderLifecycle_Terminate(t *testing.T) {
 	cfg := newTestVPSConfig(t)
-	order, err := NewOrder("ord-3", "cust-1", "inv-3", cfg, "USD", 800)
+	order, err := NewOrder("ord-3", "cust-1", "prod-3", "inv-3", cfg, "USD", 800)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestOrderLifecycle_Terminate(t *testing.T) {
 
 func TestOrder_CannotActivateNonPending(t *testing.T) {
 	cfg := newTestVPSConfig(t)
-	order, _ := NewOrder("ord-4", "cust-1", "inv-4", cfg, "USD", 500)
+	order, _ := NewOrder("ord-4", "cust-1", "prod-4", "inv-4", cfg, "USD", 500)
 	now := time.Now()
 	_ = order.Activate(now)
 
@@ -96,7 +96,7 @@ func TestOrder_CannotActivateNonPending(t *testing.T) {
 
 func TestOrder_CancelRequiresReason(t *testing.T) {
 	cfg := newTestVPSConfig(t)
-	order, _ := NewOrder("ord-5", "cust-1", "inv-5", cfg, "USD", 500)
+	order, _ := NewOrder("ord-5", "cust-1", "prod-5", "inv-5", cfg, "USD", 500)
 
 	if err := order.Cancel("", time.Now()); err == nil {
 		t.Fatal("expected error when cancel reason is empty")

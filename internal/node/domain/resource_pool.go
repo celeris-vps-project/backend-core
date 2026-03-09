@@ -3,55 +3,77 @@ package domain
 import "errors"
 
 // ──────────────────────────────────────────────────────────────────────────
-// Resource Pooling Strategy: REGION-BASED
+// ResourcePool — a first-class persisted entity that groups HostNodes.
 //
-// We group nodes into resource pools by Region rather than by hardware tier
-// because:
+// A pool is region-based: it aggregates nodes deployed in one geographic
+// region, providing load-balanced capacity for product provisioning.
 //
-//  1. Customers select VPS by geographic location — this is the primary
-//     dimension in every hosting control panel (e.g. "Frankfurt", "US-West").
-//
-//  2. Regions are already a first-class domain concept (the Region entity
-//     already exists, nodes already carry a regionID).
-//
-//  3. Latency / legal jurisdiction are location-driven concerns; mixing
-//     regions in a single pool would violate user expectations.
-//
-//  4. Hardware tiers can be expressed as Product-level metadata (cpu, mem,
-//     disk) without needing a separate pooling dimension. Within a region
-//     pool, the scheduler can match a product's resource requirements to
-//     a node with sufficient capacity.
-//
-//  5. This keeps the model simple and avoids a combinatorial explosion
-//     of Region × Tier pools.
-//
-// A ResourcePool is a read-model / domain service concept that aggregates
-// capacity across all enabled HostNodes in a given region.
+// One ResourcePool → many HostNodes.
+// One ResourcePool → many Products (via Product.resourcePoolID).
 // ──────────────────────────────────────────────────────────────────────────
 
-// ResourcePool represents the aggregated physical capacity of all nodes
-// in a single region. It is NOT a persisted entity — it is a computed
-// view derived from the Region + its HostNodes.
+const (
+	PoolStatusActive   = "active"
+	PoolStatusInactive = "inactive"
+)
+
+// ResourcePool represents a named group of nodes that share capacity.
+// It IS a persisted entity with its own identity.
 type ResourcePool struct {
-	regionID   string
-	regionCode string
-	regionName string
-	nodes      []*HostNode
+	id       string
+	name     string
+	regionID string // FK to Region — the geographic region this pool covers
+	status   string
+
+	// nodes are loaded lazily when building the capacity view.
+	// They are NOT part of the persisted fields — they come from HostNode.resourcePoolID.
+	nodes []*HostNode
 }
 
-func NewResourcePool(regionID, regionCode, regionName string, nodes []*HostNode) *ResourcePool {
+func NewResourcePool(id, name, regionID string) (*ResourcePool, error) {
+	if id == "" {
+		return nil, errors.New("domain_error: resource pool id is required")
+	}
+	if name == "" {
+		return nil, errors.New("domain_error: resource pool name is required")
+	}
+	if regionID == "" {
+		return nil, errors.New("domain_error: region id is required")
+	}
 	return &ResourcePool{
-		regionID:   regionID,
-		regionCode: regionCode,
-		regionName: regionName,
-		nodes:      nodes,
+		id:       id,
+		name:     name,
+		regionID: regionID,
+		status:   PoolStatusActive,
+	}, nil
+}
+
+func ReconstituteResourcePool(id, name, regionID, status string) *ResourcePool {
+	return &ResourcePool{
+		id:       id,
+		name:     name,
+		regionID: regionID,
+		status:   status,
 	}
 }
 
+func (p *ResourcePool) ID() string         { return p.id }
+func (p *ResourcePool) Name() string       { return p.name }
 func (p *ResourcePool) RegionID() string   { return p.regionID }
-func (p *ResourcePool) RegionCode() string { return p.regionCode }
-func (p *ResourcePool) RegionName() string { return p.regionName }
+func (p *ResourcePool) Status() string     { return p.status }
 func (p *ResourcePool) Nodes() []*HostNode { return p.nodes }
+
+func (p *ResourcePool) SetName(name string)   { p.name = name }
+func (p *ResourcePool) SetRegionID(id string) { p.regionID = id }
+func (p *ResourcePool) Activate()             { p.status = PoolStatusActive }
+func (p *ResourcePool) Deactivate()           { p.status = PoolStatusInactive }
+func (p *ResourcePool) IsActive() bool        { return p.status == PoolStatusActive }
+
+// WithNodes attaches nodes to the pool for capacity computation.
+// The nodes are NOT persisted here — they reference the pool via HostNode.resourcePoolID.
+func (p *ResourcePool) WithNodes(nodes []*HostNode) {
+	p.nodes = nodes
+}
 
 // TotalPhysicalSlots returns the sum of total_slots across all nodes in the pool.
 func (p *ResourcePool) TotalPhysicalSlots() int {
@@ -97,7 +119,7 @@ func (p *ResourcePool) SelectNode() (*HostNode, error) {
 		}
 	}
 	if best == nil {
-		return nil, errors.New("domain_error: no available nodes in resource pool " + p.regionCode)
+		return nil, errors.New("domain_error: no available nodes in resource pool " + p.name)
 	}
 	return best, nil
 }

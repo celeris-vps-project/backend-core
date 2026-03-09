@@ -17,6 +17,7 @@ const (
 type Order struct {
 	id          string
 	customerID  string
+	productID   string // FK to the product being purchased
 	invoiceID   string // associated billing invoice
 	vpsConfig   VPSConfig
 	status      string
@@ -31,15 +32,15 @@ type Order struct {
 	cancelReason string
 }
 
-func NewOrder(id, customerID, invoiceID string, cfg VPSConfig, currency string, priceAmount int64) (*Order, error) {
+func NewOrder(id, customerID, productID, invoiceID string, cfg VPSConfig, currency string, priceAmount int64) (*Order, error) {
 	if id == "" {
 		return nil, errors.New("domain_error: order id is required")
 	}
 	if customerID == "" {
 		return nil, errors.New("domain_error: customer id is required")
 	}
-	if invoiceID == "" {
-		return nil, errors.New("domain_error: invoice id is required")
+	if productID == "" {
+		return nil, errors.New("domain_error: product id is required")
 	}
 	if currency == "" {
 		return nil, errors.New("domain_error: currency is required")
@@ -51,6 +52,7 @@ func NewOrder(id, customerID, invoiceID string, cfg VPSConfig, currency string, 
 	return &Order{
 		id:          id,
 		customerID:  customerID,
+		productID:   productID,
 		invoiceID:   invoiceID,
 		vpsConfig:   cfg,
 		status:      OrderStatusPending,
@@ -62,7 +64,7 @@ func NewOrder(id, customerID, invoiceID string, cfg VPSConfig, currency string, 
 
 // ReconstituteOrder rebuilds the aggregate from persistence.
 func ReconstituteOrder(
-	id, customerID, invoiceID string,
+	id, customerID, productID, invoiceID string,
 	cfg VPSConfig,
 	status, currency string,
 	priceAmount int64,
@@ -73,6 +75,7 @@ func ReconstituteOrder(
 	return &Order{
 		id:           id,
 		customerID:   customerID,
+		productID:    productID,
 		invoiceID:    invoiceID,
 		vpsConfig:    cfg,
 		status:       status,
@@ -91,6 +94,7 @@ func ReconstituteOrder(
 
 func (o *Order) ID() string           { return o.id }
 func (o *Order) CustomerID() string   { return o.customerID }
+func (o *Order) ProductID() string    { return o.productID }
 func (o *Order) InvoiceID() string    { return o.invoiceID }
 func (o *Order) VPSConfig() VPSConfig { return o.vpsConfig }
 func (o *Order) Status() string       { return o.status }

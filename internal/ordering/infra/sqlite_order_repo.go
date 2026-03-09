@@ -13,6 +13,7 @@ import (
 type OrderPO struct {
 	ID           string     `gorm:"primaryKey;column:id"`
 	CustomerID   string     `gorm:"index;column:customer_id"`
+	ProductID    string     `gorm:"index;column:product_id"`
 	InvoiceID    string     `gorm:"index;column:invoice_id"`
 	Status       string     `gorm:"column:status"`
 	Currency     string     `gorm:"column:currency"`
@@ -80,7 +81,7 @@ func orderToDomain(po OrderPO) *domain.Order {
 		po.CPU, po.MemoryMB, po.DiskGB,
 	)
 	return domain.ReconstituteOrder(
-		po.ID, po.CustomerID, po.InvoiceID,
+		po.ID, po.CustomerID, po.ProductID, po.InvoiceID,
 		cfg,
 		po.Status, po.Currency, po.PriceAmount,
 		po.CreatedAt,
@@ -94,6 +95,7 @@ func orderFromDomain(o *domain.Order) OrderPO {
 	return OrderPO{
 		ID:           o.ID(),
 		CustomerID:   o.CustomerID(),
+		ProductID:    o.ProductID(),
 		InvoiceID:    o.InvoiceID(),
 		Status:       o.Status(),
 		Currency:     o.Currency(),

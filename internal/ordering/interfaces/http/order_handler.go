@@ -14,6 +14,7 @@ import (
 // ---- Request / Response DTOs ----
 
 type CreateOrderRequest struct {
+	ProductID   string `json:"product_id" vd:"len($)>0"`
 	InvoiceID   string `json:"invoice_id"`
 	Currency    string `json:"currency" vd:"len($)>0"`
 	PriceAmount int64  `json:"price_amount" vd:"$>0"`
@@ -33,6 +34,7 @@ type CancelOrderRequest struct {
 type OrderResponse struct {
 	ID           string            `json:"id"`
 	CustomerID   string            `json:"customer_id"`
+	ProductID    string            `json:"product_id"`
 	InvoiceID    string            `json:"invoice_id"`
 	Status       string            `json:"status"`
 	Currency     string            `json:"currency"`
@@ -91,7 +93,7 @@ func (h *OrderHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 		return
 	}
 
-	order, err := h.orderApp.CreateOrder(customerID.(string), invoiceID, cfg, req.Currency, req.PriceAmount)
+	order, err := h.orderApp.CreateOrder(customerID.(string), req.ProductID, invoiceID, cfg, req.Currency, req.PriceAmount)
 	if err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
 		return
@@ -220,6 +222,7 @@ func toOrderResponse(o *domain.Order) OrderResponse {
 	resp := OrderResponse{
 		ID:          o.ID(),
 		CustomerID:  o.CustomerID(),
+		ProductID:   o.ProductID(),
 		InvoiceID:   o.InvoiceID(),
 		Status:      o.Status(),
 		Currency:    o.Currency(),

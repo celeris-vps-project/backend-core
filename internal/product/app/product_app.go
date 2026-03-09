@@ -1,4 +1,4 @@
-﻿package app
+package app
 
 import (
 	"backend-core/internal/product/domain"
@@ -46,14 +46,20 @@ func NewProductAppService(
 }
 
 // CreateProduct creates a new VPS product in the catalog.
-func (s *ProductAppService) CreateProduct(name, slug, location, regionID string, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle domain.BillingCycle, totalSlots int) (*domain.Product, error) {
+func (s *ProductAppService) CreateProduct(name, slug, location, groupID, regionID, resourcePoolID string, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle domain.BillingCycle, totalSlots int) (*domain.Product, error) {
 	id := s.ids.NewID()
 	p, err := domain.NewProduct(id, name, slug, location, cpu, memoryMB, diskGB, bandwidthGB, priceAmount, currency, cycle, totalSlots)
 	if err != nil {
 		return nil, err
 	}
+	if groupID != "" {
+		p.SetGroupID(groupID)
+	}
 	if regionID != "" {
 		p.SetRegionID(regionID)
+	}
+	if resourcePoolID != "" {
+		p.SetResourcePoolID(resourcePoolID)
 	}
 	if err := s.repo.Save(p); err != nil {
 		return nil, err
@@ -80,16 +86,17 @@ func (s *ProductAppService) PurchaseProduct(
 
 	// Raise domain event — Node domain will handle provisioning
 	p.RaiseEvent(events.ProductPurchasedEvent{
-		ProductID:   p.ID(),
-		ProductSlug: p.Slug(),
-		RegionID:    p.RegionID(),
-		CustomerID:  customerID,
-		OrderID:     orderID,
-		Hostname:    hostname,
-		OS:          os,
-		CPU:         p.CPU(),
-		MemoryMB:    p.MemoryMB(),
-		DiskGB:      p.DiskGB(),
+		ProductID:      p.ID(),
+		ProductSlug:    p.Slug(),
+		RegionID:       p.RegionID(),
+		ResourcePoolID: p.ResourcePoolID(),
+		CustomerID:     customerID,
+		OrderID:        orderID,
+		Hostname:       hostname,
+		OS:             os,
+		CPU:            p.CPU(),
+		MemoryMB:       p.MemoryMB(),
+		DiskGB:         p.DiskGB(),
 	})
 
 	if err := s.repo.Save(p); err != nil {
@@ -165,7 +172,12 @@ func (s *ProductAppService) AdjustStock(id string, totalSlots int, confirmed boo
 
 	// Check physical capacity if a capacity checker is available and product has a region
 	if s.capacityChecker != nil && p.RegionID() != "" && totalSlots != domain.UnlimitedSlots {
-		physAvail, err := s.capacityChecker.AvailablePhysicalSlots(p.RegionID())
+		// Use resource pool ID if available, otherwise fall back to region ID
+		checkID := p.ResourcePoolID()
+		if checkID == "" {
+			checkID = p.RegionID()
+		}
+		physAvail, err := s.capacityChecker.AvailablePhysicalSlots(checkID)
 		if err == nil {
 			result.PhysicalAvailable = physAvail
 
@@ -206,6 +218,16 @@ func (s *ProductAppService) SetRegion(id, regionID string) error {
 		return err
 	}
 	p.SetRegionID(regionID)
+	return s.repo.Save(p)
+}
+
+// SetResourcePool binds a product to a resource pool.
+func (s *ProductAppService) SetResourcePool(id, poolID string) error {
+	p, err := s.repo.GetByID(id)
+	if err != nil {
+		return err
+	}
+	p.SetResourcePoolID(poolID)
 	return s.repo.Save(p)
 }
 

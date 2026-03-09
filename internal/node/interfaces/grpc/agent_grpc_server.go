@@ -21,26 +21,30 @@ func NewAgentGRPCServer(svc *app.NodeAppService) *AgentGRPCServer {
 	return &AgentGRPCServer{svc: svc}
 }
 
-// Register handles agent registration.
+// Register handles agent bootstrap registration.
 func (s *AgentGRPCServer) Register(ctx context.Context, req *agentpb.RegisterRequest) (*agentpb.RegisterResponse, error) {
 	reg := contracts.AgentRegistration{
-		NodeID:   req.GetNodeId(),
-		Secret:   req.GetSecret(),
-		Hostname: req.GetHostname(),
-		Location: req.GetLocation(),
-		IP:       req.GetIp(),
-		Version:  req.GetVersion(),
+		BootstrapToken: req.GetBootstrapToken(),
+		Hostname:       req.GetHostname(),
+		IP:             req.GetIp(),
+		Version:        req.GetVersion(),
 	}
-	if err := s.svc.RegisterAgent(reg); err != nil {
+	result, err := s.svc.RegisterAgent(reg)
+	if err != nil {
 		return nil, status.Errorf(codes.Unauthenticated, "registration failed: %v", err)
 	}
-	return &agentpb.RegisterResponse{Ok: true}, nil
+	return &agentpb.RegisterResponse{Ok: true, NodeId: result.NodeID, NodeToken: result.NodeToken}, nil
 }
 
 // Heartbeat handles periodic agent health reports and returns queued tasks.
 func (s *AgentGRPCServer) Heartbeat(ctx context.Context, req *agentpb.HeartbeatRequest) (*agentpb.HeartbeatResponse, error) {
+	// Use the authenticated node ID from the interceptor (ignore request's node_id)
+	nodeID, ok := NodeIDFromContext(ctx)
+	if !ok {
+		return nil, status.Errorf(codes.Unauthenticated, "missing authenticated node identity")
+	}
 	hb := contracts.Heartbeat{
-		NodeID:     req.GetNodeId(),
+		NodeID:     nodeID,
 		CPUUsage:   req.GetCpuUsage(),
 		MemUsage:   req.GetMemUsage(),
 		DiskUsage:  req.GetDiskUsage(),
@@ -60,6 +64,10 @@ func (s *AgentGRPCServer) Heartbeat(ctx context.Context, req *agentpb.HeartbeatR
 
 // ReportTaskResult handles task completion/failure reports from the agent.
 func (s *AgentGRPCServer) ReportTaskResult(ctx context.Context, req *agentpb.TaskResultRequest) (*agentpb.TaskResultResponse, error) {
+	// Verify the caller is authenticated via the interceptor
+	if _, ok := NodeIDFromContext(ctx); !ok {
+		return nil, status.Errorf(codes.Unauthenticated, "missing authenticated node identity")
+	}
 	result := contracts.TaskResult{
 		TaskID:     req.GetTaskId(),
 		Status:     contracts.TaskStatus(req.GetStatus()),

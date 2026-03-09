@@ -17,16 +17,19 @@ service AgentService {
 // ---- Registration ----
 
 message RegisterRequest {
-  string node_id  = 1;
-  string secret   = 2;
-  string hostname = 3;
-  string ip       = 4;
-  string version  = 5;
-  string location = 6;
+  reserved 1;                   // was node_id     — identity is derived from bootstrap_token
+  reserved 6;                   // was location    — managed in admin panel
+  reserved 7;                   // was total_slots — managed in admin panel
+  string bootstrap_token  = 2;  // one-time bootstrap token
+  string hostname         = 3;  // informational; stored in runtime state
+  string ip               = 4;
+  string version          = 5;
 }
 
 message RegisterResponse {
-  bool ok = 1;
+  bool   ok         = 1;
+  string node_token = 2;  // permanent node credential returned on successful registration
+  string node_id    = 3;  // the host node ID bound to this agent
 }
 
 // ---- Heartbeat ----

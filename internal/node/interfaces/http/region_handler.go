@@ -30,9 +30,10 @@ type RegionResponse struct {
 
 // ---- Handler ----
 
-type RegionHandler struct{ svc *app.RegionAppService }
+// RegionHandler uses NodeAppService (region CRUD was merged into it).
+type RegionHandler struct{ svc *app.NodeAppService }
 
-func NewRegionHandler(svc *app.RegionAppService) *RegionHandler {
+func NewRegionHandler(svc *app.NodeAppService) *RegionHandler {
 	return &RegionHandler{svc: svc}
 }
 
@@ -53,7 +54,7 @@ func (h *RegionHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 
 // GET /regions — list active regions (for frontend dropdown / public use)
 func (h *RegionHandler) ListRegions(ctx context.Context, c *hz_app.RequestContext) {
-	regions, err := h.svc.ListActive()
+	regions, err := h.svc.ListActiveRegions()
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
 		return
@@ -67,7 +68,7 @@ func (h *RegionHandler) ListRegions(ctx context.Context, c *hz_app.RequestContex
 
 // GET /regions/all — list all regions regardless of status (admin)
 func (h *RegionHandler) ListAll(ctx context.Context, c *hz_app.RequestContext) {
-	regions, err := h.svc.ListAll()
+	regions, err := h.svc.ListRegions()
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
 		return
@@ -91,7 +92,7 @@ func (h *RegionHandler) GetByID(ctx context.Context, c *hz_app.RequestContext) {
 
 // POST /regions/:id/activate
 func (h *RegionHandler) Activate(ctx context.Context, c *hz_app.RequestContext) {
-	if err := h.svc.Activate(c.Param("id")); err != nil {
+	if err := h.svc.ActivateRegion(c.Param("id")); err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
 		return
 	}
@@ -101,7 +102,7 @@ func (h *RegionHandler) Activate(ctx context.Context, c *hz_app.RequestContext) 
 
 // POST /regions/:id/deactivate
 func (h *RegionHandler) Deactivate(ctx context.Context, c *hz_app.RequestContext) {
-	if err := h.svc.Deactivate(c.Param("id")); err != nil {
+	if err := h.svc.DeactivateRegion(c.Param("id")); err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
 		return
 	}
