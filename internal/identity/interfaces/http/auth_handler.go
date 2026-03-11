@@ -2,6 +2,7 @@ package http
 
 import (
 	"backend-core/internal/identity/app"
+	"backend-core/pkg/authn"
 	"context"
 
 	hz_app "github.com/cloudwego/hertz/pkg/app"
@@ -64,7 +65,7 @@ func (h *AuthHandler) Register(ctx context.Context, c *hz_app.RequestContext) {
 		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
 		return
 	}
-
+	
 	c.JSON(consts.StatusOK, utils.H{
 		"message": "注册成功",
 		"token":   token,
@@ -74,13 +75,13 @@ func (h *AuthHandler) Register(ctx context.Context, c *hz_app.RequestContext) {
 
 // Me returns the current user's profile (extracted from JWT via middleware).
 func (h *AuthHandler) Me(ctx context.Context, c *hz_app.RequestContext) {
-	userID, _ := c.Get("current_user_id")
-	role, exists := c.Get("current_user_role")
-	if !exists {
+	uid, _ := authn.UserID(c)
+	role, ok := authn.UserRole(c)
+	if !ok {
 		role = "user"
 	}
 	c.JSON(consts.StatusOK, utils.H{
-		"user_id": userID,
+		"user_id": uid.String(),
 		"role":    role,
 	})
 }

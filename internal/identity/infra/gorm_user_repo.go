@@ -21,11 +21,18 @@ func (UserPO) TableName() string {
 	return "users"
 }
 
-type PostgresUserRepo struct {
+// GormUserRepo implements domain.UserRepository using GORM.
+// It is driver-agnostic: works with SQLite, PostgreSQL, or any GORM-supported database.
+type GormUserRepo struct {
 	db *gorm.DB
 }
 
-func (r *PostgresUserRepo) Save(u *domain.User) error {
+// NewGormUserRepo creates a new GormUserRepo.
+func NewGormUserRepo(db *gorm.DB) *GormUserRepo {
+	return &GormUserRepo{db: db}
+}
+
+func (r *GormUserRepo) Save(u *domain.User) error {
 	if u == nil {
 		return errors.New("user is nil")
 	}
@@ -41,24 +48,17 @@ func (r *PostgresUserRepo) Save(u *domain.User) error {
 	return r.db.Create(&po).Error
 }
 
-// NewPostgresUserRepo 實例化 Repo
-func NewPostgresUserRepo(db *gorm.DB) *PostgresUserRepo {
-	return &PostgresUserRepo{db: db}
-}
-
 // FindByEmail 實現了 domain.UserRepository 介面
-func (r *PostgresUserRepo) FindByEmail(email string) (*domain.User, error) {
+func (r *GormUserRepo) FindByEmail(email string) (*domain.User, error) {
 	var po UserPO
 
-	// 使用 GORM 查詢資料庫
 	err := r.db.Where("email = ?", email).First(&po).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("user not found") // 轉換為業務層理解的錯誤
+			return nil, errors.New("user not found")
 		}
 		return nil, err
 	}
 
-	// 【關鍵點】將資料庫模型 (UserPO) 恢復為領域層的聚合根 (domain.User)
 	return domain.ReconstituteUserWithRole(po.ID, po.Email, po.PasswordHash, po.Status, po.Role), nil
 }

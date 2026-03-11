@@ -19,11 +19,17 @@ const (
 
 // ResourcePool represents a named group of nodes that share capacity.
 // It IS a persisted entity with its own identity.
+//
+// A ResourcePool also serves as a customer-facing "product line" — e.g.
+// "Frankfurt – CDN77 Optimized" or "New York – Standard". The description
+// and sortOrder fields control how it appears in the public catalog.
 type ResourcePool struct {
-	id       string
-	name     string
-	regionID string // FK to Region — the geographic region this pool covers
-	status   string
+	id          string
+	name        string
+	regionID    string // FK to Region — the geographic region this pool covers
+	status      string
+	description string // customer-visible description (e.g. "Premium CDN77+GSL transit")
+	sortOrder   int    // display order in the public catalog
 
 	// nodes are loaded lazily when building the capacity view.
 	// They are NOT part of the persisted fields — they come from HostNode.resourcePoolID.
@@ -48,26 +54,32 @@ func NewResourcePool(id, name, regionID string) (*ResourcePool, error) {
 	}, nil
 }
 
-func ReconstituteResourcePool(id, name, regionID, status string) *ResourcePool {
+func ReconstituteResourcePool(id, name, regionID, status, description string, sortOrder int) *ResourcePool {
 	return &ResourcePool{
-		id:       id,
-		name:     name,
-		regionID: regionID,
-		status:   status,
+		id:          id,
+		name:        name,
+		regionID:    regionID,
+		status:      status,
+		description: description,
+		sortOrder:   sortOrder,
 	}
 }
 
-func (p *ResourcePool) ID() string         { return p.id }
-func (p *ResourcePool) Name() string       { return p.name }
-func (p *ResourcePool) RegionID() string   { return p.regionID }
-func (p *ResourcePool) Status() string     { return p.status }
-func (p *ResourcePool) Nodes() []*HostNode { return p.nodes }
+func (p *ResourcePool) ID() string          { return p.id }
+func (p *ResourcePool) Name() string        { return p.name }
+func (p *ResourcePool) RegionID() string    { return p.regionID }
+func (p *ResourcePool) Status() string      { return p.status }
+func (p *ResourcePool) Description() string { return p.description }
+func (p *ResourcePool) SortOrder() int      { return p.sortOrder }
+func (p *ResourcePool) Nodes() []*HostNode  { return p.nodes }
 
-func (p *ResourcePool) SetName(name string)   { p.name = name }
-func (p *ResourcePool) SetRegionID(id string) { p.regionID = id }
-func (p *ResourcePool) Activate()             { p.status = PoolStatusActive }
-func (p *ResourcePool) Deactivate()           { p.status = PoolStatusInactive }
-func (p *ResourcePool) IsActive() bool        { return p.status == PoolStatusActive }
+func (p *ResourcePool) SetName(name string)          { p.name = name }
+func (p *ResourcePool) SetRegionID(id string)        { p.regionID = id }
+func (p *ResourcePool) SetDescription(desc string)   { p.description = desc }
+func (p *ResourcePool) SetSortOrder(order int)       { p.sortOrder = order }
+func (p *ResourcePool) Activate()                    { p.status = PoolStatusActive }
+func (p *ResourcePool) Deactivate()                  { p.status = PoolStatusInactive }
+func (p *ResourcePool) IsActive() bool               { return p.status == PoolStatusActive }
 
 // WithNodes attaches nodes to the pool for capacity computation.
 // The nodes are NOT persisted here — they reference the pool via HostNode.resourcePoolID.

@@ -2,6 +2,9 @@ package app
 
 import (
 	"backend-core/internal/identity/domain"
+	"errors"
+
+	"github.com/google/uuid"
 )
 
 // 依赖的外部服务接口 (由基础设施层实现)
@@ -47,20 +50,25 @@ func (app *AuthAppService) Login(email, plainPassword string) (string, string, e
 }
 
 func (app *AuthAppService) RegisterUser(email, plainPassword string) (string, error) {
-	// 1. 生成密码哈希
+	// 1. 检查邮箱是否已被注册
+	if _, err := app.repo.FindByEmail(email); err == nil {
+		return "", errors.New("该邮箱已被注册")
+	}
+
+	// 2. 生成密码哈希
 	hash, err := app.hasher.Hash(plainPassword)
 	if err != nil {
 		return "", err
 	}
 
-	// 2. 创建新用户实体（这里简化了 ID 和状态的生成）
-	newUser := domain.ReconstituteUser("generated-id", email, hash, "active")
+	// 3. 生成全局唯一 UUID 作为用户 ID
+	newUser := domain.ReconstituteUser(uuid.New().String(), email, hash, "active")
 
-	// 3. 保存用户到数据库（需要在 UserRepository 中实现 Save 方法）
+	// 4. 保存用户到数据库
 	if err := app.repo.Save(newUser); err != nil {
 		return "", err
 	}
 
-	// 4. 生成并返回 Token
+	// 5. 生成并返回 Token
 	return app.token.Generate(newUser)
 }

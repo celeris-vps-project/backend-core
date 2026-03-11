@@ -84,11 +84,13 @@ func (InstancePO) TableName() string { return "instances" }
 
 // ---- Instance Repository ----
 
-type SqliteInstanceRepo struct{ db *gorm.DB }
+// GormInstanceRepo implements domain.InstanceRepository using GORM.
+// It is driver-agnostic: works with SQLite, PostgreSQL, or any GORM-supported database.
+type GormInstanceRepo struct{ db *gorm.DB }
 
-func NewSqliteInstanceRepo(db *gorm.DB) *SqliteInstanceRepo { return &SqliteInstanceRepo{db: db} }
+func NewGormInstanceRepo(db *gorm.DB) *GormInstanceRepo { return &GormInstanceRepo{db: db} }
 
-func (r *SqliteInstanceRepo) GetByID(id string) (*domain.Instance, error) {
+func (r *GormInstanceRepo) GetByID(id string) (*domain.Instance, error) {
 	var po InstancePO
 	if err := r.db.Where("id = ?", id).First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -99,7 +101,7 @@ func (r *SqliteInstanceRepo) GetByID(id string) (*domain.Instance, error) {
 	return instanceToDomain(po), nil
 }
 
-func (r *SqliteInstanceRepo) ListByCustomerID(customerID string) ([]*domain.Instance, error) {
+func (r *GormInstanceRepo) ListByCustomerID(customerID string) ([]*domain.Instance, error) {
 	var pos []InstancePO
 	if err := r.db.Where("customer_id = ?", customerID).Find(&pos).Error; err != nil {
 		return nil, err
@@ -111,7 +113,7 @@ func (r *SqliteInstanceRepo) ListByCustomerID(customerID string) ([]*domain.Inst
 	return insts, nil
 }
 
-func (r *SqliteInstanceRepo) ListByNodeID(nodeID string) ([]*domain.Instance, error) {
+func (r *GormInstanceRepo) ListByNodeID(nodeID string) ([]*domain.Instance, error) {
 	var pos []InstancePO
 	if err := r.db.Where("node_id = ?", nodeID).Find(&pos).Error; err != nil {
 		return nil, err
@@ -123,7 +125,7 @@ func (r *SqliteInstanceRepo) ListByNodeID(nodeID string) ([]*domain.Instance, er
 	return insts, nil
 }
 
-func (r *SqliteInstanceRepo) Save(inst *domain.Instance) error {
+func (r *GormInstanceRepo) Save(inst *domain.Instance) error {
 	po := instanceFromDomain(inst)
 	return r.db.Save(&po).Error
 }

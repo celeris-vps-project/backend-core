@@ -94,7 +94,7 @@ func TestProductApp_PurchasePublishesEvent(t *testing.T) {
 	svc := NewProductAppService(repo, staticIDGen{id: "prod-1"}, bus, nil)
 
 	// Create a product with 5 commercial slots
-	p, err := svc.CreateProduct("VPS Starter", "vps-starter", "DE-fra", "", "region-de", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 5)
+	p, err := svc.CreateProduct("VPS Starter", "vps-starter", "DE-fra", "region-de", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestProductApp_PurchaseFailsWhenOutOfStock(t *testing.T) {
 	bus := eventbus.New()
 	svc := NewProductAppService(repo, staticIDGen{id: "prod-2"}, bus, nil)
 
-	p, _ := svc.CreateProduct("VPS Tiny", "vps-tiny", "US-nyc", "", "", "", 1, 512, 10, 500, 299, "USD", domain.BillingMonthly, 1)
+	p, _ := svc.CreateProduct("VPS Tiny", "vps-tiny", "US-nyc", "", "", 1, 512, 10, 500, 299, "USD", domain.BillingMonthly, 1)
 
 	// Purchase once — should succeed
 	if _, err := svc.PurchaseProduct(p.ID(), "cust-1", "ord-1", "h1", "ubuntu"); err != nil {
@@ -164,7 +164,7 @@ func TestProductApp_PurchaseFailsWhenDisabled(t *testing.T) {
 	bus := eventbus.New()
 	svc := NewProductAppService(repo, staticIDGen{id: "prod-3"}, bus, nil)
 
-	p, _ := svc.CreateProduct("VPS Off", "vps-off", "DE-fra", "", "", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 10)
+	p, _ := svc.CreateProduct("VPS Off", "vps-off", "DE-fra", "", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 10)
 	_ = svc.DisableProduct(p.ID())
 
 	if _, err := svc.PurchaseProduct(p.ID(), "cust-1", "ord-1", "h1", "ubuntu"); err == nil {
@@ -178,7 +178,7 @@ func TestProductApp_AdjustStock_NormalSave(t *testing.T) {
 	checker := &stubCapacityChecker{slots: map[string]int{"region-de": 50}}
 	svc := NewProductAppService(repo, staticIDGen{id: "prod-4"}, bus, checker)
 
-	p, _ := svc.CreateProduct("VPS Stock", "vps-stock", "DE-fra", "", "region-de", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 10)
+	p, _ := svc.CreateProduct("VPS Stock", "vps-stock", "DE-fra", "region-de", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 10)
 
 	// Adjust to 30 — under physical capacity of 50 → no warning
 	result, err := svc.AdjustStock(p.ID(), 30, false)
@@ -199,7 +199,7 @@ func TestProductApp_AdjustStock_WarningWhenExceedsPhysical(t *testing.T) {
 	checker := &stubCapacityChecker{slots: map[string]int{"region-de": 10}}
 	svc := NewProductAppService(repo, staticIDGen{id: "prod-5"}, bus, checker)
 
-	p, _ := svc.CreateProduct("VPS Over", "vps-over", "DE-fra", "", "region-de", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 5)
+	p, _ := svc.CreateProduct("VPS Over", "vps-over", "DE-fra", "region-de", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 5)
 
 	// Adjust to 50 — exceeds physical capacity of 10 → warning, not saved (confirmed=false)
 	result, err := svc.AdjustStock(p.ID(), 50, false)
@@ -238,7 +238,7 @@ func TestProductApp_SetRegion(t *testing.T) {
 	bus := eventbus.New()
 	svc := NewProductAppService(repo, staticIDGen{id: "prod-6"}, bus, nil)
 
-	p, _ := svc.CreateProduct("VPS Region", "vps-region", "DE-fra", "", "", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 10)
+	p, _ := svc.CreateProduct("VPS Region", "vps-region", "DE-fra", "", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 10)
 
 	if err := svc.SetRegion(p.ID(), "region-de-fra"); err != nil {
 		t.Fatalf("unexpected error: %v", err)

@@ -3,20 +3,29 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 // Config holds the API server's runtime configuration.
 type Config struct {
-	Database DatabaseConfig `json:"database" yaml:"database"`
-	JWT      JWTConfig      `json:"jwt" yaml:"jwt"`
-	GRPC     GRPCConfig     `json:"grpc" yaml:"grpc"`
+	Database  DatabaseConfig  `json:"database" yaml:"database"`
+	JWT       JWTConfig       `json:"jwt" yaml:"jwt"`
+	GRPC      GRPCConfig      `json:"grpc" yaml:"grpc"`
+	RateLimit RateLimitConfig `json:"rate_limit" yaml:"rate_limit"`
 }
 
 // DatabaseConfig holds database connection settings.
 type DatabaseConfig struct {
-	DSN string `json:"dsn" yaml:"dsn"` // e.g. "data.db" for SQLite
+	Driver string `json:"driver" yaml:"driver"` // "sqlite" (default) or "postgres"
+	DSN    string `json:"dsn" yaml:"dsn"`       // e.g. "data.db" for SQLite, or PG connection string
+
+	// PostgreSQL connection pool settings (ignored for SQLite).
+	MaxOpenConns    int           `json:"max_open_conns" yaml:"max_open_conns"`         // default: 25
+	MaxIdleConns    int           `json:"max_idle_conns" yaml:"max_idle_conns"`         // default: 10
+	ConnMaxLifetime time.Duration `json:"conn_max_lifetime" yaml:"conn_max_lifetime"`   // default: 5m
+	ConnMaxIdleTime time.Duration `json:"conn_max_idle_time" yaml:"conn_max_idle_time"` // default: 3m
 }
 
 // JWTConfig holds JWT signing settings.
@@ -30,11 +39,73 @@ type GRPCConfig struct {
 	Listen string `json:"listen" yaml:"listen"` // e.g. ":50051"
 }
 
+// RateLimitTier holds rate limit settings for a specific tier of endpoints.
+type RateLimitTier struct {
+	// GlobalQPS is the maximum requests per second allowed across ALL clients
+	// hitting endpoints in this tier. 0 means unlimited.
+	GlobalQPS float64 `json:"global_qps" yaml:"global_qps"`
+
+	// IPMaxQPS is the maximum requests per second allowed per unique client IP.
+	// 0 means unlimited.
+	IPMaxQPS float64 `json:"ip_max_qps" yaml:"ip_max_qps"`
+}
+
+// RateLimitConfig holds tiered token-bucket rate limiting settings.
+//
+// Each tier represents a group of endpoints with similar traffic patterns
+// and protection requirements:
+//
+//   - Baseline: a safety-net global limiter applied to ALL endpoints (very
+//     permissive). Prevents total resource exhaustion even on unclassified
+//     routes. Set GlobalQPS=0 to disable the baseline entirely.
+//
+//   - Critical: high-traffic read endpoints (product catalog, groups, regions).
+//     Higher global QPS to handle legitimate traffic; moderate per-IP to block
+//     crawlers and scrapers.
+//
+//   - Checkout: purchase/payment write endpoints that involve inventory or
+//     funds. Strict per-IP limiting to prevent automated abuse.
+//
+//   - Auth: login and registration endpoints. Very strict per-IP to block
+//     brute-force and credential-stuffing attacks.
+//
+//   - Standard: general authenticated business endpoints (orders, invoices,
+//     instances CRUD). Moderate protection.
+//
+//   - Admin: admin-only endpoints already protected by RBAC. Relaxed limits.
+type RateLimitConfig struct {
+	// Baseline is a loose global safety-net applied to ALL endpoints.
+	// It should be very permissive (e.g. 5000 QPS global) — it only
+	// fires if something truly anomalous is happening.
+	Baseline RateLimitTier `json:"baseline" yaml:"baseline"`
+
+	// Critical — public catalog GET endpoints (products, groups, regions,
+	// resource-pools). High throughput allowed, moderate per-IP.
+	Critical RateLimitTier `json:"critical" yaml:"critical"`
+
+	// Checkout — POST /checkout, POST /products/purchase, POST /orders/:id/pay.
+	// Strict per-IP to prevent automated purchase abuse.
+	Checkout RateLimitTier `json:"checkout" yaml:"checkout"`
+
+	// Auth — POST /auth/login, POST /auth/register.
+	// Very strict per-IP to prevent brute-force attacks.
+	Auth RateLimitTier `json:"auth" yaml:"auth"`
+
+	// Standard — general authenticated endpoints (invoices, orders, instances).
+	// Moderate protection for normal business operations.
+	Standard RateLimitTier `json:"standard" yaml:"standard"`
+
+	// Admin — admin-only endpoints. Already protected by RBAC middleware,
+	// so rate limiting is relaxed.
+	Admin RateLimitTier `json:"admin" yaml:"admin"`
+}
+
 // DefaultConfig returns sensible defaults for development.
 func DefaultConfig() Config {
 	return Config{
 		Database: DatabaseConfig{
-			DSN: "data.db",
+			Driver: "sqlite",
+			DSN:    "data.db",
 		},
 		JWT: JWTConfig{
 			Secret: "my-super-secret-key",
@@ -42,6 +113,14 @@ func DefaultConfig() Config {
 		},
 		GRPC: GRPCConfig{
 			Listen: ":50051",
+		},
+		RateLimit: RateLimitConfig{
+			Baseline: RateLimitTier{GlobalQPS: 5000, IPMaxQPS: 50},
+			Critical: RateLimitTier{GlobalQPS: 2000, IPMaxQPS: 30},
+			Checkout: RateLimitTier{GlobalQPS: 1000, IPMaxQPS: 5},
+			Auth:     RateLimitTier{GlobalQPS: 500, IPMaxQPS: 3},
+			Standard: RateLimitTier{GlobalQPS: 1000, IPMaxQPS: 15},
+			Admin:    RateLimitTier{GlobalQPS: 0, IPMaxQPS: 20},
 		},
 	}
 }

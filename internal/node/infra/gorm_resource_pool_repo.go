@@ -10,24 +10,28 @@ import (
 // ---- Persistence Object ----
 
 type ResourcePoolPO struct {
-	ID       string       `gorm:"primaryKey;column:id"`
-	Name     string       `gorm:"column:name"`
-	RegionID string       `gorm:"index;column:region_id"`
-	Status   string       `gorm:"column:status"`
-	Nodes    []HostNodePO `gorm:"foreignKey:ResourcePoolID;references:ID"`
+	ID          string       `gorm:"primaryKey;column:id"`
+	Name        string       `gorm:"column:name"`
+	RegionID    string       `gorm:"index;column:region_id"`
+	Status      string       `gorm:"column:status"`
+	Description string       `gorm:"column:description"`
+	SortOrder   int          `gorm:"column:sort_order;default:0"`
+	Nodes       []HostNodePO `gorm:"foreignKey:ResourcePoolID;references:ID"`
 }
 
 func (ResourcePoolPO) TableName() string { return "resource_pools" }
 
 // ---- Repository ----
 
-type SqliteResourcePoolRepo struct{ db *gorm.DB }
+// GormResourcePoolRepo implements domain.ResourcePoolRepository using GORM.
+// It is driver-agnostic: works with SQLite, PostgreSQL, or any GORM-supported database.
+type GormResourcePoolRepo struct{ db *gorm.DB }
 
-func NewSqliteResourcePoolRepo(db *gorm.DB) *SqliteResourcePoolRepo {
-	return &SqliteResourcePoolRepo{db: db}
+func NewGormResourcePoolRepo(db *gorm.DB) *GormResourcePoolRepo {
+	return &GormResourcePoolRepo{db: db}
 }
 
-func (r *SqliteResourcePoolRepo) GetByID(id string) (*domain.ResourcePool, error) {
+func (r *GormResourcePoolRepo) GetByID(id string) (*domain.ResourcePool, error) {
 	var po ResourcePoolPO
 	if err := r.db.Where("id = ?", id).First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -38,7 +42,7 @@ func (r *SqliteResourcePoolRepo) GetByID(id string) (*domain.ResourcePool, error
 	return poolToDomain(po), nil
 }
 
-func (r *SqliteResourcePoolRepo) GetByRegionID(regionID string) ([]*domain.ResourcePool, error) {
+func (r *GormResourcePoolRepo) GetByRegionID(regionID string) ([]*domain.ResourcePool, error) {
 	var pos []ResourcePoolPO
 	if err := r.db.Where("region_id = ?", regionID).Find(&pos).Error; err != nil {
 		return nil, err
@@ -46,7 +50,7 @@ func (r *SqliteResourcePoolRepo) GetByRegionID(regionID string) ([]*domain.Resou
 	return poolsToSlice(pos), nil
 }
 
-func (r *SqliteResourcePoolRepo) ListAll() ([]*domain.ResourcePool, error) {
+func (r *GormResourcePoolRepo) ListAll() ([]*domain.ResourcePool, error) {
 	var pos []ResourcePoolPO
 	if err := r.db.Find(&pos).Error; err != nil {
 		return nil, err
@@ -54,7 +58,7 @@ func (r *SqliteResourcePoolRepo) ListAll() ([]*domain.ResourcePool, error) {
 	return poolsToSlice(pos), nil
 }
 
-func (r *SqliteResourcePoolRepo) ListActive() ([]*domain.ResourcePool, error) {
+func (r *GormResourcePoolRepo) ListActive() ([]*domain.ResourcePool, error) {
 	var pos []ResourcePoolPO
 	if err := r.db.Where("status = ?", domain.PoolStatusActive).Find(&pos).Error; err != nil {
 		return nil, err
@@ -62,27 +66,29 @@ func (r *SqliteResourcePoolRepo) ListActive() ([]*domain.ResourcePool, error) {
 	return poolsToSlice(pos), nil
 }
 
-func (r *SqliteResourcePoolRepo) Save(pool *domain.ResourcePool) error {
+func (r *GormResourcePoolRepo) Save(pool *domain.ResourcePool) error {
 	po := poolFromDomain(pool)
 	return r.db.Save(&po).Error
 }
 
-func (r *SqliteResourcePoolRepo) Delete(id string) error {
+func (r *GormResourcePoolRepo) Delete(id string) error {
 	return r.db.Where("id = ?", id).Delete(&ResourcePoolPO{}).Error
 }
 
 // ---- Mapping helpers ----
 
 func poolToDomain(po ResourcePoolPO) *domain.ResourcePool {
-	return domain.ReconstituteResourcePool(po.ID, po.Name, po.RegionID, po.Status)
+	return domain.ReconstituteResourcePool(po.ID, po.Name, po.RegionID, po.Status, po.Description, po.SortOrder)
 }
 
 func poolFromDomain(p *domain.ResourcePool) ResourcePoolPO {
 	return ResourcePoolPO{
-		ID:       p.ID(),
-		Name:     p.Name(),
-		RegionID: p.RegionID(),
-		Status:   p.Status(),
+		ID:          p.ID(),
+		Name:        p.Name(),
+		RegionID:    p.RegionID(),
+		Status:      p.Status(),
+		Description: p.Description(),
+		SortOrder:   p.SortOrder(),
 	}
 }
 

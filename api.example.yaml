@@ -15,3 +15,34 @@ grpc:
 # the admin API: POST /admin/bootstrap-tokens) and permanent node tokens
 # issued during registration. The old static agent.secret is no longer used.
 
+# ── Tiered Rate Limiting ────────────────────────────────────────────────
+# Each tier has independent global QPS (total throughput cap for this tier)
+# and per-IP QPS (per-client fairness). Set to 0 to disable that layer.
+#
+# Tier assignment:
+#   baseline  → ALL endpoints (loose safety net, fires only under extreme load)
+#   critical  → public catalog GET: /products, /groups, /regions, /resource-pools, /nodes
+#   checkout  → purchase/payment writes: /checkout, /products/purchase, /orders/:id/pay
+#   auth      → login/register: /auth/login, /auth/register
+#   standard  → general authenticated: /invoices, /orders, /instances, /me, etc.
+#   admin     → /admin/* (RBAC-protected, relaxed)
+#   (none)    → agent + webhook endpoints are NOT rate-limited
+rate_limit:
+  baseline:
+    global_qps: 5000
+    ip_max_qps: 50
+  critical:
+    global_qps: 2000
+    ip_max_qps: 30
+  checkout:
+    global_qps: 1000
+    ip_max_qps: 5
+  auth:
+    global_qps: 500
+    ip_max_qps: 3
+  standard:
+    global_qps: 1000
+    ip_max_qps: 15
+  admin:
+    global_qps: 0          # no global cap for admin (RBAC is the real gate)
+    ip_max_qps: 20

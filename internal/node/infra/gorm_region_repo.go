@@ -22,13 +22,15 @@ func (RegionPO) TableName() string { return "regions" }
 
 // ---- Repository ----
 
-type SqliteRegionRepo struct{ db *gorm.DB }
+// GormRegionRepo implements domain.RegionRepository using GORM.
+// It is driver-agnostic: works with SQLite, PostgreSQL, or any GORM-supported database.
+type GormRegionRepo struct{ db *gorm.DB }
 
-func NewSqliteRegionRepo(db *gorm.DB) *SqliteRegionRepo {
-	return &SqliteRegionRepo{db: db}
+func NewGormRegionRepo(db *gorm.DB) *GormRegionRepo {
+	return &GormRegionRepo{db: db}
 }
 
-func (r *SqliteRegionRepo) GetByID(id string) (*domain.Region, error) {
+func (r *GormRegionRepo) GetByID(id string) (*domain.Region, error) {
 	var po RegionPO
 	if err := r.db.Where("id = ?", id).First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -39,7 +41,7 @@ func (r *SqliteRegionRepo) GetByID(id string) (*domain.Region, error) {
 	return regionToDomain(po), nil
 }
 
-func (r *SqliteRegionRepo) GetByCode(code string) (*domain.Region, error) {
+func (r *GormRegionRepo) GetByCode(code string) (*domain.Region, error) {
 	var po RegionPO
 	if err := r.db.Where("code = ?", code).First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -50,7 +52,7 @@ func (r *SqliteRegionRepo) GetByCode(code string) (*domain.Region, error) {
 	return regionToDomain(po), nil
 }
 
-func (r *SqliteRegionRepo) ListAll() ([]*domain.Region, error) {
+func (r *GormRegionRepo) ListAll() ([]*domain.Region, error) {
 	var pos []RegionPO
 	if err := r.db.Find(&pos).Error; err != nil {
 		return nil, err
@@ -58,7 +60,7 @@ func (r *SqliteRegionRepo) ListAll() ([]*domain.Region, error) {
 	return regionsToSlice(pos), nil
 }
 
-func (r *SqliteRegionRepo) ListActive() ([]*domain.Region, error) {
+func (r *GormRegionRepo) ListActive() ([]*domain.Region, error) {
 	var pos []RegionPO
 	if err := r.db.Where("status = ?", domain.RegionStatusActive).Find(&pos).Error; err != nil {
 		return nil, err
@@ -66,7 +68,7 @@ func (r *SqliteRegionRepo) ListActive() ([]*domain.Region, error) {
 	return regionsToSlice(pos), nil
 }
 
-func (r *SqliteRegionRepo) Save(region *domain.Region) error {
+func (r *GormRegionRepo) Save(region *domain.Region) error {
 	po := regionFromDomain(region)
 	return r.db.Save(&po).Error
 }

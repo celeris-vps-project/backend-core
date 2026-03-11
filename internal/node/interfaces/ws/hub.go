@@ -4,6 +4,7 @@
 package ws
 
 import (
+	"backend-core/pkg/authn"
 	"backend-core/pkg/eventbus"
 	"backend-core/pkg/events"
 	"context"
@@ -51,10 +52,14 @@ func NewHub() *Hub {
 // for WebSocket authentication. It must be called behind AdminMiddleware so
 // that current_user_id and current_user_role are already set in the context.
 func (h *Hub) IssueTicket(_ context.Context, c *app.RequestContext) {
-	userID, _ := c.Get("current_user_id")
-	role, _ := c.Get("current_user_role")
+	uid, ok := authn.UserID(c)
+	if !ok {
+		c.JSON(consts.StatusUnauthorized, utils.H{"error": "unauthorized"})
+		return
+	}
+	role, _ := authn.UserRole(c)
 
-	ticket, err := h.tickets.Issue(userID.(string), role.(string))
+	ticket, err := h.tickets.Issue(uid.String(), role)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, utils.H{"error": "failed to issue ticket"})
 		return

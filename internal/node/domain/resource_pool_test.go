@@ -15,7 +15,7 @@ func makeTestNode(id, code string, totalSlots, usedSlots int, enabled bool) *Hos
 }
 
 func makeTestPool(nodes []*HostNode) *ResourcePool {
-	pool := ReconstituteResourcePool("pool-1", "Frankfurt Pool", "region-1", PoolStatusActive)
+	pool := ReconstituteResourcePool("pool-1", "Frankfurt Pool", "region-1", PoolStatusActive, "Premium CDN77 transit", 0)
 	pool.WithNodes(nodes)
 	return pool
 }

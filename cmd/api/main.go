@@ -5,6 +5,9 @@ import (
 	billingApp "backend-core/internal/billing/app"
 	billingInfra "backend-core/internal/billing/infra"
 	billingHttp "backend-core/internal/billing/interfaces/http"
+	checkoutAppPkg "backend-core/internal/checkout/app"
+	checkoutInfra "backend-core/internal/checkout/infra"
+	checkoutHttp "backend-core/internal/checkout/interfaces/http"
 	"backend-core/internal/identity/app"
 	"backend-core/internal/identity/infra"
 	"backend-core/internal/identity/interfaces/http/middleware"
@@ -26,8 +29,12 @@ import (
 	productApp "backend-core/internal/product/app"
 	productInfra "backend-core/internal/product/infra"
 	productHttp "backend-core/internal/product/interfaces/http"
+	"backend-core/pkg/adaptive"
 	"backend-core/pkg/agentpb"
+	"backend-core/pkg/database"
 	"backend-core/pkg/eventbus"
+	"backend-core/pkg/perf"
+	"backend-core/pkg/ratelimit"
 	"context"
 	"flag"
 	"log"
@@ -38,11 +45,9 @@ import (
 	identityHttp "backend-core/internal/identity/interfaces/http"
 
 	"github.com/cloudwego/hertz/pkg/app/server"
-	"github.com/glebarez/sqlite"
 	"github.com/hertz-contrib/cors"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc"
-	"gorm.io/gorm"
 )
 
 func main() {
@@ -67,8 +72,8 @@ func main() {
 		cfg.GRPC.Listen = v
 	}
 
-	// 1. Connect to SQLite
-	db, err := gorm.Open(sqlite.Open(cfg.Database.DSN), &gorm.Config{})
+	// 1. Open database (SQLite or PostgreSQL, based on config)
+	db, err := database.Open(cfg.Database)
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
 	}
@@ -78,12 +83,12 @@ func main() {
 	db.AutoMigrate(&billingInfra.InvoicePO{}, &billingInfra.LineItemPO{})
 	db.AutoMigrate(&orderingInfra.OrderPO{})
 	db.AutoMigrate(&instanceInfra.InstancePO{})
-	db.AutoMigrate(&productInfra.ProductPO{}, &productInfra.GroupPO{})
+	db.AutoMigrate(&productInfra.ProductPO{})
 	db.AutoMigrate(&nodeInfra.RegionPO{}, &nodeInfra.HostNodePO{}, &nodeInfra.IPAddressPO{}, &nodeInfra.TaskPO{}, &nodeInfra.ResourcePoolPO{}, &nodeInfra.BootstrapTokenPO{})
 
 	// 2. Wire up infrastructure
 	pwdHasher := infra.NewBcryptPasswordService(bcrypt.DefaultCost)
-	userRepo := infra.NewSqliteUserRepo(db)
+	userRepo := infra.NewGormUserRepo(db)
 	jwtService := infra.NewJWTService(cfg.JWT.Secret, cfg.JWT.Issuer)
 
 	// 3. Wire up application layer
@@ -91,13 +96,13 @@ func main() {
 	authHandler := identityHttp.NewAuthHandler(authApp)
 
 	// Billing
-	invoiceRepo := billingInfra.NewSqliteInvoiceRepo(db)
+	invoiceRepo := billingInfra.NewGormInvoiceRepo(db)
 	idGen := billingInfra.NewUUIDGenerator()
 	invoiceApp := billingApp.NewInvoiceAppService(invoiceRepo, idGen, nil) // gateway = nil for now
 	invoiceHandler := billingHttp.NewInvoiceHandler(invoiceApp)
 
 	// Ordering
-	orderRepo := orderingInfra.NewSqliteOrderRepo(db)
+	orderRepo := orderingInfra.NewGormOrderRepo(db)
 	orderApp := orderingApp.NewOrderAppService(orderRepo, idGen, nil) // provisioning = nil for now
 	orderHandler := orderingHttp.NewOrderHandler(orderApp)
 
@@ -109,26 +114,27 @@ func main() {
 	bus := eventbus.New()
 
 	// Node (host machines, IP pools, agent tasks, resource pools, bootstrap tokens)
-	hostRepo := nodeInfra.NewSqliteHostNodeRepo(db)
-	ipRepo := nodeInfra.NewSqliteIPAddressRepo(db)
-	taskRepo := nodeInfra.NewSqliteTaskRepo(db)
-	regionRepo := nodeInfra.NewSqliteRegionRepo(db)
-	poolRepo := nodeInfra.NewSqliteResourcePoolRepo(db)
-	btRepo := nodeInfra.NewSqliteBootstrapTokenRepo(db)
+	hostRepo := nodeInfra.NewGormHostNodeRepo(db)
+	ipRepo := nodeInfra.NewGormIPAddressRepo(db)
+	taskRepo := nodeInfra.NewGormTaskRepo(db)
+	regionRepo := nodeInfra.NewGormRegionRepo(db)
+	poolRepo := nodeInfra.NewGormResourcePoolRepo(db)
+	btRepo := nodeInfra.NewGormBootstrapTokenRepo(db)
 	nodeStateCache := nodeInfra.NewMemoryNodeStateCache(60 * time.Second)
 	nApp := nodeApp.NewNodeAppService(hostRepo, ipRepo, taskRepo, regionRepo, poolRepo, btRepo, nodeStateCache, idGen, bus)
 	nHandler := nodeHttp.NewNodeHandler(nApp)
 
 	// Product (with event-driven provisioning & physical capacity checking)
-	prodRepo := productInfra.NewSqliteProductRepo(db)
+	// The singleflight decorator deduplicates concurrent identical DB reads,
+	// preventing thundering-herd on cache MISS during high-QPS traffic spikes.
+	gormProdRepo := productInfra.NewGormProductRepo(db)
+	prodRepo := productInfra.NewSingleflightProductRepo(gormProdRepo)
 	capacityChecker := productInfra.NewNodeCapacityAdapter(hostRepo)
 	prodApp := productApp.NewProductAppService(prodRepo, idGen, bus, capacityChecker)
 	prodHandler := productHttp.NewProductHandler(prodApp)
 
-	// Group (product categories)
-	groupRepo := productInfra.NewSqliteGroupRepo(db)
-	groupApp := productApp.NewGroupAppService(groupRepo, idGen)
-	groupHandler := productHttp.NewGroupHandler(groupApp)
+	// Product Line (customer-facing product browsing by resource pool)
+	productLineHandler := productHttp.NewProductLineHandler(prodApp, nApp)
 
 	// Provisioning Event Handler — Node domain listens to Product events
 	// When a ProductPurchasedEvent is published, this handler:
@@ -145,7 +151,7 @@ func main() {
 
 	// Instance (uses adapter to delegate node capacity to the node module)
 	nodeAllocatorRepo := instanceInfra.NewHostNodeAllocatorAdapter(hostRepo)
-	instRepo := instanceInfra.NewSqliteInstanceRepo(db)
+	instRepo := instanceInfra.NewGormInstanceRepo(db)
 
 	// Provisioning Bus — in-memory channel-based queue that throttles concurrent
 	// provisioning requests. The handler callback is a placeholder (mock log);
@@ -175,50 +181,141 @@ func main() {
 	// Region handler (using NodeAppService — RegionAppService removed)
 	rHandler := nodeHttp.NewRegionHandler(nApp)
 
+	// ── Unified Checkout Module ────────────────────────────────────────────
+	// Adaptive sync/async checkout that delegates to real product + ordering
+	// domains. Uses pkg/adaptive for QPS-based switching. This replaces the
+	// need for a separate flash-sale page — any product checkout benefits
+	// from automatic async downgrade under high load.
+	//
+	// Architecture:
+	//   POST /checkout → adaptive.Dispatcher → SyncProcessor (QPS < 500)
+	//                                        → AsyncProcessor (QPS >= 500)
+	//   SyncProcessor  → CheckoutAppService.Execute() → product.PurchaseProduct + ordering.CreateOrder → 200
+	//   AsyncProcessor → enqueue → background worker → CheckoutAppService.Execute() → 202
+	coStatusStore := checkoutInfra.NewOrderStatusStore()
+	coAppSvc := checkoutAppPkg.NewCheckoutAppService(prodApp, orderApp)
+	coSyncProc := checkoutInfra.NewSyncCheckoutProcessor(coAppSvc)
+	coAsyncProc := checkoutInfra.NewAsyncCheckoutProcessor(coAppSvc, coStatusStore)
+	coAsyncProc.Start(context.Background())
+	coQPSMonitor := adaptive.NewSlidingWindowQPSMonitor(10) // 10-second window
+	coDispatcher := adaptive.NewDispatcher(coSyncProc, coAsyncProc, coQPSMonitor, 500)
+	coHandler := checkoutHttp.NewCheckoutHandler(coDispatcher, coStatusStore)
+	log.Printf("[api] unified checkout module initialised (adaptive, threshold=500 QPS)")
+
+	// ── Adaptive Cache for Catalog Reads ───────────────────────────────────
+	// QPS-driven caching for public catalog GET endpoints (products, groups,
+	// regions, resource-pools, nodes). Under normal load, requests pass
+	// through to the DB for fresh data. Under high load (QPS >= threshold),
+	// responses are served from an in-memory cache with a short TTL.
+	//
+	// This protects the database during traffic spikes (flash sales,
+	// promotions) while ensuring fresh data under normal conditions.
+	catalogMonitor := adaptive.NewSlidingWindowQPSMonitor(10) // 10-second window
+	catalogCache := adaptive.CacheMiddleware(catalogMonitor, 200, 5*time.Second)
+	log.Printf("[api] adaptive catalog cache enabled (threshold=200 QPS, TTL=5s)")
+
+	// ── Performance Tracker ────────────────────────────────────────────────
+	// Global per-endpoint performance monitoring with sliding window metrics.
+	// The middleware records every request; the PerformanceHub broadcasts
+	// snapshots over WebSocket to the admin Performance dashboard.
+	perfTracker := perf.NewEndpointTracker(30)           // 30-second sliding window
+	perfHub := perf.NewPerformanceHub(perfTracker, 2, 5) // 2s interval, top 5
+	log.Printf("[api] performance tracker initialised (30s window, top-5 endpoints)")
+
+	// ── Tiered Rate Limiters (Token Bucket) ────────────────────────────────
+	// Instead of a single global rate limiter, we create separate limiters
+	// for different endpoint tiers based on their traffic patterns and
+	// security requirements:
+	//
+	//   Baseline  — loose safety-net on ALL endpoints (very permissive)
+	//   Critical  — public catalog reads (products, groups, regions)
+	//   Checkout  — purchase/payment writes (strict per-IP)
+	//   Auth      — login/register (very strict per-IP, anti brute-force)
+	//   Standard  — general authenticated business endpoints
+	//   Admin     — admin endpoints (RBAC-protected, relaxed limits)
+	//
+	// Agent and webhook endpoints are intentionally NOT rate-limited to avoid
+	// dropping heartbeats or payment callbacks.
+	rlCfg := cfg.RateLimit
+
+	// Baseline: applied globally as a loose safety net
+	var baselineRL *ratelimit.RateLimiter
+	if rlCfg.Baseline.GlobalQPS > 0 || rlCfg.Baseline.IPMaxQPS > 0 {
+		baselineRL = ratelimit.NewRateLimiter(rlCfg.Baseline.GlobalQPS, rlCfg.Baseline.IPMaxQPS)
+	}
+
+	// Per-tier middleware (each creates an independent limiter + middleware)
+	criticalRL := ratelimit.ForRoutes(rlCfg.Critical.GlobalQPS, rlCfg.Critical.IPMaxQPS)
+	checkoutRL := ratelimit.ForRoutes(rlCfg.Checkout.GlobalQPS, rlCfg.Checkout.IPMaxQPS)
+	authRL := ratelimit.ForRoutes(rlCfg.Auth.GlobalQPS, rlCfg.Auth.IPMaxQPS)
+	standardRL := ratelimit.ForRoutes(rlCfg.Standard.GlobalQPS, rlCfg.Standard.IPMaxQPS)
+	adminRL := ratelimit.ForRoutes(rlCfg.Admin.GlobalQPS, rlCfg.Admin.IPMaxQPS)
+
+	log.Printf("[api] tiered rate limiters enabled:")
+	log.Printf("[api]   baseline  = global %.0f QPS, per-IP %.0f QPS", rlCfg.Baseline.GlobalQPS, rlCfg.Baseline.IPMaxQPS)
+	log.Printf("[api]   critical  = global %.0f QPS, per-IP %.0f QPS", rlCfg.Critical.GlobalQPS, rlCfg.Critical.IPMaxQPS)
+	log.Printf("[api]   checkout  = global %.0f QPS, per-IP %.0f QPS", rlCfg.Checkout.GlobalQPS, rlCfg.Checkout.IPMaxQPS)
+	log.Printf("[api]   auth      = global %.0f QPS, per-IP %.0f QPS", rlCfg.Auth.GlobalQPS, rlCfg.Auth.IPMaxQPS)
+	log.Printf("[api]   standard  = global %.0f QPS, per-IP %.0f QPS", rlCfg.Standard.GlobalQPS, rlCfg.Standard.IPMaxQPS)
+	log.Printf("[api]   admin     = global %.0f QPS, per-IP %.0f QPS", rlCfg.Admin.GlobalQPS, rlCfg.Admin.IPMaxQPS)
+
 	// 4. 配置 Hertz 路由
 	h := server.Default()
+
+	// Baseline rate limiter — loose safety-net applied to ALL endpoints.
+	// This is intentionally very permissive; the real protection comes from
+	// the per-tier limiters applied at the route level below.
+	if baselineRL != nil {
+		h.Use(ratelimit.Middleware(baselineRL))
+	}
+
 	h.Use(cors.New(cors.Config{
 		AllowOrigins: []string{"*"},
 		AllowMethods: []string{"PUT", "PATCH", "POST", "GET", "DELETE"},
 		AllowHeaders: []string{"Origin", "Authorization", "Content-Type"},
 	}))
 
+	// Global performance tracking middleware — records every request
+	h.Use(perf.Middleware(perfTracker))
+
 	v1 := h.Group("/api/v1")
 	{
-		v1.POST("/auth/register", authHandler.Register)
-		v1.POST("/auth/login", authHandler.Login)
+		// ── Auth tier (strict per-IP: anti brute-force) ────────────────
+		v1.POST("/auth/register", authRL, authHandler.Register)
+		v1.POST("/auth/login", authRL, authHandler.Login)
 
-		// Public - browse available locations & nodes (served by node module)
-		v1.GET("/locations", nHandler.ListLocations)
-		v1.GET("/nodes", nHandler.ListHosts)
-		v1.GET("/nodes/:id", nHandler.GetHost)
+		// ── Critical tier + Adaptive Cache (user ordering flow) ────────
+		// Only products and groups are browsed by ordering users.
+		// Adaptive cache kicks in under high load (QPS >= 200):
+		//   criticalRL → catalogCache → handler
+		//
+		// Products (user browses & selects plans)
+		v1.GET("/products", criticalRL, catalogCache, prodHandler.List)
+		v1.GET("/products/:id", criticalRL, catalogCache, prodHandler.GetByID)
+		// Product lines (frontend instance creation flow — replaces groups)
+		v1.GET("/product-lines", criticalRL, catalogCache, productLineHandler.List)
 
-		// Public - product catalog
-		v1.GET("/products", prodHandler.List)
-		v1.GET("/products/:id", prodHandler.GetByID)
+		// ── Critical tier only (no adaptive cache) ─────────────────────
+		// These endpoints are admin-facing or low-traffic; rate-limited
+		// but no need for adaptive caching.
+		v1.GET("/regions", criticalRL, rHandler.ListRegions)
+		v1.GET("/regions/:id", criticalRL, rHandler.GetByID)
+		v1.GET("/resource-pools", criticalRL, nHandler.ListResourcePools)
+		v1.GET("/resource-pools/:id", criticalRL, nHandler.GetResourcePool)
+		v1.GET("/locations", criticalRL, nHandler.ListLocations)
+		v1.GET("/nodes", criticalRL, nHandler.ListHosts)
+		v1.GET("/nodes/:id", criticalRL, nHandler.GetHost)
+		v1.GET("/host-nodes", criticalRL, nHandler.ListHosts)
+		v1.GET("/host-nodes/:id", criticalRL, nHandler.GetHost)
 
-		// Public - host node info
-		v1.GET("/host-nodes", nHandler.ListHosts)
-		v1.GET("/host-nodes/:id", nHandler.GetHost)
-
-		// Public - regions (for frontend location dropdown)
-		v1.GET("/regions", rHandler.ListRegions)
-		v1.GET("/regions/:id", rHandler.GetByID)
-
-		// Public - resource pool capacity (shows physical capacity per pool)
-		v1.GET("/resource-pools", nHandler.ListResourcePools)
-		v1.GET("/resource-pools/:id", nHandler.GetResourcePool)
-
-		// Public - product groups (for frontend instance creation flow)
-		v1.GET("/groups", groupHandler.List)
-		v1.GET("/groups/:id", groupHandler.GetByID)
-
-		// Agent endpoints (authenticated by shared secret, not JWT)
+		// ── No rate limit: Agent endpoints (internal service-to-service) ──
+		// Heartbeat / task result loss would cause operational issues.
 		v1.POST("/agent/register", nHandler.AgentRegister)
 		v1.POST("/agent/heartbeat", nHandler.AgentHeartbeat)
 		v1.POST("/agent/tasks/result", nHandler.AgentTaskResult)
 
-		// Payment webhook — called by payment gateway (public, no JWT)
+		// ── No rate limit: Payment webhook (gateway callback) ────────────
+		// Dropping a payment callback could leave orders in limbo.
 		v1.POST("/payments/webhook", payHandler.Webhook)
 		v1.POST("/payments/webhook/simulate", payHandler.SimulateWebhook)
 	}
@@ -227,73 +324,81 @@ func main() {
 	privateAPI := h.Group("/api/v1")
 	privateAPI.Use(middleware.JWTAuthMiddleware(jwtService))
 	{
-		// User profile (returns user_id + role)
-		privateAPI.GET("/me", authHandler.Me)
+		// ── Standard tier (general authenticated business endpoints) ────
+		// User profile
+		privateAPI.GET("/me", standardRL, authHandler.Me)
 
 		// Billing - Invoice routes
-		privateAPI.POST("/invoices", invoiceHandler.Create)
-		privateAPI.GET("/invoices", invoiceHandler.ListByCustomer)
-		privateAPI.GET("/invoices/:id", invoiceHandler.GetByID)
-		privateAPI.POST("/invoices/:id/line-items", invoiceHandler.AddLineItem)
-		privateAPI.PUT("/invoices/:id/tax", invoiceHandler.SetTax)
-		privateAPI.POST("/invoices/:id/issue", invoiceHandler.Issue)
-		privateAPI.POST("/invoices/:id/payments", invoiceHandler.RecordPayment)
-		privateAPI.POST("/invoices/:id/void", invoiceHandler.Void)
+		privateAPI.POST("/invoices", standardRL, invoiceHandler.Create)
+		privateAPI.GET("/invoices", standardRL, invoiceHandler.ListByCustomer)
+		privateAPI.GET("/invoices/:id", standardRL, invoiceHandler.GetByID)
+		privateAPI.POST("/invoices/:id/line-items", standardRL, invoiceHandler.AddLineItem)
+		privateAPI.PUT("/invoices/:id/tax", standardRL, invoiceHandler.SetTax)
+		privateAPI.POST("/invoices/:id/issue", standardRL, invoiceHandler.Issue)
+		privateAPI.POST("/invoices/:id/payments", standardRL, invoiceHandler.RecordPayment)
+		privateAPI.POST("/invoices/:id/void", standardRL, invoiceHandler.Void)
 
 		// Ordering - Order routes
-		privateAPI.POST("/orders", orderHandler.Create)
-		privateAPI.GET("/orders", orderHandler.ListByCustomer)
-		privateAPI.GET("/orders/:id", orderHandler.GetByID)
-		privateAPI.POST("/orders/:id/activate", orderHandler.Activate)
-		privateAPI.POST("/orders/:id/suspend", orderHandler.Suspend)
-		privateAPI.POST("/orders/:id/unsuspend", orderHandler.Unsuspend)
-		privateAPI.POST("/orders/:id/cancel", orderHandler.Cancel)
-		privateAPI.POST("/orders/:id/terminate", orderHandler.Terminate)
+		privateAPI.POST("/orders", standardRL, orderHandler.Create)
+		privateAPI.GET("/orders", standardRL, orderHandler.ListByCustomer)
+		privateAPI.GET("/orders/:id", standardRL, orderHandler.GetByID)
+		privateAPI.POST("/orders/:id/activate", standardRL, orderHandler.Activate)
+		privateAPI.POST("/orders/:id/suspend", standardRL, orderHandler.Suspend)
+		privateAPI.POST("/orders/:id/unsuspend", standardRL, orderHandler.Unsuspend)
+		privateAPI.POST("/orders/:id/cancel", standardRL, orderHandler.Cancel)
+		privateAPI.POST("/orders/:id/terminate", standardRL, orderHandler.Terminate)
 
-		// Payment — MVP flow: pay → activate order → purchase product → provision
-		privateAPI.POST("/orders/:id/pay", payHandler.Pay)
+		// ── Checkout tier (strict per-IP: purchase/payment writes) ─────
+		// Payment — MVP flow
+		privateAPI.POST("/orders/:id/pay", checkoutRL, payHandler.Pay)
 
 		// Node admin routes (served by node module)
-		privateAPI.POST("/nodes", nHandler.CreateHost)
-		privateAPI.POST("/nodes/:id/enable", nHandler.EnableHost)
-		privateAPI.POST("/nodes/:id/disable", nHandler.DisableHost)
+		privateAPI.POST("/nodes", standardRL, nHandler.CreateHost)
+		privateAPI.POST("/nodes/:id/enable", standardRL, nHandler.EnableHost)
+		privateAPI.POST("/nodes/:id/disable", standardRL, nHandler.DisableHost)
 
 		// Instance - Customer routes
-		privateAPI.POST("/instances", instHandler.Purchase)
-		privateAPI.GET("/instances", instHandler.ListByCustomer)
-		privateAPI.GET("/instances/:id", instHandler.GetByID)
-		privateAPI.POST("/instances/:id/start", instHandler.Start)
-		privateAPI.POST("/instances/:id/stop", instHandler.Stop)
-		privateAPI.POST("/instances/:id/suspend", instHandler.Suspend)
-		privateAPI.POST("/instances/:id/unsuspend", instHandler.Unsuspend)
-		privateAPI.POST("/instances/:id/terminate", instHandler.Terminate)
-		privateAPI.PUT("/instances/:id/ip", instHandler.AssignIP)
+		privateAPI.POST("/instances", standardRL, instHandler.Purchase)
+		privateAPI.GET("/instances", standardRL, instHandler.ListByCustomer)
+		privateAPI.GET("/instances/:id", standardRL, instHandler.GetByID)
+		privateAPI.POST("/instances/:id/start", standardRL, instHandler.Start)
+		privateAPI.POST("/instances/:id/stop", standardRL, instHandler.Stop)
+		privateAPI.POST("/instances/:id/suspend", standardRL, instHandler.Suspend)
+		privateAPI.POST("/instances/:id/unsuspend", standardRL, instHandler.Unsuspend)
+		privateAPI.POST("/instances/:id/terminate", standardRL, instHandler.Terminate)
+		privateAPI.PUT("/instances/:id/ip", standardRL, instHandler.AssignIP)
 
-		// Product - Purchase (event-driven: consumes commercial slot → publishes event → Node provisions)
-		privateAPI.POST("/products/purchase", prodHandler.Purchase)
+		// ── Checkout tier: Product purchase & unified checkout ──────────
+		// These involve inventory/funds and need strict per-IP limiting.
+		privateAPI.POST("/products/purchase", checkoutRL, prodHandler.Purchase)
+		privateAPI.POST("/checkout", checkoutRL, coHandler.Checkout)
+		privateAPI.GET("/checkout/orders/:id", standardRL, coHandler.OrderStatus)
+		privateAPI.GET("/checkout/stats", standardRL, coHandler.Stats)
 
-		// Product - Admin routes
-		privateAPI.POST("/products", prodHandler.Create)
-		privateAPI.GET("/products/all", prodHandler.ListAll)
-		privateAPI.POST("/products/:id/enable", prodHandler.Enable)
-		privateAPI.POST("/products/:id/disable", prodHandler.Disable)
-		privateAPI.PUT("/products/:id/price", prodHandler.UpdatePrice)
-		privateAPI.PUT("/products/:id/stock", prodHandler.AdjustStock)
-		privateAPI.PUT("/products/:id/region", prodHandler.SetRegion)
+		// Product - Admin routes (standard tier)
+		privateAPI.POST("/products", standardRL, prodHandler.Create)
+		privateAPI.GET("/products/all", standardRL, prodHandler.ListAll)
+		privateAPI.POST("/products/:id/enable", standardRL, prodHandler.Enable)
+		privateAPI.POST("/products/:id/disable", standardRL, prodHandler.Disable)
+		privateAPI.PUT("/products/:id/price", standardRL, prodHandler.UpdatePrice)
+		privateAPI.PUT("/products/:id/stock", standardRL, prodHandler.AdjustStock)
+		privateAPI.PUT("/products/:id/region", standardRL, prodHandler.SetRegion)
 
-		// Host Node - Admin routes
-		privateAPI.POST("/host-nodes", nHandler.CreateHost)
-		privateAPI.POST("/host-nodes/:id/ips", nHandler.AddIP)
-		privateAPI.GET("/host-nodes/:id/ips", nHandler.ListIPs)
-		privateAPI.POST("/host-nodes/:id/tasks", nHandler.EnqueueTask)
+		// Host Node - Admin routes (standard tier)
+		privateAPI.POST("/host-nodes", standardRL, nHandler.CreateHost)
+		privateAPI.POST("/host-nodes/:id/ips", standardRL, nHandler.AddIP)
+		privateAPI.GET("/host-nodes/:id/ips", standardRL, nHandler.ListIPs)
+		privateAPI.POST("/host-nodes/:id/tasks", standardRL, nHandler.EnqueueTask)
 	}
 
-	// ---- WebSocket route (auth via ?ticket= one-time token, issued by /admin/ws/ticket) ----
+	// ---- WebSocket routes (auth via ?ticket= one-time token) ----
 	h.GET("/api/v1/admin/ws/nodes", wsHub.ServeWS)
+	h.GET("/api/v1/admin/ws/performance", perfHub.ServeWS)
 
 	// ---- Admin-only API routes (requires admin role) ----
+	// Admin tier rate limiter: RBAC-protected, so limits are relaxed.
 	adminAPI := h.Group("/api/v1/admin")
-	adminAPI.Use(middleware.AdminMiddleware(jwtService))
+	adminAPI.Use(middleware.AdminMiddleware(jwtService), adminRL)
 	{
 		// WebSocket ticket endpoint — issues a short-lived one-time ticket
 		adminAPI.POST("/ws/ticket", wsHub.IssueTicket)
@@ -337,13 +442,6 @@ func main() {
 		adminAPI.POST("/regions/:id/activate", rHandler.Activate)
 		adminAPI.POST("/regions/:id/deactivate", rHandler.Deactivate)
 
-		// Group (product category) management
-		adminAPI.POST("/groups", groupHandler.Create)
-		adminAPI.GET("/groups", groupHandler.List)
-		adminAPI.GET("/groups/:id", groupHandler.GetByID)
-		adminAPI.PUT("/groups/:id", groupHandler.Update)
-		adminAPI.DELETE("/groups/:id", groupHandler.Delete)
-
 		// Bootstrap token management (for agent registration)
 		adminAPI.POST("/bootstrap-tokens", nHandler.CreateBootstrapToken)
 		adminAPI.GET("/bootstrap-tokens", nHandler.ListBootstrapTokens)
@@ -351,6 +449,15 @@ func main() {
 
 		// Node token revocation (force agent to re-bootstrap)
 		adminAPI.POST("/nodes/:id/revoke-token", nHandler.RevokeNodeToken)
+
+		// Unified Checkout — admin endpoints
+		adminAPI.PUT("/checkout/threshold", coHandler.SetThreshold)
+		adminAPI.GET("/checkout/stats", coHandler.Stats)
+
+		// Performance monitoring — admin endpoints
+		adminAPI.POST("/ws/perf-ticket", perfHub.IssueTicket)
+		adminAPI.PUT("/performance/interval", perfHub.SetIntervalHandler)
+		adminAPI.GET("/performance/snapshot", perfHub.GetSnapshotHandler)
 	}
 
 	// 5. Start gRPC server for agent communication (with node-token auth interceptor)

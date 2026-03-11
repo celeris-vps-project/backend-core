@@ -46,14 +46,11 @@ func NewProductAppService(
 }
 
 // CreateProduct creates a new VPS product in the catalog.
-func (s *ProductAppService) CreateProduct(name, slug, location, groupID, regionID, resourcePoolID string, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle domain.BillingCycle, totalSlots int) (*domain.Product, error) {
+func (s *ProductAppService) CreateProduct(name, slug, location, regionID, resourcePoolID string, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle domain.BillingCycle, totalSlots int) (*domain.Product, error) {
 	id := s.ids.NewID()
 	p, err := domain.NewProduct(id, name, slug, location, cpu, memoryMB, diskGB, bandwidthGB, priceAmount, currency, cycle, totalSlots)
 	if err != nil {
 		return nil, err
-	}
-	if groupID != "" {
-		p.SetGroupID(groupID)
 	}
 	if regionID != "" {
 		p.SetRegionID(regionID)

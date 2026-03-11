@@ -26,13 +26,15 @@ func (BootstrapTokenPO) TableName() string { return "bootstrap_tokens" }
 
 // ---- Repository ----
 
-type SqliteBootstrapTokenRepo struct{ db *gorm.DB }
+// GormBootstrapTokenRepo implements domain.BootstrapTokenRepository using GORM.
+// It is driver-agnostic: works with SQLite, PostgreSQL, or any GORM-supported database.
+type GormBootstrapTokenRepo struct{ db *gorm.DB }
 
-func NewSqliteBootstrapTokenRepo(db *gorm.DB) *SqliteBootstrapTokenRepo {
-	return &SqliteBootstrapTokenRepo{db: db}
+func NewGormBootstrapTokenRepo(db *gorm.DB) *GormBootstrapTokenRepo {
+	return &GormBootstrapTokenRepo{db: db}
 }
 
-func (r *SqliteBootstrapTokenRepo) GetByToken(token string) (*domain.BootstrapToken, error) {
+func (r *GormBootstrapTokenRepo) GetByToken(token string) (*domain.BootstrapToken, error) {
 	var po BootstrapTokenPO
 	if err := r.db.Where("token = ?", token).First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -43,7 +45,7 @@ func (r *SqliteBootstrapTokenRepo) GetByToken(token string) (*domain.BootstrapTo
 	return btToDomain(po), nil
 }
 
-func (r *SqliteBootstrapTokenRepo) GetByID(id string) (*domain.BootstrapToken, error) {
+func (r *GormBootstrapTokenRepo) GetByID(id string) (*domain.BootstrapToken, error) {
 	var po BootstrapTokenPO
 	if err := r.db.Where("id = ?", id).First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -54,7 +56,7 @@ func (r *SqliteBootstrapTokenRepo) GetByID(id string) (*domain.BootstrapToken, e
 	return btToDomain(po), nil
 }
 
-func (r *SqliteBootstrapTokenRepo) ListAll() ([]*domain.BootstrapToken, error) {
+func (r *GormBootstrapTokenRepo) ListAll() ([]*domain.BootstrapToken, error) {
 	var pos []BootstrapTokenPO
 	if err := r.db.Order("created_at DESC").Find(&pos).Error; err != nil {
 		return nil, err
@@ -66,12 +68,12 @@ func (r *SqliteBootstrapTokenRepo) ListAll() ([]*domain.BootstrapToken, error) {
 	return out, nil
 }
 
-func (r *SqliteBootstrapTokenRepo) Save(bt *domain.BootstrapToken) error {
+func (r *GormBootstrapTokenRepo) Save(bt *domain.BootstrapToken) error {
 	po := btFromDomain(bt)
 	return r.db.Save(&po).Error
 }
 
-func (r *SqliteBootstrapTokenRepo) Delete(id string) error {
+func (r *GormBootstrapTokenRepo) Delete(id string) error {
 	return r.db.Where("id = ?", id).Delete(&BootstrapTokenPO{}).Error
 }
 

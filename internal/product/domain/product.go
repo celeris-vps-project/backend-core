@@ -35,7 +35,6 @@ type Product struct {
 	name           string // e.g. "VPS Starter"
 	slug           string // e.g. "vps-starter"
 	location       string // e.g. "DE-fra" — legacy display label
-	groupID        string // FK to Group — product category
 	regionID       string // FK to Region — legacy
 	resourcePoolID string // FK to ResourcePool — determines the resource pool for provisioning
 	cpu            int
@@ -90,9 +89,9 @@ func NewProduct(id, name, slug, location string, cpu, memoryMB, diskGB, bandwidt
 	}, nil
 }
 
-func ReconstituteProduct(id, name, slug, location, groupID, regionID, resourcePoolID string, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle BillingCycle, enabled bool, sortOrder, totalSlots, soldSlots int) *Product {
+func ReconstituteProduct(id, name, slug, location, regionID, resourcePoolID string, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle BillingCycle, enabled bool, sortOrder, totalSlots, soldSlots int) *Product {
 	return &Product{
-		id: id, name: name, slug: slug, location: location, groupID: groupID, regionID: regionID,
+		id: id, name: name, slug: slug, location: location, regionID: regionID,
 		resourcePoolID: resourcePoolID,
 		cpu:            cpu, memoryMB: memoryMB, diskGB: diskGB, bandwidthGB: bandwidthGB,
 		priceAmount: priceAmount, currency: currency, billingCycle: cycle,
@@ -104,7 +103,6 @@ func (p *Product) ID() string                 { return p.id }
 func (p *Product) Name() string               { return p.name }
 func (p *Product) Slug() string               { return p.slug }
 func (p *Product) Location() string           { return p.location }
-func (p *Product) GroupID() string             { return p.groupID }
 func (p *Product) RegionID() string           { return p.regionID }
 func (p *Product) CPU() int                   { return p.cpu }
 func (p *Product) MemoryMB() int              { return p.memoryMB }
@@ -125,7 +123,6 @@ func (p *Product) AvailableSlots() int {
 	return p.totalSlots - p.soldSlots
 }
 
-func (p *Product) SetGroupID(groupID string)        { p.groupID = groupID }
 func (p *Product) SetRegionID(regionID string)     { p.regionID = regionID }
 func (p *Product) ResourcePoolID() string          { return p.resourcePoolID }
 func (p *Product) SetResourcePoolID(poolID string) { p.resourcePoolID = poolID }

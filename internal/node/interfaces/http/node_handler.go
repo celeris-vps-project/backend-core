@@ -37,13 +37,17 @@ type EnqueueTaskRequest struct {
 }
 
 type CreateResourcePoolRequest struct {
-	Name     string `json:"name" vd:"len($)>0"`
-	RegionID string `json:"region_id" vd:"len($)>0"`
+	Name        string `json:"name" vd:"len($)>0"`
+	RegionID    string `json:"region_id" vd:"len($)>0"`
+	Description string `json:"description"`
+	SortOrder   int    `json:"sort_order"`
 }
 
 type UpdateResourcePoolRequest struct {
-	Name     string `json:"name"`
-	RegionID string `json:"region_id"`
+	Name        string `json:"name"`
+	RegionID    string `json:"region_id"`
+	Description string `json:"description"`
+	SortOrder   *int   `json:"sort_order"`
 }
 
 type AssignNodeRequest struct {
@@ -87,6 +91,8 @@ type ResourcePoolResponse struct {
 	Name           string                    `json:"name"`
 	RegionID       string                    `json:"region_id"`
 	Status         string                    `json:"status"`
+	Description    string                    `json:"description,omitempty"`
+	SortOrder      int                       `json:"sort_order"`
 	TotalSlots     int                       `json:"total_slots,omitempty"`
 	UsedSlots      int                       `json:"used_slots,omitempty"`
 	AvailableSlots int                       `json:"available_slots,omitempty"`
@@ -437,6 +443,12 @@ func (h *NodeHandler) CreateResourcePool(ctx context.Context, c *hz_app.RequestC
 		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
 		return
 	}
+	pool.SetDescription(req.Description)
+	pool.SetSortOrder(req.SortOrder)
+	if err := h.svc.SaveResourcePool(pool); err != nil {
+		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		return
+	}
 	c.JSON(consts.StatusCreated, utils.H{"data": toPoolResp(pool)})
 }
 
@@ -470,6 +482,16 @@ func (h *NodeHandler) UpdateResourcePool(ctx context.Context, c *hz_app.RequestC
 	pool, err := h.svc.UpdateResourcePool(c.Param("id"), req.Name, req.RegionID)
 	if err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		return
+	}
+	if req.Description != "" {
+		pool.SetDescription(req.Description)
+	}
+	if req.SortOrder != nil {
+		pool.SetSortOrder(*req.SortOrder)
+	}
+	if err := h.svc.SaveResourcePool(pool); err != nil {
+		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": toPoolResp(pool)})
@@ -554,10 +576,12 @@ func toIPResp(ip *domain.IPAddress) IPResponse {
 
 func toPoolResp(p *domain.ResourcePool) ResourcePoolResponse {
 	return ResourcePoolResponse{
-		ID:       p.ID(),
-		Name:     p.Name(),
-		RegionID: p.RegionID(),
-		Status:   p.Status(),
+		ID:          p.ID(),
+		Name:        p.Name(),
+		RegionID:    p.RegionID(),
+		Status:      p.Status(),
+		Description: p.Description(),
+		SortOrder:   p.SortOrder(),
 	}
 }
 

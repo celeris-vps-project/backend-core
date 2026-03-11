@@ -2,12 +2,14 @@ package middleware
 
 import (
 	"backend-core/internal/identity/infra"
+	"backend-core/pkg/authn"
 	"context"
 	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/google/uuid"
 )
 
 // AdminMiddleware ensures the caller has an "admin" role in their JWT.
@@ -29,7 +31,7 @@ func AdminMiddleware(jwtSvc *infra.JWTService) app.HandlerFunc {
 			return
 		}
 
-		userID, role, err := jwtSvc.ParseTokenWithRole(parts[1])
+		userIDStr, role, err := jwtSvc.ParseTokenWithRole(parts[1])
 		if err != nil {
 			c.JSON(consts.StatusUnauthorized, utils.H{"error": "invalid or expired token: " + err.Error()})
 			c.Abort()
@@ -42,8 +44,16 @@ func AdminMiddleware(jwtSvc *infra.JWTService) app.HandlerFunc {
 			return
 		}
 
-		c.Set("current_user_id", userID)
-		c.Set("current_user_role", role)
+		// Parse string → uuid.UUID so downstream handlers can use authn.UserID()
+		userID, parseErr := uuid.Parse(userIDStr)
+		if parseErr != nil {
+			c.JSON(consts.StatusUnauthorized, utils.H{"error": "Token 中的用戶 ID 格式無效"})
+			c.Abort()
+			return
+		}
+
+		c.Set(authn.ContextKeyUserID, userID)
+		c.Set(authn.ContextKeyUserRole, role)
 		c.Next(ctx)
 	}
 }

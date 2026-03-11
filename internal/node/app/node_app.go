@@ -531,6 +531,11 @@ func (s *NodeAppService) RemoveNodeFromPool(nodeID string) error {
 	return s.hostRepo.Save(h)
 }
 
+// SaveResourcePool persists a resource pool (used by handlers after mutation).
+func (s *NodeAppService) SaveResourcePool(pool *domain.ResourcePool) error {
+	return s.poolRepo.Save(pool)
+}
+
 // PoolCapacitySummary is a read-model for the admin panel showing physical
 // capacity of a resource pool.
 type PoolCapacitySummary struct {
@@ -538,6 +543,8 @@ type PoolCapacitySummary struct {
 	PoolName       string `json:"pool_name"`
 	RegionID       string `json:"region_id"`
 	Status         string `json:"status"`
+	Description    string `json:"description,omitempty"`
+	SortOrder      int    `json:"sort_order"`
 	TotalNodes     int    `json:"total_nodes"`
 	EnabledNodes   int    `json:"enabled_nodes"`
 	TotalSlots     int    `json:"total_slots"`
@@ -567,6 +574,8 @@ func (s *NodeAppService) ListPoolCapacities() ([]PoolCapacitySummary, error) {
 			PoolName:       p.Name(),
 			RegionID:       p.RegionID(),
 			Status:         p.Status(),
+			Description:    p.Description(),
+			SortOrder:      p.SortOrder(),
 			TotalNodes:     len(allNodes),
 			EnabledNodes:   len(enabledNodes),
 			TotalSlots:     p.TotalPhysicalSlots(),

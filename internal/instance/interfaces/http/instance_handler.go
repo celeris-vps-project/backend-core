@@ -3,6 +3,7 @@ package http
 import (
 	"backend-core/internal/instance/app"
 	"backend-core/internal/instance/domain"
+	"backend-core/pkg/authn"
 	"context"
 	"time"
 
@@ -66,8 +67,8 @@ func NewInstanceHandler(svc *app.InstanceAppService) *InstanceHandler {
 
 // POST /instances
 func (h *InstanceHandler) Purchase(ctx context.Context, c *hz_app.RequestContext) {
-	customerID, _ := c.Get("current_user_id")
-	if customerID == nil || customerID.(string) == "" {
+	uid, ok := authn.UserID(c)
+	if !ok {
 		c.JSON(consts.StatusUnauthorized, utils.H{"error": "unauthorized"})
 		return
 	}
@@ -77,7 +78,7 @@ func (h *InstanceHandler) Purchase(ctx context.Context, c *hz_app.RequestContext
 		return
 	}
 	inst, err := h.svc.PurchaseInstance(
-		customerID.(string), req.OrderID, req.Region,
+		uid.String(), req.OrderID, req.Region,
 		req.Hostname, req.Plan, req.OS,
 		req.CPU, req.MemoryMB, req.DiskGB,
 	)
@@ -90,12 +91,12 @@ func (h *InstanceHandler) Purchase(ctx context.Context, c *hz_app.RequestContext
 
 // GET /instances
 func (h *InstanceHandler) ListByCustomer(ctx context.Context, c *hz_app.RequestContext) {
-	customerID, _ := c.Get("current_user_id")
-	if customerID == nil || customerID.(string) == "" {
+	uid, ok := authn.UserID(c)
+	if !ok {
 		c.JSON(consts.StatusUnauthorized, utils.H{"error": "unauthorized"})
 		return
 	}
-	insts, err := h.svc.ListByCustomer(customerID.(string))
+	insts, err := h.svc.ListByCustomer(uid.String())
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
 		return

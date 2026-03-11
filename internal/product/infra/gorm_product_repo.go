@@ -12,7 +12,6 @@ type ProductPO struct {
 	Name           string `gorm:"column:name"`
 	Slug           string `gorm:"uniqueIndex;column:slug"`
 	Location       string `gorm:"column:location"`
-	GroupID        string `gorm:"index;column:group_id"`
 	RegionID       string `gorm:"index;column:region_id"`
 	ResourcePoolID string `gorm:"index;column:resource_pool_id"`
 	CPU            int    `gorm:"column:cpu"`
@@ -30,11 +29,13 @@ type ProductPO struct {
 
 func (ProductPO) TableName() string { return "products" }
 
-type SqliteProductRepo struct{ db *gorm.DB }
+// GormProductRepo implements domain.ProductRepository using GORM.
+// It is driver-agnostic: works with SQLite, PostgreSQL, or any GORM-supported database.
+type GormProductRepo struct{ db *gorm.DB }
 
-func NewSqliteProductRepo(db *gorm.DB) *SqliteProductRepo { return &SqliteProductRepo{db: db} }
+func NewGormProductRepo(db *gorm.DB) *GormProductRepo { return &GormProductRepo{db: db} }
 
-func (r *SqliteProductRepo) GetByID(id string) (*domain.Product, error) {
+func (r *GormProductRepo) GetByID(id string) (*domain.Product, error) {
 	var po ProductPO
 	if err := r.db.Where("id = ?", id).First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -45,7 +46,7 @@ func (r *SqliteProductRepo) GetByID(id string) (*domain.Product, error) {
 	return productToDomain(po), nil
 }
 
-func (r *SqliteProductRepo) GetBySlug(slug string) (*domain.Product, error) {
+func (r *GormProductRepo) GetBySlug(slug string) (*domain.Product, error) {
 	var po ProductPO
 	if err := r.db.Where("slug = ?", slug).First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -56,7 +57,7 @@ func (r *SqliteProductRepo) GetBySlug(slug string) (*domain.Product, error) {
 	return productToDomain(po), nil
 }
 
-func (r *SqliteProductRepo) ListAll() ([]*domain.Product, error) {
+func (r *GormProductRepo) ListAll() ([]*domain.Product, error) {
 	var pos []ProductPO
 	if err := r.db.Order("sort_order ASC").Find(&pos).Error; err != nil {
 		return nil, err
@@ -64,7 +65,7 @@ func (r *SqliteProductRepo) ListAll() ([]*domain.Product, error) {
 	return mapProducts(pos), nil
 }
 
-func (r *SqliteProductRepo) ListEnabled() ([]*domain.Product, error) {
+func (r *GormProductRepo) ListEnabled() ([]*domain.Product, error) {
 	var pos []ProductPO
 	if err := r.db.Where("enabled = ?", true).Order("sort_order ASC").Find(&pos).Error; err != nil {
 		return nil, err
@@ -72,7 +73,7 @@ func (r *SqliteProductRepo) ListEnabled() ([]*domain.Product, error) {
 	return mapProducts(pos), nil
 }
 
-func (r *SqliteProductRepo) ListByRegionID(regionID string) ([]*domain.Product, error) {
+func (r *GormProductRepo) ListByRegionID(regionID string) ([]*domain.Product, error) {
 	var pos []ProductPO
 	if err := r.db.Where("region_id = ?", regionID).Order("sort_order ASC").Find(&pos).Error; err != nil {
 		return nil, err
@@ -80,7 +81,7 @@ func (r *SqliteProductRepo) ListByRegionID(regionID string) ([]*domain.Product, 
 	return mapProducts(pos), nil
 }
 
-func (r *SqliteProductRepo) Save(p *domain.Product) error {
+func (r *GormProductRepo) Save(p *domain.Product) error {
 	po := productFromDomain(p)
 	return r.db.Save(&po).Error
 }
@@ -95,7 +96,7 @@ func mapProducts(pos []ProductPO) []*domain.Product {
 
 func productToDomain(po ProductPO) *domain.Product {
 	return domain.ReconstituteProduct(
-		po.ID, po.Name, po.Slug, po.Location, po.GroupID, po.RegionID, po.ResourcePoolID,
+		po.ID, po.Name, po.Slug, po.Location, po.RegionID, po.ResourcePoolID,
 		po.CPU, po.MemoryMB, po.DiskGB, po.BandwidthGB,
 		po.PriceAmount, po.Currency, domain.BillingCycle(po.BillingCycle),
 		po.Enabled, po.SortOrder, po.TotalSlots, po.SoldSlots,
@@ -105,7 +106,7 @@ func productToDomain(po ProductPO) *domain.Product {
 func productFromDomain(p *domain.Product) ProductPO {
 	return ProductPO{
 		ID: p.ID(), Name: p.Name(), Slug: p.Slug(), Location: p.Location(),
-		GroupID: p.GroupID(), RegionID: p.RegionID(), ResourcePoolID: p.ResourcePoolID(),
+		RegionID: p.RegionID(), ResourcePoolID: p.ResourcePoolID(),
 		CPU: p.CPU(), MemoryMB: p.MemoryMB(), DiskGB: p.DiskGB(), BandwidthGB: p.BandwidthGB(),
 		PriceAmount: p.PriceAmount(), Currency: p.Currency(),
 		BillingCycle: string(p.BillingCycle()), Enabled: p.Enabled(), SortOrder: p.SortOrder(),

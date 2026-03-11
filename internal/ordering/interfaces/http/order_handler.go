@@ -3,6 +3,7 @@ package http
 import (
 	"backend-core/internal/ordering/app"
 	"backend-core/internal/ordering/domain"
+	"backend-core/pkg/authn"
 	"context"
 	"time"
 
@@ -70,11 +71,12 @@ func NewOrderHandler(orderApp *app.OrderAppService) *OrderHandler {
 
 // POST /orders
 func (h *OrderHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
-	customerID, _ := c.Get("current_user_id")
-	if customerID == nil || customerID.(string) == "" {
+	uid, ok := authn.UserID(c)
+	if !ok {
 		c.JSON(consts.StatusUnauthorized, utils.H{"error": "unauthorized: missing user identity"})
 		return
 	}
+	customerID := uid.String()
 
 	var req CreateOrderRequest
 	if err := c.BindAndValidate(&req); err != nil {
@@ -84,7 +86,7 @@ func (h *OrderHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 
 	invoiceID := req.InvoiceID
 	if invoiceID == "" {
-		invoiceID = "auto-" + customerID.(string)
+		invoiceID = "auto-" + customerID
 	}
 
 	cfg, err := domain.NewVPSConfig(req.Hostname, req.Plan, req.Region, req.OS, req.CPU, req.MemoryMB, req.DiskGB)
@@ -93,7 +95,7 @@ func (h *OrderHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 		return
 	}
 
-	order, err := h.orderApp.CreateOrder(customerID.(string), req.ProductID, invoiceID, cfg, req.Currency, req.PriceAmount)
+	order, err := h.orderApp.CreateOrder(customerID, req.ProductID, invoiceID, cfg, req.Currency, req.PriceAmount)
 	if err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
 		return
@@ -115,12 +117,12 @@ func (h *OrderHandler) GetByID(ctx context.Context, c *hz_app.RequestContext) {
 
 // GET /orders
 func (h *OrderHandler) ListByCustomer(ctx context.Context, c *hz_app.RequestContext) {
-	currentUser, _ := c.Get("current_user_id")
-	if currentUser == nil || currentUser.(string) == "" {
+	uid, ok := authn.UserID(c)
+	if !ok {
 		c.JSON(consts.StatusUnauthorized, utils.H{"error": "unauthorized: missing user identity"})
 		return
 	}
-	customerID := currentUser.(string)
+	customerID := uid.String()
 
 	orders, err := h.orderApp.ListByCustomer(customerID)
 	if err != nil {

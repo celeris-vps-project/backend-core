@@ -37,15 +37,17 @@ func (OrderPO) TableName() string { return "orders" }
 
 // ---- Repository ----
 
-type SqliteOrderRepo struct {
+// GormOrderRepo implements domain.OrderRepository using GORM.
+// It is driver-agnostic: works with SQLite, PostgreSQL, or any GORM-supported database.
+type GormOrderRepo struct {
 	db *gorm.DB
 }
 
-func NewSqliteOrderRepo(db *gorm.DB) *SqliteOrderRepo {
-	return &SqliteOrderRepo{db: db}
+func NewGormOrderRepo(db *gorm.DB) *GormOrderRepo {
+	return &GormOrderRepo{db: db}
 }
 
-func (r *SqliteOrderRepo) GetByID(id string) (*domain.Order, error) {
+func (r *GormOrderRepo) GetByID(id string) (*domain.Order, error) {
 	var po OrderPO
 	if err := r.db.Where("id = ?", id).First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -56,7 +58,7 @@ func (r *SqliteOrderRepo) GetByID(id string) (*domain.Order, error) {
 	return orderToDomain(po), nil
 }
 
-func (r *SqliteOrderRepo) ListByCustomerID(customerID string) ([]*domain.Order, error) {
+func (r *GormOrderRepo) ListByCustomerID(customerID string) ([]*domain.Order, error) {
 	var pos []OrderPO
 	if err := r.db.Where("customer_id = ?", customerID).Find(&pos).Error; err != nil {
 		return nil, err
@@ -68,7 +70,7 @@ func (r *SqliteOrderRepo) ListByCustomerID(customerID string) ([]*domain.Order, 
 	return orders, nil
 }
 
-func (r *SqliteOrderRepo) Save(order *domain.Order) error {
+func (r *GormOrderRepo) Save(order *domain.Order) error {
 	po := orderFromDomain(order)
 	return r.db.Save(&po).Error
 }

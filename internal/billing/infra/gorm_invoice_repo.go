@@ -41,15 +41,17 @@ func (LineItemPO) TableName() string { return "invoice_line_items" }
 
 // ---- Repository ----
 
-type SqliteInvoiceRepo struct {
+// GormInvoiceRepo implements domain.InvoiceRepository using GORM.
+// It is driver-agnostic: works with SQLite, PostgreSQL, or any GORM-supported database.
+type GormInvoiceRepo struct {
 	db *gorm.DB
 }
 
-func NewSqliteInvoiceRepo(db *gorm.DB) *SqliteInvoiceRepo {
-	return &SqliteInvoiceRepo{db: db}
+func NewGormInvoiceRepo(db *gorm.DB) *GormInvoiceRepo {
+	return &GormInvoiceRepo{db: db}
 }
 
-func (r *SqliteInvoiceRepo) GetByID(id string) (*domain.Invoice, error) {
+func (r *GormInvoiceRepo) GetByID(id string) (*domain.Invoice, error) {
 	var po InvoicePO
 	if err := r.db.Preload("LineItems").Where("id = ?", id).First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -60,7 +62,7 @@ func (r *SqliteInvoiceRepo) GetByID(id string) (*domain.Invoice, error) {
 	return toDomain(po), nil
 }
 
-func (r *SqliteInvoiceRepo) ListByCustomerID(customerID string) ([]*domain.Invoice, error) {
+func (r *GormInvoiceRepo) ListByCustomerID(customerID string) ([]*domain.Invoice, error) {
 	var pos []InvoicePO
 	if err := r.db.Preload("LineItems").Where("customer_id = ?", customerID).Find(&pos).Error; err != nil {
 		return nil, err
@@ -72,7 +74,7 @@ func (r *SqliteInvoiceRepo) ListByCustomerID(customerID string) ([]*domain.Invoi
 	return invoices, nil
 }
 
-func (r *SqliteInvoiceRepo) Save(invoice *domain.Invoice) error {
+func (r *GormInvoiceRepo) Save(invoice *domain.Invoice) error {
 	po := fromDomain(invoice)
 
 	return r.db.Transaction(func(tx *gorm.DB) error {

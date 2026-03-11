@@ -3,6 +3,7 @@ package http
 import (
 	"backend-core/internal/product/app"
 	"backend-core/internal/product/domain"
+	"backend-core/pkg/authn"
 	"context"
 
 	hz_app "github.com/cloudwego/hertz/pkg/app"
@@ -14,7 +15,6 @@ type CreateProductRequest struct {
 	Name           string `json:"name" vd:"len($)>0"`
 	Slug           string `json:"slug" vd:"len($)>0"`
 	Location       string `json:"location"`
-	GroupID        string `json:"group_id"`
 	RegionID       string `json:"region_id"`
 	ResourcePoolID string `json:"resource_pool_id"`
 	CPU            int    `json:"cpu" vd:"$>0"`
@@ -53,7 +53,6 @@ type ProductResponse struct {
 	Name           string `json:"name"`
 	Slug           string `json:"slug"`
 	Location       string `json:"location"`
-	GroupID        string `json:"group_id,omitempty"`
 	RegionID       string `json:"region_id,omitempty"`
 	ResourcePoolID string `json:"resource_pool_id,omitempty"`
 	CPU            int    `json:"cpu"`
@@ -93,7 +92,7 @@ func (h *ProductHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
 		return
 	}
-	p, err := h.svc.CreateProduct(req.Name, req.Slug, req.Location, req.GroupID, req.RegionID, req.ResourcePoolID, req.CPU, req.MemoryMB, req.DiskGB, req.BandwidthGB, req.PriceAmount, req.Currency, domain.BillingCycle(req.BillingCycle), req.TotalSlots)
+	p, err := h.svc.CreateProduct(req.Name, req.Slug, req.Location, req.RegionID, req.ResourcePoolID, req.CPU, req.MemoryMB, req.DiskGB, req.BandwidthGB, req.PriceAmount, req.Currency, domain.BillingCycle(req.BillingCycle), req.TotalSlots)
 	if err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
 		return
@@ -105,8 +104,8 @@ func (h *ProductHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 // commercial slot and publishes a ProductPurchasedEvent for the Node
 // domain to handle physical provisioning.
 func (h *ProductHandler) Purchase(ctx context.Context, c *hz_app.RequestContext) {
-	customerID, _ := c.Get("current_user_id")
-	if customerID == nil || customerID.(string) == "" {
+	uid, ok := authn.UserID(c)
+	if !ok {
 		c.JSON(consts.StatusUnauthorized, utils.H{"error": "unauthorized"})
 		return
 	}
@@ -115,7 +114,7 @@ func (h *ProductHandler) Purchase(ctx context.Context, c *hz_app.RequestContext)
 		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
 		return
 	}
-	p, err := h.svc.PurchaseProduct(req.ProductID, customerID.(string), req.OrderID, req.Hostname, req.OS)
+	p, err := h.svc.PurchaseProduct(req.ProductID, uid.String(), req.OrderID, req.Hostname, req.OS)
 	if err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
 		return
@@ -235,7 +234,7 @@ func (h *ProductHandler) SetRegion(ctx context.Context, c *hz_app.RequestContext
 func toProductResp(p *domain.Product) ProductResponse {
 	return ProductResponse{
 		ID: p.ID(), Name: p.Name(), Slug: p.Slug(), Location: p.Location(),
-		GroupID: p.GroupID(), RegionID: p.RegionID(), ResourcePoolID: p.ResourcePoolID(),
+		RegionID: p.RegionID(), ResourcePoolID: p.ResourcePoolID(),
 		CPU: p.CPU(), MemoryMB: p.MemoryMB(), DiskGB: p.DiskGB(), BandwidthGB: p.BandwidthGB(),
 		PriceAmount: p.PriceAmount(), Currency: p.Currency(),
 		BillingCycle: string(p.BillingCycle()), Enabled: p.Enabled(), SortOrder: p.SortOrder(),

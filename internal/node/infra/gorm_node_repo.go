@@ -58,11 +58,13 @@ func (TaskPO) TableName() string { return "tasks" }
 
 // ---- HostNode Repository ----
 
-type SqliteHostNodeRepo struct{ db *gorm.DB }
+// GormHostNodeRepo implements domain.HostNodeRepository using GORM.
+// It is driver-agnostic: works with SQLite, PostgreSQL, or any GORM-supported database.
+type GormHostNodeRepo struct{ db *gorm.DB }
 
-func NewSqliteHostNodeRepo(db *gorm.DB) *SqliteHostNodeRepo { return &SqliteHostNodeRepo{db: db} }
+func NewGormHostNodeRepo(db *gorm.DB) *GormHostNodeRepo { return &GormHostNodeRepo{db: db} }
 
-func (r *SqliteHostNodeRepo) GetByID(id string) (*domain.HostNode, error) {
+func (r *GormHostNodeRepo) GetByID(id string) (*domain.HostNode, error) {
 	var po HostNodePO
 	if err := r.db.Where("id = ?", id).First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -73,7 +75,7 @@ func (r *SqliteHostNodeRepo) GetByID(id string) (*domain.HostNode, error) {
 	return hostToDomain(po), nil
 }
 
-func (r *SqliteHostNodeRepo) GetByCode(code string) (*domain.HostNode, error) {
+func (r *GormHostNodeRepo) GetByCode(code string) (*domain.HostNode, error) {
 	var po HostNodePO
 	if err := r.db.Where("code = ?", code).First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -84,7 +86,7 @@ func (r *SqliteHostNodeRepo) GetByCode(code string) (*domain.HostNode, error) {
 	return hostToDomain(po), nil
 }
 
-func (r *SqliteHostNodeRepo) GetByNodeToken(token string) (*domain.HostNode, error) {
+func (r *GormHostNodeRepo) GetByNodeToken(token string) (*domain.HostNode, error) {
 	var po HostNodePO
 	if err := r.db.Where("node_token = ? AND node_token != ''", token).First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -95,7 +97,7 @@ func (r *SqliteHostNodeRepo) GetByNodeToken(token string) (*domain.HostNode, err
 	return hostToDomain(po), nil
 }
 
-func (r *SqliteHostNodeRepo) ListAll() ([]*domain.HostNode, error) {
+func (r *GormHostNodeRepo) ListAll() ([]*domain.HostNode, error) {
 	var pos []HostNodePO
 	if err := r.db.Find(&pos).Error; err != nil {
 		return nil, err
@@ -107,7 +109,7 @@ func (r *SqliteHostNodeRepo) ListAll() ([]*domain.HostNode, error) {
 	return out, nil
 }
 
-func (r *SqliteHostNodeRepo) ListByLocation(loc string) ([]*domain.HostNode, error) {
+func (r *GormHostNodeRepo) ListByLocation(loc string) ([]*domain.HostNode, error) {
 	var pos []HostNodePO
 	if err := r.db.Where("location = ?", loc).Find(&pos).Error; err != nil {
 		return nil, err
@@ -119,7 +121,7 @@ func (r *SqliteHostNodeRepo) ListByLocation(loc string) ([]*domain.HostNode, err
 	return out, nil
 }
 
-func (r *SqliteHostNodeRepo) ListByRegionID(regionID string) ([]*domain.HostNode, error) {
+func (r *GormHostNodeRepo) ListByRegionID(regionID string) ([]*domain.HostNode, error) {
 	var pos []HostNodePO
 	if err := r.db.Where("region_id = ?", regionID).Find(&pos).Error; err != nil {
 		return nil, err
@@ -131,7 +133,7 @@ func (r *SqliteHostNodeRepo) ListByRegionID(regionID string) ([]*domain.HostNode
 	return out, nil
 }
 
-func (r *SqliteHostNodeRepo) ListEnabledByRegionID(regionID string) ([]*domain.HostNode, error) {
+func (r *GormHostNodeRepo) ListEnabledByRegionID(regionID string) ([]*domain.HostNode, error) {
 	var pos []HostNodePO
 	if err := r.db.Where("region_id = ? AND enabled = ?", regionID, true).Find(&pos).Error; err != nil {
 		return nil, err
@@ -143,7 +145,7 @@ func (r *SqliteHostNodeRepo) ListEnabledByRegionID(regionID string) ([]*domain.H
 	return out, nil
 }
 
-func (r *SqliteHostNodeRepo) ListByResourcePoolID(poolID string) ([]*domain.HostNode, error) {
+func (r *GormHostNodeRepo) ListByResourcePoolID(poolID string) ([]*domain.HostNode, error) {
 	var pos []HostNodePO
 	if err := r.db.Where("resource_pool_id = ?", poolID).Find(&pos).Error; err != nil {
 		return nil, err
@@ -155,7 +157,7 @@ func (r *SqliteHostNodeRepo) ListByResourcePoolID(poolID string) ([]*domain.Host
 	return out, nil
 }
 
-func (r *SqliteHostNodeRepo) ListEnabledByResourcePoolID(poolID string) ([]*domain.HostNode, error) {
+func (r *GormHostNodeRepo) ListEnabledByResourcePoolID(poolID string) ([]*domain.HostNode, error) {
 	var pos []HostNodePO
 	if err := r.db.Where("resource_pool_id = ? AND enabled = ?", poolID, true).Find(&pos).Error; err != nil {
 		return nil, err
@@ -167,18 +169,20 @@ func (r *SqliteHostNodeRepo) ListEnabledByResourcePoolID(poolID string) ([]*doma
 	return out, nil
 }
 
-func (r *SqliteHostNodeRepo) Save(n *domain.HostNode) error {
+func (r *GormHostNodeRepo) Save(n *domain.HostNode) error {
 	po := hostFromDomain(n)
 	return r.db.Save(&po).Error
 }
 
 // ---- IPAddress Repository ----
 
-type SqliteIPAddressRepo struct{ db *gorm.DB }
+// GormIPAddressRepo implements domain.IPAddressRepository using GORM.
+// It is driver-agnostic: works with SQLite, PostgreSQL, or any GORM-supported database.
+type GormIPAddressRepo struct{ db *gorm.DB }
 
-func NewSqliteIPAddressRepo(db *gorm.DB) *SqliteIPAddressRepo { return &SqliteIPAddressRepo{db: db} }
+func NewGormIPAddressRepo(db *gorm.DB) *GormIPAddressRepo { return &GormIPAddressRepo{db: db} }
 
-func (r *SqliteIPAddressRepo) GetByID(id string) (*domain.IPAddress, error) {
+func (r *GormIPAddressRepo) GetByID(id string) (*domain.IPAddress, error) {
 	var po IPAddressPO
 	if err := r.db.Where("id = ?", id).First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -189,7 +193,7 @@ func (r *SqliteIPAddressRepo) GetByID(id string) (*domain.IPAddress, error) {
 	return ipToDomain(po), nil
 }
 
-func (r *SqliteIPAddressRepo) ListByNodeID(nodeID string) ([]*domain.IPAddress, error) {
+func (r *GormIPAddressRepo) ListByNodeID(nodeID string) ([]*domain.IPAddress, error) {
 	var pos []IPAddressPO
 	if err := r.db.Where("node_id = ?", nodeID).Find(&pos).Error; err != nil {
 		return nil, err
@@ -201,7 +205,7 @@ func (r *SqliteIPAddressRepo) ListByNodeID(nodeID string) ([]*domain.IPAddress, 
 	return out, nil
 }
 
-func (r *SqliteIPAddressRepo) FindAvailable(nodeID string, version int) (*domain.IPAddress, error) {
+func (r *GormIPAddressRepo) FindAvailable(nodeID string, version int) (*domain.IPAddress, error) {
 	var po IPAddressPO
 	err := r.db.Where("node_id = ? AND version = ? AND instance_id = ''", nodeID, version).First(&po).Error
 	if err != nil {
@@ -213,18 +217,20 @@ func (r *SqliteIPAddressRepo) FindAvailable(nodeID string, version int) (*domain
 	return ipToDomain(po), nil
 }
 
-func (r *SqliteIPAddressRepo) Save(ip *domain.IPAddress) error {
+func (r *GormIPAddressRepo) Save(ip *domain.IPAddress) error {
 	po := ipFromDomain(ip)
 	return r.db.Save(&po).Error
 }
 
 // ---- Task Repository ----
 
-type SqliteTaskRepo struct{ db *gorm.DB }
+// GormTaskRepo implements domain.TaskRepository using GORM.
+// It is driver-agnostic: works with SQLite, PostgreSQL, or any GORM-supported database.
+type GormTaskRepo struct{ db *gorm.DB }
 
-func NewSqliteTaskRepo(db *gorm.DB) *SqliteTaskRepo { return &SqliteTaskRepo{db: db} }
+func NewGormTaskRepo(db *gorm.DB) *GormTaskRepo { return &GormTaskRepo{db: db} }
 
-func (r *SqliteTaskRepo) GetByID(id string) (*contracts.Task, error) {
+func (r *GormTaskRepo) GetByID(id string) (*contracts.Task, error) {
 	var po TaskPO
 	if err := r.db.Where("id = ?", id).First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -236,7 +242,7 @@ func (r *SqliteTaskRepo) GetByID(id string) (*contracts.Task, error) {
 	return &t, nil
 }
 
-func (r *SqliteTaskRepo) ListPendingByNodeID(nodeID string) ([]contracts.Task, error) {
+func (r *GormTaskRepo) ListPendingByNodeID(nodeID string) ([]contracts.Task, error) {
 	var pos []TaskPO
 	if err := r.db.Where("node_id = ? AND status = ?", nodeID, string(contracts.TaskStatusQueued)).Find(&pos).Error; err != nil {
 		return nil, err
@@ -248,7 +254,7 @@ func (r *SqliteTaskRepo) ListPendingByNodeID(nodeID string) ([]contracts.Task, e
 	return out, nil
 }
 
-func (r *SqliteTaskRepo) Save(t *contracts.Task) error {
+func (r *GormTaskRepo) Save(t *contracts.Task) error {
 	po := taskFromDomain(*t)
 	return r.db.Save(&po).Error
 }
