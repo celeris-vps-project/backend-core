@@ -31,6 +31,7 @@ import (
 	provisioningWs "backend-core/internal/provisioning/interfaces/ws"
 	"backend-core/pkg/adaptive"
 	"backend-core/pkg/agentpb"
+	"backend-core/pkg/circuitbreaker"
 	"backend-core/pkg/database"
 	"backend-core/pkg/eventbus"
 	"backend-core/pkg/perf"
@@ -127,13 +128,18 @@ func main() {
 	// Catalog (products with event-driven provisioning & physical capacity checking)
 	gormProdRepo := catalogInfra.NewGormProductRepo(db)
 	prodRepo := catalogInfra.NewSingleflightProductRepo(gormProdRepo)
-	capacityChecker := catalogInfra.NewNodeCapacityAdapter(hostRepo)
+	capacityCheckerRaw := catalogInfra.NewNodeCapacityAdapter(hostRepo)
+	capacityChecker := catalogInfra.NewNodeCapacityAdapterWithCB(capacityCheckerRaw,
+		circuitbreaker.New("node-capacity", 3, 2, 15*time.Second))
 	prodApp := catalogApp.NewProductAppService(prodRepo, idGen, bus, capacityChecker)
 	prodHandler := catalogHttp.NewProductHandler(prodApp)
 
 	// Product Line (customer-facing product browsing by resource pool)
 	// Uses a catalog/infra adapter so the handler never imports provisioning directly.
-	plDataSource := catalogInfra.NewProvisioningProductLineAdapter(provSvc)
+	// Wrapped with circuit breaker + cache fallback for graceful degradation.
+	plDataSourceRaw := catalogInfra.NewProvisioningProductLineAdapter(provSvc)
+	plDataSource := catalogInfra.NewProductLineAdapterWithCB(plDataSourceRaw,
+		circuitbreaker.New("product-line", 5, 2, 30*time.Second))
 	productLineHandler := catalogHttp.NewProductLineHandler(prodApp, plDataSource)
 
 	// Provision Dispatcher - routes provisioning commands by product type
@@ -168,11 +174,41 @@ func main() {
 
 	// Payment handler — thin HTTP layer that delegates cross-domain work to the orchestrator.
 	// Build adapters that implement the orchestrator's ports without importing other contexts' domain types.
-	orderAdapter := paymentInfra.NewOrderingAdapter(orderApp)
-	catalogAdapter := paymentInfra.NewCatalogAdapter(prodApp)
-	instanceAdapter := paymentInfra.NewInstanceAdapter(instApp)
-	postPayOrch := paymentApp.NewPostPaymentOrchestrator(orderAdapter, catalogAdapter, instanceAdapter)
+	// Each adapter is wrapped with a circuit breaker for fault isolation and graceful degradation.
+	//
+	// ── Circuit Breaker Configuration ──────────────────────────────────────
+	//   ordering  : 5 failures / 30s timeout — FAST-FAIL (critical path)
+	//   catalog   : 5 failures / 30s timeout — FAST-FAIL (slot consumption)
+	//   instance  : 3 failures / 20s timeout — SILENT DEGRADATION (non-fatal)
+	orderAdapterRaw := paymentInfra.NewOrderingAdapter(orderApp)
+	orderAdapter := paymentInfra.NewOrderingAdapterWithCB(orderAdapterRaw,
+		circuitbreaker.New("pay-ordering", 5, 2, 30*time.Second))
+
+	catalogAdapterRaw := paymentInfra.NewCatalogAdapter(prodApp)
+	catalogAdapter := paymentInfra.NewCatalogAdapterWithCB(catalogAdapterRaw,
+		circuitbreaker.New("pay-catalog", 5, 2, 30*time.Second))
+
+	instanceAdapterRaw := paymentInfra.NewInstanceAdapter(instApp)
+	instanceAdapter := paymentInfra.NewInstanceAdapterWithCB(instanceAdapterRaw,
+		circuitbreaker.New("pay-instance", 3, 2, 20*time.Second))
+
+	// Billing adapter — wraps the billing app service for the payment orchestrator.
+	// Creates invoices at Pay time, records payments at webhook time.
+	billingAdapterRaw := paymentInfra.NewBillingAdapter(invoiceApp)
+	billingAdapter := paymentInfra.NewBillingAdapterWithCB(billingAdapterRaw,
+		circuitbreaker.New("pay-billing", 3, 2, 20*time.Second))
+
+	// Invoice timeout worker — handles delayed "invoice.check_timeout" events.
+	// Idempotent: if invoice is already paid, it's a no-op.
+	invoiceTimeoutWorker := paymentInfra.NewInvoiceTimeoutWorker(invoiceApp, orderApp)
+
+	// Delayed event publisher — in-memory timer-based implementation.
+	// Suitable for single-instance; replace with Asynq (Redis) for production.
+	delayedPublisher := paymentInfra.NewInMemoryDelayedPublisher(invoiceTimeoutWorker.HandlerFunc())
+
+	postPayOrch := paymentApp.NewPostPaymentOrchestrator(orderAdapter, catalogAdapter, instanceAdapter, billingAdapter, delayedPublisher)
 	payHandler := paymentHttp.NewPaymentHandler(paySvc, postPayOrch, mockPayProvider)
+	log.Printf("[api] payment orchestrator circuit breakers enabled (ordering=5/30s, catalog=5/30s, instance=3/20s)")
 
 	// Phase 2: wire the mock provider's async webhook callback to the payHandler.
 	// When the mock "gateway" fires the callback, it calls payHandler.HandleWebhookPayload

@@ -158,6 +158,19 @@ func (o *Order) Cancel(reason string, at time.Time) error {
 	return nil
 }
 
+// LinkInvoice associates a billing invoice with this order.
+// This can only be done while the order is in pending status (before payment).
+func (o *Order) LinkInvoice(invoiceID string) error {
+	if invoiceID == "" {
+		return errors.New("domain_error: invoice id is required")
+	}
+	if o.status != OrderStatusPending {
+		return errors.New("domain_error: invoice can only be linked to pending orders")
+	}
+	o.invoiceID = invoiceID
+	return nil
+}
+
 // Terminate is an admin-initiated termination (allowed from any non-terminated state).
 func (o *Order) Terminate(at time.Time) error {
 	if o.status == OrderStatusTerminated {

@@ -60,6 +60,18 @@ func (s *OrderAppService) ListByCustomer(customerID string) ([]*domain.Order, er
 	return s.repo.ListByCustomerID(customerID)
 }
 
+// LinkInvoiceToOrder associates a billing invoice with a pending order.
+func (s *OrderAppService) LinkInvoiceToOrder(orderID, invoiceID string) error {
+	order, err := s.repo.GetByID(orderID)
+	if err != nil {
+		return err
+	}
+	if err := order.LinkInvoice(invoiceID); err != nil {
+		return err
+	}
+	return s.repo.Save(order)
+}
+
 // ActivateOrder moves an order to active and optionally calls provisioning.
 func (s *OrderAppService) ActivateOrder(orderID string) error {
 	order, err := s.repo.GetByID(orderID)

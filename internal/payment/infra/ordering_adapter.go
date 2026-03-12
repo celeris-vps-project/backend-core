@@ -1,8 +1,8 @@
 package infra
 
 import (
-	paymentApp "backend-core/internal/payment/app"
 	orderingApp "backend-core/internal/ordering/app"
+	paymentApp "backend-core/internal/payment/app"
 )
 
 // OrderingAdapter implements paymentApp.OrderActivator by wrapping the
@@ -23,6 +23,11 @@ func (a *OrderingAdapter) ActivateOrder(orderID string) error {
 	return a.svc.ActivateOrder(orderID)
 }
 
+// LinkInvoiceToOrder delegates to the ordering app service.
+func (a *OrderingAdapter) LinkInvoiceToOrder(orderID, invoiceID string) error {
+	return a.svc.LinkInvoiceToOrder(orderID, invoiceID)
+}
+
 // GetOrderForPayment retrieves an order and maps it to a PayableOrder DTO.
 // This prevents the payment context from importing ordering/domain types.
 func (a *OrderingAdapter) GetOrderForPayment(orderID string) (paymentApp.PayableOrder, error) {
@@ -35,6 +40,7 @@ func (a *OrderingAdapter) GetOrderForPayment(orderID string) (paymentApp.Payable
 		ID:          order.ID(),
 		CustomerID:  order.CustomerID(),
 		ProductID:   order.ProductID(),
+		InvoiceID:   order.InvoiceID(),
 		Status:      order.Status(),
 		Currency:    order.Currency(),
 		PriceAmount: order.PriceAmount(),

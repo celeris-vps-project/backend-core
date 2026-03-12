@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"time"
 
 	"context"
 
@@ -42,6 +43,7 @@ func NewPaymentHandler(
 // PayResponse is the response returned after initiating a payment.
 type PayResponse struct {
 	OrderID    string `json:"order_id"`
+	InvoiceID  string `json:"invoice_id,omitempty"` // linked billing invoice
 	ChargeID   string `json:"charge_id"`
 	Status     string `json:"status"`      // "pending" — waiting for webhook
 	PaymentURL string `json:"payment_url"` // redirect URL (frontend checkout page)
@@ -70,19 +72,37 @@ func (h *PaymentHandler) Pay(ctx context.Context, c *hz_app.RequestContext) {
 		return
 	}
 
-	// 2. Process payment (mock returns "pending" and fires webhook async)
+	// 2. Create and issue an invoice (snapshot of product at purchase time)
+	//    The invoice is linked to the order. If this fails, payment still
+	//    proceeds (invoiceID will be empty — soft degradation).
+	invoiceID, err := h.orchestrator.CreateInvoiceForPayment(order)
+	if err != nil {
+		// Non-fatal: log and continue without invoice
+		log.Printf("[PaymentHandler] WARNING: invoice creation failed for order %s: %v", orderID, err)
+	}
+
+	// 3. Process payment (mock returns "pending" and fires webhook async)
 	chargeResult, err := h.paymentSvc.Process(orderID, order.Currency, order.PriceAmount)
 	if err != nil {
+		// CreateCharge failed — void the invoice we just created
+		h.orchestrator.VoidInvoiceOnFailure(invoiceID, "payment charge creation failed: "+err.Error())
 		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": "payment failed: " + err.Error()})
 		return
 	}
 
-	log.Printf("[PaymentHandler] charge created: order=%s charge=%s status=%s", orderID, chargeResult.ChargeID, chargeResult.Status)
+	log.Printf("[PaymentHandler] charge created: order=%s charge=%s invoice=%s status=%s",
+		orderID, chargeResult.ChargeID, invoiceID, chargeResult.Status)
 
-	// 3. Return pending status — frontend will poll order status
+	// 4. Schedule invoice timeout auto-void (e.g. 30 minutes)
+	//    If payment webhook doesn't arrive in time, the invoice and order
+	//    will be automatically voided/cancelled.
+	h.orchestrator.ScheduleInvoiceTimeout(invoiceID, orderID, 30*time.Minute)
+
+	// 5. Return pending status — frontend will poll order status
 	c.JSON(consts.StatusOK, utils.H{
 		"data": PayResponse{
 			OrderID:    orderID,
+			InvoiceID:  invoiceID,
 			ChargeID:   chargeResult.ChargeID,
 			Status:     chargeResult.Status,
 			PaymentURL: chargeResult.PaymentURL,
