@@ -23,14 +23,21 @@ func NewOrderAppService(repo domain.OrderRepository, ids IDGenerator, prov domai
 }
 
 // CreateOrder places a new VPS order in "pending" status.
+// Callers pass raw VPS parameters; this method constructs the VPSConfig internally
+// so that no other context needs to import the ordering domain layer.
 func (s *OrderAppService) CreateOrder(
 	customerID, productID, invoiceID string,
-	cfg domain.VPSConfig,
+	hostname, plan, region, os string,
+	cpu, memoryMB, diskGB int,
 	currency string,
 	priceAmount int64,
 ) (*domain.Order, error) {
 	if s.ids == nil {
 		return nil, errors.New("app_error: id generator is required")
+	}
+	cfg, err := domain.NewVPSConfig(hostname, plan, region, os, cpu, memoryMB, diskGB)
+	if err != nil {
+		return nil, err
 	}
 	id := s.ids.NewID()
 	order, err := domain.NewOrder(id, customerID, productID, invoiceID, cfg, currency, priceAmount)

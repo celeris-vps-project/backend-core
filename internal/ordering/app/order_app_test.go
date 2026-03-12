@@ -49,12 +49,12 @@ func TestOrderApp_CreateAndActivate(t *testing.T) {
 	repo := newMemoryOrderRepo()
 	svc := NewOrderAppService(repo, staticIDGen{id: "ord-100"}, nil)
 
-	cfg, err := domain.NewVPSConfig("web-01", "vps-starter", "us-east-1", "ubuntu-22.04", 2, 2048, 40)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	order, err := svc.CreateOrder("cust-1", "prod-1", "inv-1", cfg, "USD", 999)
+	order, err := svc.CreateOrder(
+		"cust-1", "prod-1", "inv-1",
+		"web-01", "vps-starter", "us-east-1", "ubuntu-22.04",
+		2, 2048, 40,
+		"USD", 999,
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -79,8 +79,12 @@ func TestOrderApp_SuspendAndUnsuspend(t *testing.T) {
 	repo := newMemoryOrderRepo()
 	svc := NewOrderAppService(repo, staticIDGen{id: "ord-200"}, nil)
 
-	cfg, _ := domain.NewVPSConfig("db-01", "vps-pro", "eu-west-1", "debian-12", 4, 8192, 100)
-	_, _ = svc.CreateOrder("cust-2", "prod-2", "inv-2", cfg, "EUR", 1999)
+	_, _ = svc.CreateOrder(
+		"cust-2", "prod-2", "inv-2",
+		"db-01", "vps-pro", "eu-west-1", "debian-12",
+		4, 8192, 100,
+		"EUR", 1999,
+	)
 
 	_ = svc.ActivateOrder("ord-200")
 	if err := svc.SuspendOrder("ord-200"); err != nil {
@@ -104,8 +108,12 @@ func TestOrderApp_Cancel(t *testing.T) {
 	repo := newMemoryOrderRepo()
 	svc := NewOrderAppService(repo, staticIDGen{id: "ord-300"}, nil)
 
-	cfg, _ := domain.NewVPSConfig("app-01", "vps-starter", "ap-south-1", "centos-9", 1, 1024, 20)
-	_, _ = svc.CreateOrder("cust-3", "prod-3", "inv-3", cfg, "USD", 500)
+	_, _ = svc.CreateOrder(
+		"cust-3", "prod-3", "inv-3",
+		"app-01", "vps-starter", "ap-south-1", "centos-9",
+		1, 1024, 20,
+		"USD", 500,
+	)
 
 	if err := svc.CancelOrder("ord-300", "changed mind"); err != nil {
 		t.Fatalf("unexpected error: %v", err)

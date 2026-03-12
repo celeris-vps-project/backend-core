@@ -89,13 +89,12 @@ func (h *OrderHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 		invoiceID = "auto-" + customerID
 	}
 
-	cfg, err := domain.NewVPSConfig(req.Hostname, req.Plan, req.Region, req.OS, req.CPU, req.MemoryMB, req.DiskGB)
-	if err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
-		return
-	}
-
-	order, err := h.orderApp.CreateOrder(customerID, req.ProductID, invoiceID, cfg, req.Currency, req.PriceAmount)
+	order, err := h.orderApp.CreateOrder(
+		customerID, req.ProductID, invoiceID,
+		req.Hostname, req.Plan, req.Region, req.OS,
+		req.CPU, req.MemoryMB, req.DiskGB,
+		req.Currency, req.PriceAmount,
+	)
 	if err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
 		return

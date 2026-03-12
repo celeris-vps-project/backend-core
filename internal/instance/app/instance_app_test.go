@@ -2,7 +2,7 @@ package app
 
 import (
 	"backend-core/internal/instance/domain"
-	nodeDomain "backend-core/internal/node/domain"
+	nodeDomain "backend-core/internal/provisioning/domain"
 	"errors"
 	"testing"
 )

@@ -6,10 +6,9 @@
 package app
 
 import (
+	productApp "backend-core/internal/catalog/app"
 	"backend-core/internal/checkout/domain"
 	orderingApp "backend-core/internal/ordering/app"
-	orderingDomain "backend-core/internal/ordering/domain"
-	productApp "backend-core/internal/product/app"
 	"fmt"
 	"log"
 )
@@ -17,8 +16,11 @@ import (
 // CheckoutAppService orchestrates the cross-domain checkout flow:
 //
 //  1. Validate the product (enabled? has available slots?)
-//  2. Call product.PurchaseProduct() → ConsumeSlot + publish ProductPurchasedEvent
-//  3. Call ordering.CreateOrder() → persist the order in pending status
+//  2. Call ordering.CreateOrder() → persist the order in pending status
+//
+// Slot consumption (PurchaseProduct) and provisioning happen ONLY after
+// payment confirmation, in the payment webhook handler. This ensures
+// inventory is never burned until the customer actually pays.
 //
 // This service is called by both the sync and async checkout processors.
 // It does NOT decide sync vs. async — that's the adaptive dispatcher's job.
@@ -64,7 +66,10 @@ func (s *CheckoutAppService) Execute(req domain.CheckoutRequest) (*domain.Checko
 	}
 
 	// 2. Create the order first (in pending status)
-	vpsConfig, err := orderingDomain.NewVPSConfig(
+	order, err := s.orderingSvc.CreateOrder(
+		req.CustomerID,
+		req.ProductID,
+		"", // invoiceID — will be linked after payment
 		req.Hostname,
 		product.Slug(),
 		product.Location(),
@@ -72,16 +77,6 @@ func (s *CheckoutAppService) Execute(req domain.CheckoutRequest) (*domain.Checko
 		product.CPU(),
 		product.MemoryMB(),
 		product.DiskGB(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("checkout_error: invalid vps config: %w", err)
-	}
-
-	order, err := s.orderingSvc.CreateOrder(
-		req.CustomerID,
-		req.ProductID,
-		"", // invoiceID — will be linked after payment
-		vpsConfig,
 		product.Currency(),
 		product.PriceAmount(),
 	)
@@ -89,26 +84,12 @@ func (s *CheckoutAppService) Execute(req domain.CheckoutRequest) (*domain.Checko
 		return nil, fmt.Errorf("checkout_error: order creation failed: %w", err)
 	}
 
-	// 3. Purchase the product (consume commercial slot + publish event)
-	_, err = s.productSvc.PurchaseProduct(
-		req.ProductID,
-		req.CustomerID,
-		order.ID(),
-		req.Hostname,
-		req.OS,
-	)
-	if err != nil {
-		// Rollback: cancel the order since product purchase failed
-		_ = s.orderingSvc.CancelOrder(order.ID(), "product purchase failed: "+err.Error())
-		return nil, fmt.Errorf("checkout_error: product purchase failed: %w", err)
-	}
-
-	log.Printf("[CheckoutApp] SUCCESS: order=%s product=%s customer=%s",
+	log.Printf("[CheckoutApp] order created (pending payment): order=%s product=%s customer=%s",
 		order.ID(), req.ProductID, req.CustomerID)
 
 	return &domain.CheckoutResult{
 		HTTPStatus: 200,
 		OrderID:    order.ID(),
-		Message:    "purchase successful — order created in pending status",
+		Message:    "order created — awaiting payment confirmation",
 	}, nil
 }

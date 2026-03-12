@@ -5,6 +5,9 @@ import (
 	billingApp "backend-core/internal/billing/app"
 	billingInfra "backend-core/internal/billing/infra"
 	billingHttp "backend-core/internal/billing/interfaces/http"
+	catalogApp "backend-core/internal/catalog/app"
+	catalogInfra "backend-core/internal/catalog/infra"
+	catalogHttp "backend-core/internal/catalog/interfaces/http"
 	checkoutAppPkg "backend-core/internal/checkout/app"
 	checkoutInfra "backend-core/internal/checkout/infra"
 	checkoutHttp "backend-core/internal/checkout/interfaces/http"
@@ -15,20 +18,17 @@ import (
 	instanceDomain "backend-core/internal/instance/domain"
 	instanceInfra "backend-core/internal/instance/infra"
 	instanceHttp "backend-core/internal/instance/interfaces/http"
-	nodeApp "backend-core/internal/node/app"
-	nodeInfra "backend-core/internal/node/infra"
-	nodeGrpc "backend-core/internal/node/interfaces/grpc"
-	nodeHttp "backend-core/internal/node/interfaces/http"
-	nodeWs "backend-core/internal/node/interfaces/ws"
 	orderingApp "backend-core/internal/ordering/app"
 	orderingInfra "backend-core/internal/ordering/infra"
 	orderingHttp "backend-core/internal/ordering/interfaces/http"
 	paymentApp "backend-core/internal/payment/app"
 	paymentInfra "backend-core/internal/payment/infra"
 	paymentHttp "backend-core/internal/payment/interfaces/http"
-	productApp "backend-core/internal/product/app"
-	productInfra "backend-core/internal/product/infra"
-	productHttp "backend-core/internal/product/interfaces/http"
+	provisioningApp "backend-core/internal/provisioning/app"
+	provisioningInfra "backend-core/internal/provisioning/infra"
+	provisioningGrpc "backend-core/internal/provisioning/interfaces/grpc"
+	provisioningHttp "backend-core/internal/provisioning/interfaces/http"
+	provisioningWs "backend-core/internal/provisioning/interfaces/ws"
 	"backend-core/pkg/adaptive"
 	"backend-core/pkg/agentpb"
 	"backend-core/pkg/database"
@@ -83,8 +83,8 @@ func main() {
 	db.AutoMigrate(&billingInfra.InvoicePO{}, &billingInfra.LineItemPO{})
 	db.AutoMigrate(&orderingInfra.OrderPO{})
 	db.AutoMigrate(&instanceInfra.InstancePO{})
-	db.AutoMigrate(&productInfra.ProductPO{})
-	db.AutoMigrate(&nodeInfra.RegionPO{}, &nodeInfra.HostNodePO{}, &nodeInfra.IPAddressPO{}, &nodeInfra.TaskPO{}, &nodeInfra.ResourcePoolPO{}, &nodeInfra.BootstrapTokenPO{})
+	db.AutoMigrate(&catalogInfra.ProductPO{})
+	db.AutoMigrate(&provisioningInfra.RegionPO{}, &provisioningInfra.HostNodePO{}, &provisioningInfra.IPAddressPO{}, &provisioningInfra.TaskPO{}, &provisioningInfra.ResourcePoolPO{}, &provisioningInfra.BootstrapTokenPO{})
 
 	// 2. Wire up infrastructure
 	pwdHasher := infra.NewBcryptPasswordService(bcrypt.DefaultCost)
@@ -113,43 +113,40 @@ func main() {
 	// Event Bus — in-process synchronous bus for domain event integration
 	bus := eventbus.New()
 
-	// Node (host machines, IP pools, agent tasks, resource pools, bootstrap tokens)
-	hostRepo := nodeInfra.NewGormHostNodeRepo(db)
-	ipRepo := nodeInfra.NewGormIPAddressRepo(db)
-	taskRepo := nodeInfra.NewGormTaskRepo(db)
-	regionRepo := nodeInfra.NewGormRegionRepo(db)
-	poolRepo := nodeInfra.NewGormResourcePoolRepo(db)
-	btRepo := nodeInfra.NewGormBootstrapTokenRepo(db)
-	nodeStateCache := nodeInfra.NewMemoryNodeStateCache(60 * time.Second)
-	nApp := nodeApp.NewNodeAppService(hostRepo, ipRepo, taskRepo, regionRepo, poolRepo, btRepo, nodeStateCache, idGen, bus)
-	nHandler := nodeHttp.NewNodeHandler(nApp)
+	// Provisioning (host machines, IP pools, agent tasks, resource pools, bootstrap tokens)
+	hostRepo := provisioningInfra.NewGormHostNodeRepo(db)
+	ipRepo := provisioningInfra.NewGormIPAddressRepo(db)
+	taskRepo := provisioningInfra.NewGormTaskRepo(db)
+	regionRepo := provisioningInfra.NewGormRegionRepo(db)
+	poolRepo := provisioningInfra.NewGormResourcePoolRepo(db)
+	btRepo := provisioningInfra.NewGormBootstrapTokenRepo(db)
+	nodeStateCache := provisioningInfra.NewMemoryNodeStateCache(60 * time.Second)
+	provSvc := provisioningApp.NewProvisioningAppService(hostRepo, ipRepo, taskRepo, regionRepo, poolRepo, btRepo, nodeStateCache, idGen, bus)
+	nHandler := provisioningHttp.NewNodeHandler(provSvc)
 
-	// Product (with event-driven provisioning & physical capacity checking)
-	// The singleflight decorator deduplicates concurrent identical DB reads,
-	// preventing thundering-herd on cache MISS during high-QPS traffic spikes.
-	gormProdRepo := productInfra.NewGormProductRepo(db)
-	prodRepo := productInfra.NewSingleflightProductRepo(gormProdRepo)
-	capacityChecker := productInfra.NewNodeCapacityAdapter(hostRepo)
-	prodApp := productApp.NewProductAppService(prodRepo, idGen, bus, capacityChecker)
-	prodHandler := productHttp.NewProductHandler(prodApp)
+	// Catalog (products with event-driven provisioning & physical capacity checking)
+	gormProdRepo := catalogInfra.NewGormProductRepo(db)
+	prodRepo := catalogInfra.NewSingleflightProductRepo(gormProdRepo)
+	capacityChecker := catalogInfra.NewNodeCapacityAdapter(hostRepo)
+	prodApp := catalogApp.NewProductAppService(prodRepo, idGen, bus, capacityChecker)
+	prodHandler := catalogHttp.NewProductHandler(prodApp)
 
 	// Product Line (customer-facing product browsing by resource pool)
-	productLineHandler := productHttp.NewProductLineHandler(prodApp, nApp)
+	// Uses a catalog/infra adapter so the handler never imports provisioning directly.
+	plDataSource := catalogInfra.NewProvisioningProductLineAdapter(provSvc)
+	productLineHandler := catalogHttp.NewProductLineHandler(prodApp, plDataSource)
 
-	// Provisioning Event Handler — Node domain listens to Product events
-	// When a ProductPurchasedEvent is published, this handler:
-	// 1. Builds a ResourcePool from the pool's nodes
-	// 2. Selects the least-loaded node (load balancing)
-	// 3. Allocates a physical slot
-	// 4. Enqueues a provisioning task for the agent
-	provHandler := nodeApp.NewProvisioningEventHandler(hostRepo, poolRepo, taskRepo, idGen)
-	provHandler.Register(bus)
+	// Provision Dispatcher - routes provisioning commands by product type
+	vpsProvisioner := provisioningApp.NewVPSProvisioner(hostRepo, poolRepo, taskRepo, idGen)
+	provDispatcher := provisioningApp.NewProvisionDispatcher("vps")
+	provDispatcher.Register(vpsProvisioner)
+	provDispatcher.RegisterEventHandlers(bus)
 
-	// WebSocket Hub — broadcasts real-time node state to admin clients
-	wsHub := nodeWs.NewHub()
+	// WebSocket Hub - broadcasts real-time node state to admin clients
+	wsHub := provisioningWs.NewHub()
 	wsHub.Register(bus)
 
-	// Instance (uses adapter to delegate node capacity to the node module)
+	// Instance (uses adapter to delegate node capacity to the provisioning module)
 	nodeAllocatorRepo := instanceInfra.NewHostNodeAllocatorAdapter(hostRepo)
 	instRepo := instanceInfra.NewGormInstanceRepo(db)
 
@@ -169,17 +166,21 @@ func main() {
 	instApp := instanceApp.NewInstanceAppService(nodeAllocatorRepo, instRepo, idGen, provisioningBus)
 	instHandler := instanceHttp.NewInstanceHandler(instApp)
 
-	// Payment handler — orchestrates: pay → activate order → purchase product → provision → create pending instance
-	// NOTE: payHandler needs prodApp and instApp which are defined above, so this must come after them.
-	payHandler := paymentHttp.NewPaymentHandler(paySvc, orderApp, prodApp, instApp, mockPayProvider)
+	// Payment handler — thin HTTP layer that delegates cross-domain work to the orchestrator.
+	// Build adapters that implement the orchestrator's ports without importing other contexts' domain types.
+	orderAdapter := paymentInfra.NewOrderingAdapter(orderApp)
+	catalogAdapter := paymentInfra.NewCatalogAdapter(prodApp)
+	instanceAdapter := paymentInfra.NewInstanceAdapter(instApp)
+	postPayOrch := paymentApp.NewPostPaymentOrchestrator(orderAdapter, catalogAdapter, instanceAdapter)
+	payHandler := paymentHttp.NewPaymentHandler(paySvc, postPayOrch, mockPayProvider)
 
 	// Phase 2: wire the mock provider's async webhook callback to the payHandler.
 	// When the mock "gateway" fires the callback, it calls payHandler.HandleWebhookPayload
 	// which activates the order and triggers provisioning.
 	mockPayProvider.SetCallback(payHandler.HandleWebhookPayload)
 
-	// Region handler (using NodeAppService — RegionAppService removed)
-	rHandler := nodeHttp.NewRegionHandler(nApp)
+	// Region handler (using ProvisioningAppService)
+	rHandler := provisioningHttp.NewRegionHandler(provSvc)
 
 	// ── Unified Checkout Module ────────────────────────────────────────────
 	// Adaptive sync/async checkout that delegates to real product + ordering
@@ -461,8 +462,8 @@ func main() {
 	}
 
 	// 5. Start gRPC server for agent communication (with node-token auth interceptor)
-	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(nodeGrpc.AuthInterceptor(nApp)))
-	agentpb.RegisterAgentServiceServer(grpcServer, nodeGrpc.NewAgentGRPCServer(nApp))
+	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(provisioningGrpc.AuthInterceptor(provSvc)))
+	agentpb.RegisterAgentServiceServer(grpcServer, provisioningGrpc.NewAgentGRPCServer(provSvc))
 	go func() {
 		lis, err := net.Listen("tcp", cfg.GRPC.Listen)
 		if err != nil {

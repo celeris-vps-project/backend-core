@@ -2,7 +2,7 @@ package infra
 
 import (
 	"backend-core/internal/instance/domain"
-	nodeDomain "backend-core/internal/node/domain"
+	nodeDomain "backend-core/internal/provisioning/domain"
 	"errors"
 	"time"
 
@@ -21,8 +21,29 @@ func NewHostNodeAllocatorAdapter(hostRepo nodeDomain.HostNodeRepository) *HostNo
 	return &HostNodeAllocatorAdapter{hostRepo: hostRepo}
 }
 
+// wrappedNode couples a HostNode to its repository for saving.
+// Nodes returned by this adapter are always *wrappedNode so that Save()
+// can avoid a brittle concrete type assertion on *nodeDomain.HostNode.
+// The wrapper is an internal infra detail — callers only see domain.NodeAllocator.
+type wrappedNode struct {
+	*nodeDomain.HostNode                          // promotes all NodeAllocator methods
+	repo         nodeDomain.HostNodeRepository    // back-reference for persisting
+}
+
+func (w *wrappedNode) save() error {
+	return w.repo.Save(w.HostNode)
+}
+
+func (a *HostNodeAllocatorAdapter) wrap(hn *nodeDomain.HostNode) *wrappedNode {
+	return &wrappedNode{HostNode: hn, repo: a.hostRepo}
+}
+
 func (a *HostNodeAllocatorAdapter) GetByID(id string) (domain.NodeAllocator, error) {
-	return a.hostRepo.GetByID(id)
+	hn, err := a.hostRepo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	return a.wrap(hn), nil
 }
 
 func (a *HostNodeAllocatorAdapter) ListAll() ([]domain.NodeAllocator, error) {
@@ -32,7 +53,7 @@ func (a *HostNodeAllocatorAdapter) ListAll() ([]domain.NodeAllocator, error) {
 	}
 	out := make([]domain.NodeAllocator, len(nodes))
 	for i, n := range nodes {
-		out[i] = n
+		out[i] = a.wrap(n)
 	}
 	return out, nil
 }
@@ -44,17 +65,20 @@ func (a *HostNodeAllocatorAdapter) ListByLocation(location string) ([]domain.Nod
 	}
 	out := make([]domain.NodeAllocator, len(nodes))
 	for i, n := range nodes {
-		out[i] = n
+		out[i] = a.wrap(n)
 	}
 	return out, nil
 }
 
+// Save persists mutations (e.g. AllocateSlot / ReleaseSlot) back to the host repository.
+// It type-asserts to *wrappedNode (an internal infra type) rather than the concrete
+// provisioning domain type, eliminating the cross-context type assertion.
 func (a *HostNodeAllocatorAdapter) Save(node domain.NodeAllocator) error {
-	hn, ok := node.(*nodeDomain.HostNode)
+	wn, ok := node.(*wrappedNode)
 	if !ok {
-		return errors.New("infra_error: expected *HostNode")
+		return errors.New("infra_error: node was not returned by HostNodeAllocatorAdapter")
 	}
-	return a.hostRepo.Save(hn)
+	return wn.save()
 }
 
 // ---- Persistence Objects ----
