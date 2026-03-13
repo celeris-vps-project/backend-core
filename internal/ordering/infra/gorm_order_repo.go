@@ -15,6 +15,7 @@ type OrderPO struct {
 	CustomerID   string     `gorm:"index;column:customer_id"`
 	ProductID    string     `gorm:"index;column:product_id"`
 	InvoiceID    string     `gorm:"index;column:invoice_id"`
+	BillingCycle string     `gorm:"column:billing_cycle;default:one_time"`
 	Status       string     `gorm:"column:status"`
 	Currency     string     `gorm:"column:currency"`
 	PriceAmount  int64      `gorm:"column:price_amount"`
@@ -83,7 +84,7 @@ func orderToDomain(po OrderPO) *domain.Order {
 		po.CPU, po.MemoryMB, po.DiskGB,
 	)
 	return domain.ReconstituteOrder(
-		po.ID, po.CustomerID, po.ProductID, po.InvoiceID,
+		po.ID, po.CustomerID, po.ProductID, po.InvoiceID, po.BillingCycle,
 		cfg,
 		po.Status, po.Currency, po.PriceAmount,
 		po.CreatedAt,
@@ -99,6 +100,7 @@ func orderFromDomain(o *domain.Order) OrderPO {
 		CustomerID:   o.CustomerID(),
 		ProductID:    o.ProductID(),
 		InvoiceID:    o.InvoiceID(),
+		BillingCycle: o.BillingCycle(),
 		Status:       o.Status(),
 		Currency:     o.Currency(),
 		PriceAmount:  o.PriceAmount(),

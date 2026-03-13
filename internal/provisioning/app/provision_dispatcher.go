@@ -3,8 +3,11 @@ package app
 import (
 	"backend-core/internal/provisioning/domain"
 	"backend-core/pkg/contracts"
+	"backend-core/pkg/delayed"
 	"backend-core/pkg/eventbus"
 	"backend-core/pkg/events"
+	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"time"
@@ -96,27 +99,55 @@ func (d *ProvisionDispatcher) Dispatch(cmd ProvisionCommand) (*ProvisionResult, 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 // VPSProvisioner implements the Provisioner interface for VPS products.
-// It selects a node from the resource pool, allocates a slot, and enqueues
-// a provisioning task for the agent.
+// It selects a node from the resource pool, allocates a slot, enqueues
+// a provisioning task for the agent, and schedules an async boot
+// confirmation check via the delayed Publisher.
 type VPSProvisioner struct {
-	hostRepo domain.HostNodeRepository
-	poolRepo domain.ResourcePoolRepository
-	taskRepo domain.TaskRepository
-	ids      IDGenerator
+	hostRepo       domain.HostNodeRepository
+	poolRepo       domain.ResourcePoolRepository
+	taskRepo       domain.TaskRepository
+	ids            IDGenerator
+	delayPublisher delayed.Publisher // async boot confirmation queue (nil = skip)
+	bootCheckDelay time.Duration    // how long to wait before checking boot status
 }
 
 // NewVPSProvisioner creates a provisioner for VPS-type products.
+// The delayPublisher is optional — if nil, boot confirmation scheduling
+// is skipped (useful for tests or when running without a queue backend).
 func NewVPSProvisioner(
 	hostRepo domain.HostNodeRepository,
 	poolRepo domain.ResourcePoolRepository,
 	taskRepo domain.TaskRepository,
 	ids IDGenerator,
+	opts ...VPSProvisionerOption,
 ) *VPSProvisioner {
-	return &VPSProvisioner{
-		hostRepo: hostRepo,
-		poolRepo: poolRepo,
-		taskRepo: taskRepo,
-		ids:      ids,
+	p := &VPSProvisioner{
+		hostRepo:       hostRepo,
+		poolRepo:       poolRepo,
+		taskRepo:       taskRepo,
+		ids:            ids,
+		bootCheckDelay: 30 * time.Second, // default: check boot after 30s
+	}
+	for _, o := range opts {
+		o(p)
+	}
+	return p
+}
+
+// VPSProvisionerOption configures a VPSProvisioner.
+type VPSProvisionerOption func(*VPSProvisioner)
+
+// WithDelayedPublisher sets the delayed publisher for async boot confirmation.
+func WithDelayedPublisher(pub delayed.Publisher) VPSProvisionerOption {
+	return func(p *VPSProvisioner) {
+		p.delayPublisher = pub
+	}
+}
+
+// WithBootCheckDelay overrides the default boot confirmation delay (30s).
+func WithBootCheckDelay(d time.Duration) VPSProvisionerOption {
+	return func(p *VPSProvisioner) {
+		p.bootCheckDelay = d
 	}
 }
 
@@ -178,6 +209,12 @@ func (p *VPSProvisioner) Provision(cmd ProvisionCommand) (*ProvisionResult, erro
 
 	log.Printf("[vps-provisioner] SUCCESS: task %s on node %s (pool %s) for order %s",
 		task.ID, node.Code(), pool.Name(), cmd.OrderID)
+
+	// 5. Schedule async boot confirmation check via delayed queue.
+	// After bootCheckDelay, the BootConfirmationWorker verifies whether
+	// the agent has completed the provisioning task. Works with both
+	// InMemoryPublisher (dev) and AsynqPublisher (production).
+	p.scheduleBootConfirmation(instanceID, task.ID, node.ID())
 
 	// MVP MOCK: auto-complete the task (remove when real agents are connected)
 	p.mockCompleteTask(task)
@@ -259,6 +296,42 @@ func (p *VPSProvisioner) mockCompleteTask(task *contracts.Task) {
 		return
 	}
 	log.Printf("[vps-provisioner-mock] task %s auto-completed (mock mode)", task.ID)
+}
+
+// scheduleBootConfirmation publishes a delayed "provision.confirm_boot" event
+// to the configured Publisher. After bootCheckDelay, the BootConfirmationWorker
+// (registered in the delayed Router) will check whether the provisioning task
+// has completed successfully.
+//
+// If no Publisher is configured (nil), this is a no-op.
+func (p *VPSProvisioner) scheduleBootConfirmation(instanceID, taskID, nodeID string) {
+	if p.delayPublisher == nil {
+		return
+	}
+
+	payload, err := json.Marshal(map[string]string{
+		"instance_id": instanceID,
+		"task_id":     taskID,
+		"node_id":     nodeID,
+	})
+	if err != nil {
+		log.Printf("[vps-provisioner] ERROR: failed to marshal boot confirm payload: %v", err)
+		return
+	}
+
+	if err := p.delayPublisher.PublishDelayed(
+		context.Background(),
+		"provision.confirm_boot",
+		payload,
+		p.bootCheckDelay,
+	); err != nil {
+		log.Printf("[vps-provisioner] WARNING: failed to schedule boot confirmation for instance=%s: %v",
+			instanceID, err)
+		// Non-fatal — provisioning still proceeds, just without async confirmation.
+	} else {
+		log.Printf("[vps-provisioner] scheduled boot confirmation: instance=%s delay=%v",
+			instanceID, p.bootCheckDelay)
+	}
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

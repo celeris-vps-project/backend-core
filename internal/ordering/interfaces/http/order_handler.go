@@ -15,17 +15,18 @@ import (
 // ---- Request / Response DTOs ----
 
 type CreateOrderRequest struct {
-	ProductID   string `json:"product_id" vd:"len($)>0"`
-	InvoiceID   string `json:"invoice_id"`
-	Currency    string `json:"currency" vd:"len($)>0"`
-	PriceAmount int64  `json:"price_amount" vd:"$>0"`
-	Hostname    string `json:"hostname" vd:"len($)>0"`
-	Plan        string `json:"plan" vd:"len($)>0"`
-	Region      string `json:"region" vd:"len($)>0"`
-	OS          string `json:"os" vd:"len($)>0"`
-	CPU         int    `json:"cpu" vd:"$>0"`
-	MemoryMB    int    `json:"memory_mb" vd:"$>0"`
-	DiskGB      int    `json:"disk_gb" vd:"$>0"`
+	ProductID    string `json:"product_id" vd:"len($)>0"`
+	InvoiceID    string `json:"invoice_id"`
+	BillingCycle string `json:"billing_cycle"` // one_time | monthly | yearly; defaults to one_time
+	Currency     string `json:"currency" vd:"len($)>0"`
+	PriceAmount  int64  `json:"price_amount" vd:"$>0"`
+	Hostname     string `json:"hostname" vd:"len($)>0"`
+	Plan         string `json:"plan" vd:"len($)>0"`
+	Region       string `json:"region" vd:"len($)>0"`
+	OS           string `json:"os" vd:"len($)>0"`
+	CPU          int    `json:"cpu" vd:"$>0"`
+	MemoryMB     int    `json:"memory_mb" vd:"$>0"`
+	DiskGB       int    `json:"disk_gb" vd:"$>0"`
 }
 
 type CancelOrderRequest struct {
@@ -37,6 +38,7 @@ type OrderResponse struct {
 	CustomerID   string            `json:"customer_id"`
 	ProductID    string            `json:"product_id"`
 	InvoiceID    string            `json:"invoice_id"`
+	BillingCycle string            `json:"billing_cycle"`
 	Status       string            `json:"status"`
 	Currency     string            `json:"currency"`
 	PriceAmount  int64             `json:"price_amount"`
@@ -89,8 +91,13 @@ func (h *OrderHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 		invoiceID = "auto-" + customerID
 	}
 
+	billingCycle := req.BillingCycle
+	if billingCycle == "" {
+		billingCycle = "one_time"
+	}
+
 	order, err := h.orderApp.CreateOrder(
-		customerID, req.ProductID, invoiceID,
+		customerID, req.ProductID, invoiceID, billingCycle,
 		req.Hostname, req.Plan, req.Region, req.OS,
 		req.CPU, req.MemoryMB, req.DiskGB,
 		req.Currency, req.PriceAmount,
@@ -221,11 +228,12 @@ func (h *OrderHandler) Terminate(ctx context.Context, c *hz_app.RequestContext) 
 func toOrderResponse(o *domain.Order) OrderResponse {
 	cfg := o.VPSConfig()
 	resp := OrderResponse{
-		ID:          o.ID(),
-		CustomerID:  o.CustomerID(),
-		ProductID:   o.ProductID(),
-		InvoiceID:   o.InvoiceID(),
-		Status:      o.Status(),
+		ID:           o.ID(),
+		CustomerID:   o.CustomerID(),
+		ProductID:    o.ProductID(),
+		InvoiceID:    o.InvoiceID(),
+		BillingCycle: o.BillingCycle(),
+		Status:       o.Status(),
 		Currency:    o.Currency(),
 		PriceAmount: o.PriceAmount(),
 		VPS: VPSConfigResponse{

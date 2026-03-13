@@ -47,10 +47,10 @@ func (g staticIDGen) NewID() string { return g.id }
 
 func TestOrderApp_CreateAndActivate(t *testing.T) {
 	repo := newMemoryOrderRepo()
-	svc := NewOrderAppService(repo, staticIDGen{id: "ord-100"}, nil)
+	svc := NewOrderAppService(repo, staticIDGen{id: "ord-100"})
 
 	order, err := svc.CreateOrder(
-		"cust-1", "prod-1", "inv-1",
+		"cust-1", "prod-1", "inv-1", "monthly",
 		"web-01", "vps-starter", "us-east-1", "ubuntu-22.04",
 		2, 2048, 40,
 		"USD", 999,
@@ -77,10 +77,10 @@ func TestOrderApp_CreateAndActivate(t *testing.T) {
 
 func TestOrderApp_SuspendAndUnsuspend(t *testing.T) {
 	repo := newMemoryOrderRepo()
-	svc := NewOrderAppService(repo, staticIDGen{id: "ord-200"}, nil)
+	svc := NewOrderAppService(repo, staticIDGen{id: "ord-200"})
 
 	_, _ = svc.CreateOrder(
-		"cust-2", "prod-2", "inv-2",
+		"cust-2", "prod-2", "inv-2", "monthly",
 		"db-01", "vps-pro", "eu-west-1", "debian-12",
 		4, 8192, 100,
 		"EUR", 1999,
@@ -106,10 +106,10 @@ func TestOrderApp_SuspendAndUnsuspend(t *testing.T) {
 
 func TestOrderApp_Cancel(t *testing.T) {
 	repo := newMemoryOrderRepo()
-	svc := NewOrderAppService(repo, staticIDGen{id: "ord-300"}, nil)
+	svc := NewOrderAppService(repo, staticIDGen{id: "ord-300"})
 
 	_, _ = svc.CreateOrder(
-		"cust-3", "prod-3", "inv-3",
+		"cust-3", "prod-3", "inv-3", "one_time",
 		"app-01", "vps-starter", "ap-south-1", "centos-9",
 		1, 1024, 20,
 		"USD", 500,

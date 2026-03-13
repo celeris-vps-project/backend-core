@@ -19,6 +19,10 @@ type Invoice struct {
 	currency   string
 	status     string
 
+	billingCycle BillingCycle
+	periodStart  *time.Time
+	periodEnd    *time.Time
+
 	lineItems  []LineItem
 	subtotal   Money
 	tax        Money
@@ -31,7 +35,7 @@ type Invoice struct {
 	voidReason string
 }
 
-func NewDraftInvoice(id, customerID, currency string) (*Invoice, error) {
+func NewDraftInvoice(id, customerID, currency string, billingCycle BillingCycle, periodStart, periodEnd *time.Time) (*Invoice, error) {
 	if id == "" {
 		return nil, errors.New("domain_error: invoice id is required")
 	}
@@ -41,43 +45,62 @@ func NewDraftInvoice(id, customerID, currency string) (*Invoice, error) {
 	if currency == "" {
 		return nil, errors.New("domain_error: currency is required")
 	}
+	if billingCycle.IsZero() {
+		billingCycle = OneTimeCycle()
+	}
+	if billingCycle.IsRecurring() {
+		if periodStart == nil || periodEnd == nil {
+			return nil, errors.New("domain_error: recurring invoices require period start and end")
+		}
+		if !periodEnd.After(*periodStart) {
+			return nil, errors.New("domain_error: period end must be after period start")
+		}
+	}
 
 	zero := ZeroMoney(currency)
 	return &Invoice{
-		id:         id,
-		customerID: customerID,
-		currency:   currency,
-		status:     InvoiceStatusDraft,
-		lineItems:  []LineItem{},
-		subtotal:   zero,
-		tax:        zero,
-		total:      zero,
-		amountPaid: zero,
+		id:           id,
+		customerID:   customerID,
+		currency:     currency,
+		status:       InvoiceStatusDraft,
+		billingCycle: billingCycle,
+		periodStart:  periodStart,
+		periodEnd:    periodEnd,
+		lineItems:    []LineItem{},
+		subtotal:     zero,
+		tax:          zero,
+		total:        zero,
+		amountPaid:   zero,
 	}, nil
 }
 
 // ReconstituteInvoice rebuilds the aggregate from persistence.
 func ReconstituteInvoice(
 	id, customerID, currency, status string,
+	billingCycle BillingCycle,
+	periodStart, periodEnd *time.Time,
 	lineItems []LineItem,
 	subtotal, tax, total, amountPaid Money,
 	issuedAt, dueAt, paidAt *time.Time,
 	voidReason string,
 ) *Invoice {
 	return &Invoice{
-		id:         id,
-		customerID: customerID,
-		currency:   currency,
-		status:     status,
-		lineItems:  lineItems,
-		subtotal:   subtotal,
-		tax:        tax,
-		total:      total,
-		amountPaid: amountPaid,
-		issuedAt:   issuedAt,
-		dueAt:      dueAt,
-		paidAt:     paidAt,
-		voidReason: voidReason,
+		id:           id,
+		customerID:   customerID,
+		currency:     currency,
+		status:       status,
+		billingCycle: billingCycle,
+		periodStart:  periodStart,
+		periodEnd:    periodEnd,
+		lineItems:    lineItems,
+		subtotal:     subtotal,
+		tax:          tax,
+		total:        total,
+		amountPaid:   amountPaid,
+		issuedAt:     issuedAt,
+		dueAt:        dueAt,
+		paidAt:       paidAt,
+		voidReason:   voidReason,
 	}
 }
 
@@ -85,6 +108,11 @@ func (i *Invoice) ID() string         { return i.id }
 func (i *Invoice) CustomerID() string { return i.customerID }
 func (i *Invoice) Currency() string   { return i.currency }
 func (i *Invoice) Status() string     { return i.status }
+
+func (i *Invoice) BillingCycle() BillingCycle { return i.billingCycle }
+func (i *Invoice) PeriodStart() *time.Time   { return i.periodStart }
+func (i *Invoice) PeriodEnd() *time.Time     { return i.periodEnd }
+func (i *Invoice) IsRecurring() bool         { return i.billingCycle.IsRecurring() }
 
 func (i *Invoice) LineItems() []LineItem {
 	items := make([]LineItem, len(i.lineItems))

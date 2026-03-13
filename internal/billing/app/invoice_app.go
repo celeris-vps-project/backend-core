@@ -3,6 +3,7 @@ package app
 import (
 	"backend-core/internal/billing/domain"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -34,12 +35,19 @@ func NewInvoiceAppService(repo domain.InvoiceRepository, ids IDGenerator, gatewa
 	return &InvoiceAppService{repo: repo, ids: ids, gateway: gateway}
 }
 
-func (s *InvoiceAppService) CreateDraft(customerID, currency string) (*domain.Invoice, error) {
+// CreateDraft creates a new draft invoice with a billing cycle and optional period.
+// For one-time invoices, periodStart and periodEnd may be nil.
+// For recurring invoices (monthly/yearly), periodStart and periodEnd are required.
+func (s *InvoiceAppService) CreateDraft(
+	customerID, currency string,
+	billingCycle domain.BillingCycle,
+	periodStart, periodEnd *time.Time,
+) (*domain.Invoice, error) {
 	if s.ids == nil {
 		return nil, errors.New("app_error: id generator is required")
 	}
 	id := s.ids.NewID()
-	invoice, err := domain.NewDraftInvoice(id, customerID, currency)
+	invoice, err := domain.NewDraftInvoice(id, customerID, currency, billingCycle, periodStart, periodEnd)
 	if err != nil {
 		return nil, err
 	}
@@ -131,4 +139,71 @@ func (s *InvoiceAppService) CollectPayment(invoiceID string, amount domain.Money
 		return PaymentReceipt{}, err
 	}
 	return receipt, nil
+}
+
+// GenerateRenewalInvoice creates a renewal invoice for the next billing period,
+// copying all line items from the source invoice. The new invoice ID is
+// deterministic ("<sourceID>-renew-<periodEnd>") to ensure idempotency:
+// if the same renewal is requested twice, the second call returns the
+// existing invoice instead of creating a duplicate.
+//
+// Only paid, recurring invoices can be renewed. The next period is computed
+// using BillingCycle.NextPeriod(periodEnd).
+func (s *InvoiceAppService) GenerateRenewalInvoice(sourceInvoiceID string) (*domain.Invoice, error) {
+	source, err := s.repo.GetByID(sourceInvoiceID)
+	if err != nil {
+		return nil, fmt.Errorf("app_error: source invoice not found: %w", err)
+	}
+	if source.Status() != domain.InvoiceStatusPaid {
+		return nil, errors.New("app_error: only paid invoices can be renewed")
+	}
+	if !source.IsRecurring() {
+		return nil, errors.New("app_error: only recurring invoices can be renewed")
+	}
+	if source.PeriodEnd() == nil {
+		return nil, errors.New("app_error: source invoice has no period end")
+	}
+
+	// Compute the next period using BillingCycle.NextPeriod
+	cycle := source.BillingCycle()
+	nextStart, nextEnd := cycle.NextPeriod(*source.PeriodEnd())
+
+	// Deterministic ID for idempotency: "<sourceID>-renew-<YYYYMMDD>"
+	renewalID := fmt.Sprintf("%s-renew-%s", sourceInvoiceID, nextStart.Format("20060102"))
+
+	// Idempotency check: if a renewal invoice already exists, return it
+	exists, err := s.repo.ExistsByID(renewalID)
+	if err != nil {
+		return nil, fmt.Errorf("app_error: idempotency check failed: %w", err)
+	}
+	if exists {
+		return s.repo.GetByID(renewalID)
+	}
+
+	// Create the renewal draft
+	renewal, err := domain.NewDraftInvoice(
+		renewalID, source.CustomerID(), source.Currency(),
+		cycle, &nextStart, &nextEnd,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("app_error: create renewal draft: %w", err)
+	}
+
+	// Copy line items from the source invoice (snapshot at renewal time)
+	for i, item := range source.LineItems() {
+		renewalItemID := fmt.Sprintf("%s-item-%d", renewalID, i+1)
+		newItem, err := domain.NewLineItem(renewalItemID, item.Description(), item.Quantity(), item.UnitPrice())
+		if err != nil {
+			return nil, fmt.Errorf("app_error: copy line item: %w", err)
+		}
+		if err := renewal.AddLineItem(newItem); err != nil {
+			return nil, fmt.Errorf("app_error: add renewal line item: %w", err)
+		}
+	}
+
+	if err := s.repo.Save(renewal); err != nil {
+		return nil, fmt.Errorf("app_error: save renewal invoice: %w", err)
+	}
+
+	return renewal, nil
 }

@@ -78,9 +78,13 @@ func (s *InstanceAppService) PurchaseInstance(
 // to the user, and dispatches a provisioning request through the ProvisioningBus.
 //
 // This is the primary entry point called after a successful payment webhook:
-//  1. Find an available node in the requested region → allocate a slot
+//  1. Find an available node in the requested region → allocate a slot (best-effort)
 //  2. Persist the Instance with status=pending → user sees it immediately
-//  3. Dispatch a ProvisionRequest to the bus → async provisioning
+//  3. Dispatch a ProvisionRequest to the bus → async provisioning (only if node assigned)
+//
+// Slot validation failure is non-fatal: if no node is available in the region,
+// the instance is still created and persisted with an empty nodeID so the user
+// can see the pending record. Provisioning will be handled out-of-band.
 //
 // The bus implementation determines how provisioning is processed:
 // in-memory channel (throttled), RabbitMQ, direct call, etc.
@@ -89,49 +93,60 @@ func (s *InstanceAppService) CreatePendingInstance(
 	hostname, plan, os string,
 	cpu, memoryMB, diskGB int,
 ) (*domain.Instance, error) {
-	// 1. Find an available node in the requested region
+	// 1. Attempt to find an available node in the requested region (best-effort).
+	//    If none is available, we still create the instance record as pending.
+	var node domain.NodeAllocator
 	nodes, err := s.nodeRepo.ListByLocation(region)
 	if err != nil {
-		return nil, fmt.Errorf("create_pending: %w", err)
+		fmt.Printf("[InstanceAppService] WARNING: could not list nodes for region %s: %v\n", region, err)
+	} else {
+		for _, n := range nodes {
+			if n.HasCapacity() {
+				node = n
+				break
+			}
+		}
 	}
-	var node domain.NodeAllocator
-	for _, n := range nodes {
-		if n.HasCapacity() {
-			node = n
-			break
+
+	// 2. Allocate a physical slot on the chosen node (if one was found).
+	nodeID := ""
+	if node != nil {
+		if err := node.AllocateSlot(); err != nil {
+			fmt.Printf("[InstanceAppService] WARNING: slot allocation failed on node %s: %v — instance will be created without a node\n", node.ID(), err)
+			node = nil // treat as unavailable; fall through to no-node path
+		} else {
+			nodeID = node.ID()
 		}
 	}
 	if node == nil {
-		return nil, fmt.Errorf("create_pending: no available nodes in region %s", region)
+		fmt.Printf("[InstanceAppService] WARNING: no available nodes in region %s — creating pending instance without node assignment\n", region)
 	}
 
-	// 2. Allocate a slot on the chosen node
-	if err := node.AllocateSlot(); err != nil {
-		return nil, fmt.Errorf("create_pending: slot allocation failed: %w", err)
-	}
-
-	// 3. Create the instance (status = pending)
+	// 3. Create the instance (status = pending, nodeID may be empty)
 	id := s.ids.NewID()
-	inst, err := domain.NewInstance(id, customerID, orderID, node.ID(), hostname, plan, os, cpu, memoryMB, diskGB)
+	inst, err := domain.NewInstance(id, customerID, orderID, nodeID, hostname, plan, os, cpu, memoryMB, diskGB)
 	if err != nil {
 		return nil, fmt.Errorf("create_pending: %w", err)
 	}
 
-	// 4. Persist node slot + instance (user sees it immediately)
-	if err := s.nodeRepo.Save(node); err != nil {
-		return nil, fmt.Errorf("create_pending: save node failed: %w", err)
+	// 4. Persist node slot (if allocated) + instance (user sees it immediately)
+	if node != nil {
+		if err := s.nodeRepo.Save(node); err != nil {
+			// Non-fatal: log and continue — instance record is more important.
+			fmt.Printf("[InstanceAppService] WARNING: save node slot failed for node %s: %v\n", nodeID, err)
+		}
 	}
 	if err := s.instanceRepo.Save(inst); err != nil {
 		return nil, fmt.Errorf("create_pending: save instance failed: %w", err)
 	}
 
-	// 5. Dispatch to the provisioning bus (async)
-	if s.bus != nil {
+	// 5. Dispatch to the provisioning bus (async) — only when a node was assigned.
+	if s.bus != nil && nodeID != "" {
 		req := domain.ProvisionRequest{
 			InstanceID: inst.ID(),
 			CustomerID: customerID,
 			OrderID:    orderID,
-			NodeID:     node.ID(),
+			NodeID:     nodeID,
 			Hostname:   hostname,
 			Plan:       plan,
 			OS:         os,

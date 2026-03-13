@@ -1,6 +1,7 @@
 package app
 
 import (
+	"backend-core/pkg/delayed"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -26,20 +27,21 @@ type OrderActivator interface {
 
 // PayableOrder is the minimal read-model the payment context needs.
 type PayableOrder struct {
-	ID          string
-	CustomerID  string
-	ProductID   string
-	InvoiceID   string
-	Status      string
-	Currency    string
-	PriceAmount int64
-	Hostname    string
-	Plan        string
-	Region      string
-	OS          string
-	CPU         int
-	MemoryMB    int
-	DiskGB      int
+	ID           string
+	CustomerID   string
+	ProductID    string
+	InvoiceID    string
+	BillingCycle string // one_time | monthly | yearly
+	Status       string
+	Currency     string
+	PriceAmount  int64
+	Hostname     string
+	Plan         string
+	Region       string
+	OS           string
+	CPU          int
+	MemoryMB     int
+	DiskGB       int
 }
 
 // ProductPurchaser is a port for the catalog context.
@@ -68,7 +70,8 @@ type InvoiceCreator interface {
 	// CreateAndIssueInvoice creates a draft invoice, adds a snapshot line item,
 	// issues it, and returns the invoice ID. The description and price are
 	// hard-copied snapshots of the product at purchase time (immutable).
-	CreateAndIssueInvoice(customerID, currency, description string, priceAmount int64) (invoiceID string, err error)
+	// billingCycle is one of "one_time", "monthly", "yearly".
+	CreateAndIssueInvoice(customerID, currency, billingCycle, description string, priceAmount int64) (invoiceID string, err error)
 
 	// RecordInvoicePayment marks an issued invoice as paid.
 	RecordInvoicePayment(invoiceID string, amount int64, currency string) error
@@ -77,22 +80,14 @@ type InvoiceCreator interface {
 	VoidInvoice(invoiceID, reason string) error
 }
 
-// DelayedEventPublisher abstracts a delayed message queue for scheduling
-// future actions (e.g. invoice timeout auto-void). Implementations can use
-// Asynq (Redis), in-memory timers, or any message broker with delay support.
-type DelayedEventPublisher interface {
-	// PublishDelayed schedules a message to be delivered after the given delay.
-	PublishDelayed(ctx context.Context, topic string, payload []byte, delay time.Duration) error
-}
-
 // PostPaymentOrchestrator wires together the ordering, catalog, instance,
 // and billing contexts for payment-related cross-domain workflows.
 type PostPaymentOrchestrator struct {
 	orders    OrderActivator
 	products  ProductPurchaser
-	instances InstanceCreator      // nil = skip instance creation
-	invoices  InvoiceCreator       // nil = skip invoice creation
-	delayed   DelayedEventPublisher // nil = skip delayed events
+	instances InstanceCreator    // nil = skip instance creation
+	invoices  InvoiceCreator     // nil = skip invoice creation
+	delayed   delayed.Publisher  // nil = skip delayed events
 }
 
 // NewPostPaymentOrchestrator builds the orchestrator with the cross-domain ports.
@@ -101,14 +96,14 @@ func NewPostPaymentOrchestrator(
 	p ProductPurchaser,
 	i InstanceCreator,
 	inv InvoiceCreator,
-	delayed DelayedEventPublisher,
+	dp delayed.Publisher,
 ) *PostPaymentOrchestrator {
 	return &PostPaymentOrchestrator{
 		orders:    o,
 		products:  p,
 		instances: i,
 		invoices:  inv,
-		delayed:   delayed,
+		delayed:   dp,
 	}
 }
 
@@ -142,33 +137,49 @@ func (s *PostPaymentOrchestrator) HandlePaymentConfirmed(orderID string) error {
 		}
 	}
 
-	// 3. Consume a commercial slot and publish the ProductPurchasedEvent
-	product, err := s.products.PurchaseProduct(
+	// 3. Consume a commercial slot and publish the ProductPurchasedEvent.
+	//    Failure here is non-fatal for the instance record: the order is already
+	//    activated and the invoice is paid. We log the warning and fall through
+	//    so the pending instance is still created and visible to the user.
+	product, purchaseErr := s.products.PurchaseProduct(
 		order.ProductID,
 		order.CustomerID,
 		orderID,
 		order.Hostname,
 		order.OS,
 	)
-	if err != nil {
-		// Order is already activated — provisioning can be retried.
-		log.Printf("[PostPaymentOrchestrator] WARNING: product purchase failed for order %s: %v", orderID, err)
-		return fmt.Errorf("purchase product: %w", err)
+	if purchaseErr != nil {
+		log.Printf("[PostPaymentOrchestrator] WARNING: product purchase (slot consume) failed for order %s: %v — instance will be created as pending without slot", orderID, purchaseErr)
 	}
 
 	// 4. Create a pending instance — immediately visible to the user.
-	//    The provisioning bus will handle async provisioning.
+	//    Use product data when available; fall back to order snapshot data so the
+	//    instance record is ALWAYS created even if the slot check above failed.
 	if s.instances != nil {
+		region := order.Region
+		plan := order.Plan
+		cpu := order.CPU
+		memoryMB := order.MemoryMB
+		diskGB := order.DiskGB
+		if purchaseErr == nil {
+			// Product purchase succeeded: use the authoritative data from catalog.
+			region = product.Location
+			plan = product.Slug
+			cpu = product.CPU
+			memoryMB = product.MemoryMB
+			diskGB = product.DiskGB
+		}
+
 		instanceID, err := s.instances.CreatePendingInstance(
 			order.CustomerID,
 			orderID,
-			product.Location,
+			region,
 			order.Hostname,
-			product.Slug,
+			plan,
 			order.OS,
-			product.CPU,
-			product.MemoryMB,
-			product.DiskGB,
+			cpu,
+			memoryMB,
+			diskGB,
 		)
 		if err != nil {
 			// Instance creation failure is non-fatal; provisioning can be retried.
@@ -208,6 +219,7 @@ func (s *PostPaymentOrchestrator) CreateInvoiceForPayment(order PayableOrder) (s
 	invoiceID, err := s.invoices.CreateAndIssueInvoice(
 		order.CustomerID,
 		order.Currency,
+		order.BillingCycle,
 		description,
 		order.PriceAmount,
 	)

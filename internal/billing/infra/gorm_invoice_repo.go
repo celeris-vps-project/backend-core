@@ -11,19 +11,22 @@ import (
 // ---- Persistence Objects ----
 
 type InvoicePO struct {
-	ID         string       `gorm:"primaryKey;column:id"`
-	CustomerID string       `gorm:"index;column:customer_id"`
-	Currency   string       `gorm:"column:currency"`
-	Status     string       `gorm:"column:status"`
-	Subtotal   int64        `gorm:"column:subtotal"`
-	Tax        int64        `gorm:"column:tax"`
-	Total      int64        `gorm:"column:total"`
-	AmountPaid int64        `gorm:"column:amount_paid"`
-	IssuedAt   *time.Time   `gorm:"column:issued_at"`
-	DueAt      *time.Time   `gorm:"column:due_at"`
-	PaidAt     *time.Time   `gorm:"column:paid_at"`
-	VoidReason string       `gorm:"column:void_reason"`
-	LineItems  []LineItemPO `gorm:"foreignKey:InvoiceID;references:ID"`
+	ID           string       `gorm:"primaryKey;column:id"`
+	CustomerID   string       `gorm:"index;column:customer_id"`
+	Currency     string       `gorm:"column:currency"`
+	Status       string       `gorm:"column:status"`
+	BillingCycle string       `gorm:"column:billing_cycle;default:one_time"`
+	PeriodStart  *time.Time   `gorm:"column:period_start"`
+	PeriodEnd    *time.Time   `gorm:"column:period_end"`
+	Subtotal     int64        `gorm:"column:subtotal"`
+	Tax          int64        `gorm:"column:tax"`
+	Total        int64        `gorm:"column:total"`
+	AmountPaid   int64        `gorm:"column:amount_paid"`
+	IssuedAt     *time.Time   `gorm:"column:issued_at"`
+	DueAt        *time.Time   `gorm:"column:due_at"`
+	PaidAt       *time.Time   `gorm:"column:paid_at"`
+	VoidReason   string       `gorm:"column:void_reason"`
+	LineItems    []LineItemPO `gorm:"foreignKey:InvoiceID;references:ID"`
 }
 
 func (InvoicePO) TableName() string { return "invoices" }
@@ -74,6 +77,14 @@ func (r *GormInvoiceRepo) ListByCustomerID(customerID string) ([]*domain.Invoice
 	return invoices, nil
 }
 
+func (r *GormInvoiceRepo) ExistsByID(id string) (bool, error) {
+	var count int64
+	if err := r.db.Model(&InvoicePO{}).Where("id = ?", id).Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (r *GormInvoiceRepo) Save(invoice *domain.Invoice) error {
 	po := fromDomain(invoice)
 
@@ -109,6 +120,13 @@ func toDomain(po InvoicePO) *domain.Invoice {
 		}
 	}
 
+	// Reconstruct billing cycle; default to one_time for legacy rows.
+	cycleType := po.BillingCycle
+	if cycleType == "" {
+		cycleType = domain.BillingCycleOneTime
+	}
+	billingCycle, _ := domain.NewBillingCycle(cycleType)
+
 	subtotal, _ := domain.NewMoney(po.Currency, po.Subtotal)
 	tax, _ := domain.NewMoney(po.Currency, po.Tax)
 	total, _ := domain.NewMoney(po.Currency, po.Total)
@@ -116,6 +134,8 @@ func toDomain(po InvoicePO) *domain.Invoice {
 
 	return domain.ReconstituteInvoice(
 		po.ID, po.CustomerID, po.Currency, po.Status,
+		billingCycle,
+		po.PeriodStart, po.PeriodEnd,
 		items,
 		subtotal, tax, total, amountPaid,
 		po.IssuedAt, po.DueAt, po.PaidAt,
@@ -137,18 +157,21 @@ func fromDomain(inv *domain.Invoice) InvoicePO {
 	}
 
 	return InvoicePO{
-		ID:         inv.ID(),
-		CustomerID: inv.CustomerID(),
-		Currency:   inv.Currency(),
-		Status:     inv.Status(),
-		Subtotal:   inv.Subtotal().Amount(),
-		Tax:        inv.Tax().Amount(),
-		Total:      inv.Total().Amount(),
-		AmountPaid: inv.AmountPaid().Amount(),
-		IssuedAt:   inv.IssuedAt(),
-		DueAt:      inv.DueAt(),
-		PaidAt:     inv.PaidAt(),
-		VoidReason: inv.VoidReason(),
-		LineItems:  lineItems,
+		ID:           inv.ID(),
+		CustomerID:   inv.CustomerID(),
+		Currency:     inv.Currency(),
+		Status:       inv.Status(),
+		BillingCycle: inv.BillingCycle().Type(),
+		PeriodStart:  inv.PeriodStart(),
+		PeriodEnd:    inv.PeriodEnd(),
+		Subtotal:     inv.Subtotal().Amount(),
+		Tax:          inv.Tax().Amount(),
+		Total:        inv.Total().Amount(),
+		AmountPaid:   inv.AmountPaid().Amount(),
+		IssuedAt:     inv.IssuedAt(),
+		DueAt:        inv.DueAt(),
+		PaidAt:       inv.PaidAt(),
+		VoidReason:   inv.VoidReason(),
+		LineItems:    lineItems,
 	}
 }

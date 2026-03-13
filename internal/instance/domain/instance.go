@@ -45,9 +45,6 @@ func NewInstance(id, customerID, orderID, nodeID, hostname, plan, os string, cpu
 	if orderID == "" {
 		return nil, errors.New("domain_error: order id is required")
 	}
-	if nodeID == "" {
-		return nil, errors.New("domain_error: node id is required")
-	}
 	if hostname == "" {
 		return nil, errors.New("domain_error: hostname is required")
 	}

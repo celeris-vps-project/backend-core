@@ -12,21 +12,25 @@ type IDGenerator interface {
 }
 
 // OrderAppService orchestrates order workflows.
+//
+// Note: provisioning is NOT handled here. Order state transitions (activate,
+// suspend, cancel, terminate) only manage the order lifecycle. Actual resource
+// provisioning is driven by domain events through the ProvisionDispatcher in
+// the provisioning bounded context (event-driven, see provisioning/app).
 type OrderAppService struct {
-	repo         domain.OrderRepository
-	ids          IDGenerator
-	provisioning domain.ProvisioningService // nil until a provider is wired
+	repo domain.OrderRepository
+	ids  IDGenerator
 }
 
-func NewOrderAppService(repo domain.OrderRepository, ids IDGenerator, prov domain.ProvisioningService) *OrderAppService {
-	return &OrderAppService{repo: repo, ids: ids, provisioning: prov}
+func NewOrderAppService(repo domain.OrderRepository, ids IDGenerator) *OrderAppService {
+	return &OrderAppService{repo: repo, ids: ids}
 }
 
 // CreateOrder places a new VPS order in "pending" status.
 // Callers pass raw VPS parameters; this method constructs the VPSConfig internally
 // so that no other context needs to import the ordering domain layer.
 func (s *OrderAppService) CreateOrder(
-	customerID, productID, invoiceID string,
+	customerID, productID, invoiceID, billingCycle string,
 	hostname, plan, region, os string,
 	cpu, memoryMB, diskGB int,
 	currency string,
@@ -40,7 +44,7 @@ func (s *OrderAppService) CreateOrder(
 		return nil, err
 	}
 	id := s.ids.NewID()
-	order, err := domain.NewOrder(id, customerID, productID, invoiceID, cfg, currency, priceAmount)
+	order, err := domain.NewOrder(id, customerID, productID, invoiceID, billingCycle, cfg, currency, priceAmount)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +76,7 @@ func (s *OrderAppService) LinkInvoiceToOrder(orderID, invoiceID string) error {
 	return s.repo.Save(order)
 }
 
-// ActivateOrder moves an order to active and optionally calls provisioning.
+// ActivateOrder moves an order to active (pending → active).
 func (s *OrderAppService) ActivateOrder(orderID string) error {
 	order, err := s.repo.GetByID(orderID)
 	if err != nil {
@@ -82,15 +86,10 @@ func (s *OrderAppService) ActivateOrder(orderID string) error {
 	if err := order.Activate(now); err != nil {
 		return err
 	}
-	if s.provisioning != nil {
-		if err := s.provisioning.Provision(order); err != nil {
-			return err
-		}
-	}
 	return s.repo.Save(order)
 }
 
-// SuspendOrder suspends an active order and optionally calls provisioning.
+// SuspendOrder suspends an active order (active → suspended).
 func (s *OrderAppService) SuspendOrder(orderID string) error {
 	order, err := s.repo.GetByID(orderID)
 	if err != nil {
@@ -100,15 +99,10 @@ func (s *OrderAppService) SuspendOrder(orderID string) error {
 	if err := order.Suspend(now); err != nil {
 		return err
 	}
-	if s.provisioning != nil {
-		if err := s.provisioning.Suspend(order); err != nil {
-			return err
-		}
-	}
 	return s.repo.Save(order)
 }
 
-// UnsuspendOrder re-activates a suspended order.
+// UnsuspendOrder re-activates a suspended order (suspended → active).
 func (s *OrderAppService) UnsuspendOrder(orderID string) error {
 	order, err := s.repo.GetByID(orderID)
 	if err != nil {
@@ -117,11 +111,6 @@ func (s *OrderAppService) UnsuspendOrder(orderID string) error {
 	now := time.Now()
 	if err := order.Unsuspend(now); err != nil {
 		return err
-	}
-	if s.provisioning != nil {
-		if err := s.provisioning.Unsuspend(order); err != nil {
-			return err
-		}
 	}
 	return s.repo.Save(order)
 }
@@ -136,9 +125,6 @@ func (s *OrderAppService) CancelOrder(orderID, reason string) error {
 	if err := order.Cancel(reason, now); err != nil {
 		return err
 	}
-	if s.provisioning != nil {
-		_ = s.provisioning.Deprovision(order) // best-effort
-	}
 	return s.repo.Save(order)
 }
 
@@ -151,9 +137,6 @@ func (s *OrderAppService) TerminateOrder(orderID string) error {
 	now := time.Now()
 	if err := order.Terminate(now); err != nil {
 		return err
-	}
-	if s.provisioning != nil {
-		_ = s.provisioning.Deprovision(order)
 	}
 	return s.repo.Save(order)
 }

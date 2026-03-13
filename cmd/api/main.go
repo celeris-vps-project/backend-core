@@ -30,6 +30,7 @@ import (
 	provisioningHttp "backend-core/internal/provisioning/interfaces/http"
 	provisioningWs "backend-core/internal/provisioning/interfaces/ws"
 	"backend-core/pkg/adaptive"
+	"backend-core/pkg/delayed"
 	"backend-core/pkg/agentpb"
 	"backend-core/pkg/circuitbreaker"
 	"backend-core/pkg/database"
@@ -104,7 +105,7 @@ func main() {
 
 	// Ordering
 	orderRepo := orderingInfra.NewGormOrderRepo(db)
-	orderApp := orderingApp.NewOrderAppService(orderRepo, idGen, nil) // provisioning = nil for now
+	orderApp := orderingApp.NewOrderAppService(orderRepo, idGen)
 	orderHandler := orderingHttp.NewOrderHandler(orderApp)
 
 	// Payment — mock provider (webhook callback wired after payHandler is created below)
@@ -142,11 +143,43 @@ func main() {
 		circuitbreaker.New("product-line", 5, 2, 30*time.Second))
 	productLineHandler := catalogHttp.NewProductLineHandler(prodApp, plDataSource)
 
+	// ── Delayed Event Infrastructure ───────────────────────────────────────
+	// The delayed router and publisher must be initialised before the
+	// VPSProvisioner so we can inject the publisher for async boot
+	// confirmation scheduling.
+
+	// Invoice timeout worker — handles delayed "invoice.check_timeout" events.
+	// Idempotent: if invoice is already paid, it's a no-op.
+	invoiceTimeoutWorker := paymentInfra.NewInvoiceTimeoutWorker(invoiceApp, orderApp)
+
+	// Boot confirmation worker — handles delayed "provision.confirm_boot" events.
+	// Checks whether a provisioning task has completed after a timeout period.
+	bootConfirmWorker := provisioningInfra.NewBootConfirmationWorker(taskRepo)
+
+	// Delayed event router — topic-based dispatcher shared across bounded contexts.
+	// Each context registers its own handler; the router dispatches by topic.
+	delayedRouter := delayed.NewRouter()
+	delayedRouter.Handle("invoice.check_timeout", invoiceTimeoutWorker.HandlerFunc())
+	delayedRouter.Handle("provision.confirm_boot", bootConfirmWorker.HandlerFunc())
+
+	// Delayed event publisher — in-memory timer-based implementation.
+	// Suitable for single-instance; replace with Asynq (Redis) for production.
+	//
+	// To switch to Asynq (production):
+	//   delayedPublisher := delayed.NewAsynqPublisher(asynq.RedisClientOpt{Addr: redisAddr})
+	//   delayedConsumer  := delayed.NewAsynqConsumer(asynq.RedisClientOpt{Addr: redisAddr}, delayedRouter)
+	//   go delayedConsumer.Start(context.Background())
+	delayedPublisher := delayed.NewInMemoryPublisher(delayedRouter.Dispatch)
+
 	// Provision Dispatcher - routes provisioning commands by product type
-	vpsProvisioner := provisioningApp.NewVPSProvisioner(hostRepo, poolRepo, taskRepo, idGen)
+	// VPSProvisioner receives the delayed publisher for async boot confirmation.
+	vpsProvisioner := provisioningApp.NewVPSProvisioner(hostRepo, poolRepo, taskRepo, idGen,
+		provisioningApp.WithDelayedPublisher(delayedPublisher),
+	)
 	provDispatcher := provisioningApp.NewProvisionDispatcher("vps")
 	provDispatcher.Register(vpsProvisioner)
 	provDispatcher.RegisterEventHandlers(bus)
+	log.Printf("[api] boot confirmation queue enabled (InMemory, delay=30s)")
 
 	// WebSocket Hub - broadcasts real-time node state to admin clients
 	wsHub := provisioningWs.NewHub()
@@ -197,14 +230,6 @@ func main() {
 	billingAdapterRaw := paymentInfra.NewBillingAdapter(invoiceApp)
 	billingAdapter := paymentInfra.NewBillingAdapterWithCB(billingAdapterRaw,
 		circuitbreaker.New("pay-billing", 3, 2, 20*time.Second))
-
-	// Invoice timeout worker — handles delayed "invoice.check_timeout" events.
-	// Idempotent: if invoice is already paid, it's a no-op.
-	invoiceTimeoutWorker := paymentInfra.NewInvoiceTimeoutWorker(invoiceApp, orderApp)
-
-	// Delayed event publisher — in-memory timer-based implementation.
-	// Suitable for single-instance; replace with Asynq (Redis) for production.
-	delayedPublisher := paymentInfra.NewInMemoryDelayedPublisher(invoiceTimeoutWorker.HandlerFunc())
 
 	postPayOrch := paymentApp.NewPostPaymentOrchestrator(orderAdapter, catalogAdapter, instanceAdapter, billingAdapter, delayedPublisher)
 	payHandler := paymentHttp.NewPaymentHandler(paySvc, postPayOrch, mockPayProvider)

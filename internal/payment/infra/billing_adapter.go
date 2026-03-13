@@ -26,22 +26,39 @@ func NewBillingAdapter(svc *billingApp.InvoiceAppService) *BillingAdapter {
 }
 
 // CreateAndIssueInvoice performs the full invoice creation flow:
-//  1. Create a draft invoice for the customer
+//  1. Create a draft invoice for the customer (with billing cycle + period)
 //  2. Add a single line item with the product snapshot (description + price)
 //  3. Issue the invoice (draft → issued)
 //
 // Returns the invoice ID. The line item description and unit price are
 // immutable snapshots — future product changes do not affect this invoice.
 func (a *BillingAdapter) CreateAndIssueInvoice(
-	customerID, currency, description string, priceAmount int64,
+	customerID, currency, billingCycle, description string, priceAmount int64,
 ) (string, error) {
-	// 1. Create draft invoice
-	invoice, err := a.svc.CreateDraft(customerID, currency)
+	// 1. Build billing cycle value object
+	cycle, err := domain.NewBillingCycle(billingCycle)
+	if err != nil {
+		return "", fmt.Errorf("billing: invalid billing cycle: %w", err)
+	}
+
+	// For recurring invoices, set the first period starting now.
+	var periodStart, periodEnd *time.Time
+	if cycle.IsRecurring() {
+		now := time.Now().UTC()
+		// Align period to beginning of current day
+		start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		_, end := cycle.NextPeriod(start)
+		periodStart = &start
+		periodEnd = &end
+	}
+
+	// 2. Create draft invoice
+	invoice, err := a.svc.CreateDraft(customerID, currency, cycle, periodStart, periodEnd)
 	if err != nil {
 		return "", fmt.Errorf("billing: create draft: %w", err)
 	}
 
-	// 2. Add line item — snapshot of product at purchase time
+	// 3. Add line item — snapshot of product at purchase time
 	unitPrice, err := domain.NewMoney(currency, priceAmount)
 	if err != nil {
 		return "", fmt.Errorf("billing: invalid price: %w", err)
@@ -58,7 +75,7 @@ func (a *BillingAdapter) CreateAndIssueInvoice(
 		return "", fmt.Errorf("billing: add line item: %w", err)
 	}
 
-	// 3. Issue the invoice (draft → issued)
+	// 4. Issue the invoice (draft → issued)
 	issuedAt := time.Now()
 	dueAt := issuedAt.Add(30 * 24 * time.Hour) // 30-day payment window
 	if err := a.svc.IssueInvoice(invoice.ID(), issuedAt, &dueAt); err != nil {

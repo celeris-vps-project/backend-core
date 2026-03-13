@@ -37,11 +37,12 @@ func (a *OrderingAdapter) GetOrderForPayment(orderID string) (paymentApp.Payable
 	}
 	cfg := order.VPSConfig()
 	return paymentApp.PayableOrder{
-		ID:          order.ID(),
-		CustomerID:  order.CustomerID(),
-		ProductID:   order.ProductID(),
-		InvoiceID:   order.InvoiceID(),
-		Status:      order.Status(),
+		ID:           order.ID(),
+		CustomerID:   order.CustomerID(),
+		ProductID:    order.ProductID(),
+		InvoiceID:    order.InvoiceID(),
+		BillingCycle: order.BillingCycle(),
+		Status:       order.Status(),
 		Currency:    order.Currency(),
 		PriceAmount: order.PriceAmount(),
 		Hostname:    cfg.Hostname(),

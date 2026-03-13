@@ -30,10 +30,10 @@ func NewBillingAdapterWithCB(inner *BillingAdapter, cb *circuitbreaker.CircuitBr
 
 // CreateAndIssueInvoice delegates to the inner adapter with circuit breaker protection.
 func (a *BillingAdapterWithCB) CreateAndIssueInvoice(
-	customerID, currency, description string, priceAmount int64,
+	customerID, currency, billingCycle, description string, priceAmount int64,
 ) (string, error) {
 	return circuitbreaker.Execute(a.cb, func() (string, error) {
-		return a.inner.CreateAndIssueInvoice(customerID, currency, description, priceAmount)
+		return a.inner.CreateAndIssueInvoice(customerID, currency, billingCycle, description, priceAmount)
 	})
 }
 

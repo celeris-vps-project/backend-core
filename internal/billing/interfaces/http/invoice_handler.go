@@ -3,6 +3,7 @@ package http
 import (
 	"backend-core/internal/billing/app"
 	"backend-core/internal/billing/domain"
+	"backend-core/pkg/authn"
 	"context"
 	"time"
 
@@ -14,8 +15,11 @@ import (
 // ---- Request / Response DTOs ----
 
 type CreateInvoiceRequest struct {
-	CustomerID string `json:"customer_id" vd:"len($)>0"`
-	Currency   string `json:"currency" vd:"len($)>0"`
+	CustomerID   string  `json:"customer_id" vd:"len($)>0"`
+	Currency     string  `json:"currency" vd:"len($)>0"`
+	BillingCycle string  `json:"billing_cycle"` // one_time | monthly | yearly; defaults to one_time
+	PeriodStart  *string `json:"period_start"`  // RFC3339, required for recurring
+	PeriodEnd    *string `json:"period_end"`    // RFC3339, required for recurring
 }
 
 type AddLineItemRequest struct {
@@ -41,20 +45,28 @@ type VoidInvoiceRequest struct {
 	Reason string `json:"reason" vd:"len($)>0"`
 }
 
+type RenewInvoiceRequest struct {
+	SourceInvoiceID string `json:"source_invoice_id" vd:"len($)>0"`
+}
+
 type InvoiceResponse struct {
-	ID         string             `json:"id"`
-	CustomerID string             `json:"customer_id"`
-	Currency   string             `json:"currency"`
-	Status     string             `json:"status"`
-	Subtotal   int64              `json:"subtotal"`
-	Tax        int64              `json:"tax"`
-	Total      int64              `json:"total"`
-	AmountPaid int64              `json:"amount_paid"`
-	IssuedAt   *string            `json:"issued_at,omitempty"`
-	DueAt      *string            `json:"due_at,omitempty"`
-	PaidAt     *string            `json:"paid_at,omitempty"`
-	VoidReason string             `json:"void_reason,omitempty"`
-	LineItems  []LineItemResponse `json:"line_items"`
+	ID              string             `json:"id"`
+	CustomerID      string             `json:"customer_id"`
+	Currency        string             `json:"currency"`
+	Status          string             `json:"status"`
+	BillingCycle    string             `json:"billing_cycle"`
+	PeriodStart     *string            `json:"period_start,omitempty"`
+	PeriodEnd       *string            `json:"period_end,omitempty"`
+	NextBillingDate *string            `json:"next_billing_date,omitempty"`
+	Subtotal        int64              `json:"subtotal"`
+	Tax             int64              `json:"tax"`
+	Total           int64              `json:"total"`
+	AmountPaid      int64              `json:"amount_paid"`
+	IssuedAt        *string            `json:"issued_at,omitempty"`
+	DueAt           *string            `json:"due_at,omitempty"`
+	PaidAt          *string            `json:"paid_at,omitempty"`
+	VoidReason      string             `json:"void_reason,omitempty"`
+	LineItems       []LineItemResponse `json:"line_items"`
 }
 
 type LineItemResponse struct {
@@ -83,7 +95,37 @@ func (h *InvoiceHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 		return
 	}
 
-	invoice, err := h.invoiceApp.CreateDraft(req.CustomerID, req.Currency)
+	// Parse billing cycle; default to one_time
+	cycleType := req.BillingCycle
+	if cycleType == "" {
+		cycleType = domain.BillingCycleOneTime
+	}
+	billingCycle, err := domain.NewBillingCycle(cycleType)
+	if err != nil {
+		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		return
+	}
+
+	// Parse optional period dates
+	var periodStart, periodEnd *time.Time
+	if req.PeriodStart != nil {
+		parsed, err := time.Parse(time.RFC3339, *req.PeriodStart)
+		if err != nil {
+			c.JSON(consts.StatusBadRequest, utils.H{"error": "invalid period_start format, use RFC3339"})
+			return
+		}
+		periodStart = &parsed
+	}
+	if req.PeriodEnd != nil {
+		parsed, err := time.Parse(time.RFC3339, *req.PeriodEnd)
+		if err != nil {
+			c.JSON(consts.StatusBadRequest, utils.H{"error": "invalid period_end format, use RFC3339"})
+			return
+		}
+		periodEnd = &parsed
+	}
+
+	invoice, err := h.invoiceApp.CreateDraft(req.CustomerID, req.Currency, billingCycle, periodStart, periodEnd)
 	if err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
 		return
@@ -103,12 +145,25 @@ func (h *InvoiceHandler) GetByID(ctx context.Context, c *hz_app.RequestContext) 
 	c.JSON(consts.StatusOK, utils.H{"data": toInvoiceResponse(invoice)})
 }
 
-// GET /invoices?customer_id=xxx
+// GET /invoices — list current user's invoices (from JWT).
+// GET /invoices?customer_id=xxx — admin only: list invoices for a specific customer.
 func (h *InvoiceHandler) ListByCustomer(ctx context.Context, c *hz_app.RequestContext) {
-	customerID := c.Query("customer_id")
-	if customerID == "" {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": "customer_id query param is required"})
+	uid, ok := authn.UserID(c)
+	if !ok {
+		c.JSON(consts.StatusUnauthorized, utils.H{"error": "unauthorized"})
 		return
+	}
+
+	customerID := uid.String()
+
+	// Allow admin to query any customer's invoices via query param.
+	if qp := c.Query("customer_id"); qp != "" {
+		role, _ := authn.UserRole(c)
+		if role != "admin" {
+			c.JSON(consts.StatusForbidden, utils.H{"error": "only admin can query other customers' invoices"})
+			return
+		}
+		customerID = qp
 	}
 
 	invoices, err := h.invoiceApp.ListByCustomer(customerID)
@@ -287,6 +342,23 @@ func (h *InvoiceHandler) Void(ctx context.Context, c *hz_app.RequestContext) {
 	c.JSON(consts.StatusOK, utils.H{"data": toInvoiceResponse(updated)})
 }
 
+// POST /invoices/renew
+func (h *InvoiceHandler) Renew(ctx context.Context, c *hz_app.RequestContext) {
+	var req RenewInvoiceRequest
+	if err := c.BindAndValidate(&req); err != nil {
+		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		return
+	}
+
+	renewal, err := h.invoiceApp.GenerateRenewalInvoice(req.SourceInvoiceID)
+	if err != nil {
+		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(consts.StatusCreated, utils.H{"data": toInvoiceResponse(renewal)})
+}
+
 // ---- Mapping helpers ----
 
 func toInvoiceResponse(inv *domain.Invoice) InvoiceResponse {
@@ -303,18 +375,27 @@ func toInvoiceResponse(inv *domain.Invoice) InvoiceResponse {
 	}
 
 	resp := InvoiceResponse{
-		ID:         inv.ID(),
-		CustomerID: inv.CustomerID(),
-		Currency:   inv.Currency(),
-		Status:     inv.Status(),
-		Subtotal:   inv.Subtotal().Amount(),
-		Tax:        inv.Tax().Amount(),
-		Total:      inv.Total().Amount(),
-		AmountPaid: inv.AmountPaid().Amount(),
-		VoidReason: inv.VoidReason(),
-		LineItems:  items,
+		ID:           inv.ID(),
+		CustomerID:   inv.CustomerID(),
+		Currency:     inv.Currency(),
+		Status:       inv.Status(),
+		BillingCycle: inv.BillingCycle().Type(),
+		Subtotal:     inv.Subtotal().Amount(),
+		Tax:          inv.Tax().Amount(),
+		Total:        inv.Total().Amount(),
+		AmountPaid:   inv.AmountPaid().Amount(),
+		VoidReason:   inv.VoidReason(),
+		LineItems:    items,
 	}
 
+	if t := inv.PeriodStart(); t != nil {
+		s := t.Format(time.RFC3339)
+		resp.PeriodStart = &s
+	}
+	if t := inv.PeriodEnd(); t != nil {
+		s := t.Format(time.RFC3339)
+		resp.PeriodEnd = &s
+	}
 	if t := inv.IssuedAt(); t != nil {
 		s := t.Format(time.RFC3339)
 		resp.IssuedAt = &s
@@ -327,5 +408,18 @@ func toInvoiceResponse(inv *domain.Invoice) InvoiceResponse {
 		s := t.Format(time.RFC3339)
 		resp.PaidAt = &s
 	}
+
+	// Compute next billing date for recurring invoices.
+	// For paid recurring invoices, the next billing date is the start of the
+	// next period (i.e. periodEnd of the current invoice). For issued/draft
+	// recurring invoices, we also show the next billing date so the user
+	// knows when the next cycle would begin.
+	if inv.IsRecurring() && inv.PeriodEnd() != nil {
+		cycle := inv.BillingCycle()
+		nextStart, _ := cycle.NextPeriod(*inv.PeriodEnd())
+		s := nextStart.Format(time.RFC3339)
+		resp.NextBillingDate = &s
+	}
+
 	return resp
 }

@@ -66,10 +66,13 @@ func (s *CheckoutAppService) Execute(req domain.CheckoutRequest) (*domain.Checko
 	}
 
 	// 2. Create the order first (in pending status)
+	// Use the billing cycle defined on the product (monthly, quarterly, annually, etc.)
+	billingCycle := string(product.BillingCycle())
 	order, err := s.orderingSvc.CreateOrder(
 		req.CustomerID,
 		req.ProductID,
 		"", // invoiceID — will be linked after payment
+		billingCycle,
 		req.Hostname,
 		product.Slug(),
 		product.Location(),
