@@ -77,11 +77,23 @@ func (s *ProductAppService) PurchaseProduct(
 	if !p.Enabled() {
 		return nil, fmt.Errorf("app_error: product %s is not available", productID)
 	}
-	if err := p.ConsumeSlot(); err != nil {
+
+	// Use atomic database-level slot consumption to prevent the
+	// read-modify-write race condition under concurrent purchases.
+	// This replaces the old pattern: p.ConsumeSlot() → repo.Save(p)
+	// which could lose sales when two goroutines read the same sold_slots
+	// value and both increment to the same number.
+	if err := s.repo.ConsumeSlotAtomic(productID); err != nil {
 		return nil, err
 	}
 
-	// Raise domain event --?Node domain will handle provisioning
+	// Reload the product to get the updated sold_slots count for the response.
+	p, err = s.repo.GetByID(productID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Raise domain event — Node domain will handle provisioning
 	p.RaiseEvent(events.ProductPurchasedEvent{
 		ProductID:      p.ID(),
 		ProductSlug:    p.Slug(),
@@ -95,10 +107,6 @@ func (s *ProductAppService) PurchaseProduct(
 		MemoryMB:       p.MemoryMB(),
 		DiskGB:         p.DiskGB(),
 	})
-
-	if err := s.repo.Save(p); err != nil {
-		return nil, err
-	}
 
 	// Publish collected domain events
 	s.publishEvents(p)

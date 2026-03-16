@@ -127,6 +127,16 @@ func (r *SingleflightProductRepo) Save(product *domain.Product) error {
 	return r.inner.Save(product)
 }
 
+// -- Atomic write operations (pass-through, never deduplicated) --
+
+func (r *SingleflightProductRepo) ConsumeSlotAtomic(productID string) error {
+	return r.inner.ConsumeSlotAtomic(productID)
+}
+
+func (r *SingleflightProductRepo) ReleaseSlotAtomic(productID string) error {
+	return r.inner.ReleaseSlotAtomic(productID)
+}
+
 // -- Deep-copy helpers --
 
 func cloneProduct(p *domain.Product) *domain.Product {

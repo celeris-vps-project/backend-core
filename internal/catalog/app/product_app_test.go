@@ -5,6 +5,7 @@ import (
 	"backend-core/pkg/eventbus"
 	"backend-core/pkg/events"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -61,6 +62,22 @@ func (r *memProductRepo) ListByRegionID(regionID string) ([]*domain.Product, err
 		}
 	}
 	return out, nil
+}
+
+func (r *memProductRepo) ConsumeSlotAtomic(productID string) error {
+	p, ok := r.items[productID]
+	if !ok {
+		return fmt.Errorf("product not found")
+	}
+	return p.ConsumeSlot()
+}
+
+func (r *memProductRepo) ReleaseSlotAtomic(productID string) error {
+	p, ok := r.items[productID]
+	if !ok {
+		return fmt.Errorf("product not found")
+	}
+	return p.ReleaseSlot()
 }
 
 func (r *memProductRepo) Save(p *domain.Product) error {

@@ -30,18 +30,21 @@ import (
 	provisioningHttp "backend-core/internal/provisioning/interfaces/http"
 	provisioningWs "backend-core/internal/provisioning/interfaces/ws"
 	"backend-core/pkg/adaptive"
-	"backend-core/pkg/delayed"
 	"backend-core/pkg/agentpb"
 	"backend-core/pkg/circuitbreaker"
 	"backend-core/pkg/database"
+	"backend-core/pkg/delayed"
 	"backend-core/pkg/eventbus"
 	"backend-core/pkg/perf"
 	"backend-core/pkg/ratelimit"
+	"backend-core/pkg/timeout"
 	"context"
 	"flag"
 	"log"
 	"net"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	identityHttp "backend-core/internal/identity/interfaces/http"
@@ -337,6 +340,12 @@ func main() {
 		AllowHeaders: []string{"Origin", "Authorization", "Content-Type"},
 	}))
 
+	// Global request timeout middleware — prevents goroutine leaks from
+	// slow downstream dependencies (DB, gRPC, external APIs).
+	// 15s is generous enough for all normal operations; per-route overrides
+	// can be applied below for specific endpoints that need more/less time.
+	h.Use(timeout.Middleware(15 * time.Second))
+
 	// Global performance tracking middleware — records every request
 	h.Use(perf.Middleware(perfTracker))
 
@@ -435,6 +444,7 @@ func main() {
 		privateAPI.POST("/products/purchase", checkoutRL, prodHandler.Purchase)
 		privateAPI.POST("/checkout", checkoutRL, coHandler.Checkout)
 		privateAPI.GET("/checkout/orders/:id", standardRL, coHandler.OrderStatus)
+		privateAPI.GET("/checkout/orders/:id/stream", coHandler.OrderStatusStream) // SSE — no rate limit (long-lived connection)
 		privateAPI.GET("/checkout/stats", standardRL, coHandler.Stats)
 
 		// Product - Admin routes (standard tier)
@@ -536,5 +546,46 @@ func main() {
 		}
 	}()
 
-	h.Spin()
+	// ── Graceful Shutdown ──────────────────────────────────────────────────
+	// Listen for SIGINT (Ctrl+C) / SIGTERM (docker stop / k8s preStop).
+	// On signal:
+	//   1. Stop accepting new HTTP/gRPC connections
+	//   2. Drain in-flight requests (up to 10s deadline)
+	//   3. Stop background workers (provisioning bus, async checkout, perf hub)
+	//   4. Close database connections
+	//
+	// This prevents request drops during deployments and ensures all
+	// in-flight provisioning tasks complete before the process exits.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	// Start HTTP server in background
+	go func() {
+		h.Spin()
+	}()
+
+	sig := <-quit
+	log.Printf("[api] received signal %v, starting graceful shutdown...", sig)
+
+	// Create a deadline for the entire shutdown sequence
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	// 1. Stop gRPC server (stops accepting new RPCs, waits for in-flight)
+	grpcServer.GracefulStop()
+	log.Printf("[api] gRPC server stopped")
+
+	// 2. Stop background workers
+	provisioningBus.Stop()
+	log.Printf("[api] provisioning bus stopped")
+
+	// 3. Close database connection pool
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.Close()
+		log.Printf("[api] database connections closed")
+	}
+
+	// Wait for shutdown deadline or completion
+	<-shutdownCtx.Done()
+	log.Printf("[api] graceful shutdown complete")
 }

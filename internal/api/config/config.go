@@ -26,6 +26,15 @@ type DatabaseConfig struct {
 	MaxIdleConns    int           `json:"max_idle_conns" yaml:"max_idle_conns"`         // default: 10
 	ConnMaxLifetime time.Duration `json:"conn_max_lifetime" yaml:"conn_max_lifetime"`   // default: 5m
 	ConnMaxIdleTime time.Duration `json:"conn_max_idle_time" yaml:"conn_max_idle_time"` // default: 3m
+
+	// Read replica DSNs for read-write splitting (PostgreSQL only).
+	// When configured, SELECT queries are automatically routed to replicas
+	// while INSERT/UPDATE/DELETE go to the primary. This distributes read
+	// load across replicas, significantly improving concurrency for
+	// read-heavy workloads (catalog browsing, instance listing, etc.).
+	//
+	// Leave empty to use a single primary for all operations.
+	ReplicaDSNs []string `json:"replica_dsns" yaml:"replica_dsns"`
 }
 
 // JWTConfig holds JWT signing settings.

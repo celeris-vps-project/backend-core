@@ -86,6 +86,45 @@ func (r *GormProductRepo) Save(p *domain.Product) error {
 	return r.db.Save(&po).Error
 }
 
+// ConsumeSlotAtomic atomically increments sold_slots using a conditional UPDATE.
+// This eliminates the read-modify-write race condition that occurs under
+// concurrent purchase requests (two goroutines reading sold_slots=5, both
+// writing sold_slots=6 → one sale is lost).
+//
+// SQL: UPDATE products SET sold_slots = sold_slots + 1
+//
+//	WHERE id = ? AND enabled = true
+//	AND (total_slots = -1 OR sold_slots < total_slots)
+//
+// If RowsAffected == 0, either the product doesn't exist, is disabled,
+// or has no available slots.
+func (r *GormProductRepo) ConsumeSlotAtomic(productID string) error {
+	result := r.db.Model(&ProductPO{}).
+		Where("id = ? AND enabled = ? AND (total_slots = -1 OR sold_slots < total_slots)", productID, true).
+		Update("sold_slots", gorm.Expr("sold_slots + 1"))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("domain_error: no available slots (atomic check)")
+	}
+	return nil
+}
+
+// ReleaseSlotAtomic atomically decrements sold_slots using a conditional UPDATE.
+func (r *GormProductRepo) ReleaseSlotAtomic(productID string) error {
+	result := r.db.Model(&ProductPO{}).
+		Where("id = ? AND sold_slots > 0", productID).
+		Update("sold_slots", gorm.Expr("sold_slots - 1"))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("domain_error: no sold slots to release (atomic check)")
+	}
+	return nil
+}
+
 func mapProducts(pos []ProductPO) []*domain.Product {
 	out := make([]*domain.Product, len(pos))
 	for i, po := range pos {

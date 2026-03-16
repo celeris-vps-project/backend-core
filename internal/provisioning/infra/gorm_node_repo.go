@@ -172,6 +172,40 @@ func (r *GormHostNodeRepo) Save(n *domain.HostNode) error {
 	return r.db.Save(&po).Error
 }
 
+// AllocateSlotAtomic atomically increments used_slots using a conditional UPDATE.
+// This eliminates the read-modify-write race condition when multiple provisioning
+// requests target the same node concurrently.
+//
+// SQL: UPDATE host_nodes SET used_slots = used_slots + 1
+//
+//	WHERE id = ? AND enabled = true AND used_slots < total_slots
+func (r *GormHostNodeRepo) AllocateSlotAtomic(nodeID string) error {
+	result := r.db.Model(&HostNodePO{}).
+		Where("id = ? AND enabled = ? AND used_slots < total_slots", nodeID, true).
+		Update("used_slots", gorm.Expr("used_slots + 1"))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("domain_error: node has no available slots or is disabled (atomic check)")
+	}
+	return nil
+}
+
+// ReleaseSlotAtomic atomically decrements used_slots using a conditional UPDATE.
+func (r *GormHostNodeRepo) ReleaseSlotAtomic(nodeID string) error {
+	result := r.db.Model(&HostNodePO{}).
+		Where("id = ? AND used_slots > 0", nodeID).
+		Update("used_slots", gorm.Expr("used_slots - 1"))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("domain_error: no slots to release (atomic check)")
+	}
+	return nil
+}
+
 // ---- IPAddress Repository ----
 
 type GormIPAddressRepo struct{ db *gorm.DB }

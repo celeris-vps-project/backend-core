@@ -21,6 +21,16 @@ type HostNodeRepository interface {
 	ListByResourcePoolID(poolID string) ([]*HostNode, error)
 	ListEnabledByResourcePoolID(poolID string) ([]*HostNode, error)
 	Save(node *HostNode) error
+
+	// AllocateSlotAtomic atomically increments used_slots by 1 using a
+	// database-level conditional UPDATE. This prevents the read-modify-write
+	// race condition when multiple goroutines try to allocate on the same node.
+	//
+	// Returns an error if the node is disabled, not found, or has no capacity.
+	AllocateSlotAtomic(nodeID string) error
+
+	// ReleaseSlotAtomic atomically decrements used_slots by 1.
+	ReleaseSlotAtomic(nodeID string) error
 }
 
 // BootstrapTokenRepository persists one-time bootstrap tokens for agent registration.

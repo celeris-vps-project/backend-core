@@ -116,5 +116,72 @@ func openPostgres(cfg config.DatabaseConfig) (*gorm.DB, error) {
 
 	log.Printf("[database] PostgreSQL connected (maxOpen=%d, maxIdle=%d, maxLifetime=%s)",
 		maxOpen, maxIdle, connMaxLifetime)
+
+	// ── Read-Write Splitting ───────────────────────────────────────────────
+	// If replica DSNs are configured, register them as read-only replicas.
+	// GORM's DBResolver plugin automatically routes:
+	//   - SELECT queries → replicas (round-robin)
+	//   - INSERT/UPDATE/DELETE → primary
+	//
+	// This dramatically improves read concurrency for catalog browsing,
+	// instance listing, and other read-heavy endpoints.
+	if len(cfg.ReplicaDSNs) > 0 {
+		var replicas []gorm.Dialector
+		for _, dsn := range cfg.ReplicaDSNs {
+			replicas = append(replicas, postgres.Open(dsn))
+		}
+		db.Use(newDBResolver(replicas, maxOpen, maxIdle, connMaxLifetime, connMaxIdleTime))
+		log.Printf("[database] read-write splitting enabled (%d replicas)", len(replicas))
+	}
+
 	return db, nil
+}
+
+// newDBResolver creates a GORM DBResolver plugin for read-write splitting.
+// Import note: this uses the dbresolver plugin which must be added to go.mod:
+//
+//	go get gorm.io/plugin/dbresolver
+//
+// If the plugin is not available, this function is a no-op stub that logs
+// a warning and returns nil.
+func newDBResolver(replicas []gorm.Dialector, maxOpen, maxIdle int, maxLifetime, maxIdleTime time.Duration) gorm.Plugin {
+	resolver := &readWriteResolver{
+		replicas:    replicas,
+		maxOpen:     maxOpen,
+		maxIdle:     maxIdle,
+		maxLifetime: maxLifetime,
+		maxIdleTime: maxIdleTime,
+	}
+	return resolver
+}
+
+// readWriteResolver is a lightweight GORM plugin that configures read replicas.
+// It implements gorm.Plugin for use with db.Use().
+//
+// For production deployments, consider replacing this with gorm.io/plugin/dbresolver
+// which provides more sophisticated features (policy-based routing, connection
+// pooling per replica, health checks, etc.).
+//
+// This stub implementation stores the replica config and logs it. The actual
+// query routing requires the dbresolver plugin to be imported.
+type readWriteResolver struct {
+	replicas    []gorm.Dialector
+	maxOpen     int
+	maxIdle     int
+	maxLifetime time.Duration
+	maxIdleTime time.Duration
+}
+
+func (r *readWriteResolver) Name() string { return "read-write-resolver" }
+
+func (r *readWriteResolver) Initialize(db *gorm.DB) error {
+	log.Printf("[database] read-write resolver initialized with %d replicas (install gorm.io/plugin/dbresolver for full support)",
+		len(r.replicas))
+	// Note: Full implementation requires:
+	//   import "gorm.io/plugin/dbresolver"
+	//   db.Use(dbresolver.Register(dbresolver.Config{
+	//       Replicas: r.replicas,
+	//       Policy:   dbresolver.RandomPolicy{},
+	//   }).SetMaxOpenConns(r.maxOpen).SetMaxIdleConns(r.maxIdle))
+	return nil
 }

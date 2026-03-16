@@ -103,6 +103,10 @@ func (m *mockProductRepo) ListByRegionID(regionID string) ([]*domain.Product, er
 	return []*domain.Product{newMockProduct("region-" + regionID)}, nil
 }
 
+func (m *mockProductRepo) ConsumeSlotAtomic(productID string) error { return nil }
+
+func (m *mockProductRepo) ReleaseSlotAtomic(productID string) error { return nil }
+
 func (m *mockProductRepo) Save(product *domain.Product) error {
 	atomic.AddInt64(&m.saveCount, 1)
 	return m.err
