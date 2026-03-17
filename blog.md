@@ -297,6 +297,64 @@ graph TB
 
 SSE是浏览器主动发起的长连接，浏览器监听此接口，但不发送任何数据，只有在后端完成，主动推送数据的时候，做出event响应。这就把消耗从n个请求，降低到了0
 
+#### Token Bucket 令牌桶限流
+在实际生产环境中，难免会遇到爬虫等恶意流量刷流，这部分是底层数据库绝对不应该收到的，但也不是每个接口都会受到这样的恶意流量，若所有接口都应用token bucket，会导致不该防御的防住，该防御的也不到位
+
+所以，所有api我采用了分层设计的令牌桶限流
+- **分层设计**
+    - Baseline（全局安全网）、Critical（目录浏览）、Checkout（下单支付）同层，必须严格限制
+    - Auth（登录注册，严格防暴力破解）、Standard（一般业务）、Admin（管理后台），稍微宽松
+    - Agent 心跳和支付 Webhook 故意不限流（丢失代价太高）
+
+- **实现要点**
+  - 惰性补充（lazy refill）：不需要后台 goroutine，`Allow()` 时按时间差计算补充量
+  - `sync.Mutex` 保护令牌计数器——简单正确，临界区极短（几个浮点运算）
+  - 每个限流器独立实例，不同级别互不影响
+
+#### 布隆过滤器
+- **问题**：同上面Token Bucket中分析的，可能会遇到爬虫恶意刷流的流量，通到了数据库层，查询根本不存在的请求，这叫`缓存穿透`问题
+
+缓存穿透（Cache Penetration）是分布式系统中一个经典的性能和稳定性问题。它是指用户查询的数据既不在缓存中，也不在数据库中由于缓存没命中，请求会直接打到数据库；而数据库也查不到，自然无法更新缓存。这就导致每一次针对该数据的查询都会直接穿透缓存，冲击数据库。
+
+- **方案**：添加布隆过滤器，布隆过滤器是哈希算法实现
+    - 如果请求经过哈希，结果为不存在，则一定不存在数据库，过滤该非法请求；
+    - 若布隆过滤器说存在，则有可能存在，放行请求
+
+#### Circuit Breaker 熔断降级
+我的ddd架构是用的一个统一调度器处理下单逻辑，这种方案虽然解耦，但如果下游一个服务被打死无法响应，就会导致一连串服务都卡死不能用
+
+这种解决方法是可以每隔调度模块，包装一个独立的熔断器
+
+- **方案**：每个跨模块 Adapter 包装一个独立熔断器
+  - 5 处熔断器：`pay-ordering`、`pay-catalog`、`pay-instance`、`pay-billing`、`node-capacity`
+  - 三态转换：Closed → Open（连续 N 次失败）→ HalfOpen（超时后探测）→ Closed（恢复）
+- **实现要点**
+  - Go 泛型 `Execute[T any](cb, fn)` — 零 boilerplate 包装任意调用
+  - `sync.Mutex` 保护状态机——安全且简洁
+  - Open 状态直接返回 `ErrCircuitOpen`，不调用下游，快速失败
+
+当流量大的时候，关键接口直接快速失败，不占用任何数据库资源，次要接口直接读取缓存，这样可以保证局部可用性
+
+### Singleflight 缓存合并
+- **问题**：热门产品页面，100 个并发请求同时查数据库，99 个是浪费的
+- **方案**：`SingleflightProductRepo` 装饰器包装 `GormProductRepo`
+  - 相同产品 ID 的并发查询只执行一次 DB 查询，其余阻塞等待结果共享
+  - 使用 `golang.org/x/sync/singleflight`
+- **为什么不直接用 Redis 缓存？**
+  - 单实例场景下 singleflight 更轻量，零外部依赖
+  - 配合 adaptive cache middleware，高 QPS 时自动启用内存缓存
+
+### EventBus 进程内事件总线
+- **问题**：限界上下文之间需要解耦通信
+- **方案**：同步事件总线 + 延迟事件发布器
+  - 同步 EventBus：`Subscribe(eventName, handler)` + `Publish(event)` — `sync.RWMutex` 保护
+  - Delayed Publisher：支持 InMemory（开发）和 Asynq/Redis（生产）两种实现
+  - 例如：`ProductPurchased` 事件触发 `VPSProvisioner` 创建开通任务
+- **为什么同步总线？**
+  - 模块化单体中，事务一致性比吞吐量更重要
+  - 所有 handler 在同一个调用栈执行，出错可以直接回滚
+  - 当并发上升，**自动适配异步逻辑**
+
 #### seckill组件
 
 既然是并发，就少不了我们大厂最爱聊的秒杀环节了，**这一部分主要叙述如何应对极端大流量场景，但很多关键接口其实都通用的，这一部分也会介绍常见的应对方法**
@@ -356,4 +414,97 @@ flowchart LR
     IF_G --> ENGINE
 ```
 
-先预热（限流一定请求数量inflight），然后放 inflight数量进来，后面请求全拒绝，接着排队dedup防重复订单，stock执行快速扣减库存，放到execute后续逻辑，为了方便拓展，单机我采用了内存部署，不需要redis，集群则上升到redis，只需要配置driver后注入即可
+先预热（限流一定请求数量inflight），然后放 inflight数量进来，后面请求全拒绝，接着排队dedup防重复订单，stock执行快速扣减库存，放到execute后续逻辑，为了方便拓展，单机我采用了内存部署，不需要redis，集群配置的则上升到redis，修改集群或者单机模式只需要配置driver后注入
+
+### 业务流程链路 订单→支付→开通
+
+#### 架构图总览
+```mermaid
+flowchart TD
+    A[👤 用户浏览商品目录] -->|选择套餐| B[📋 创建订单<br/>status: pending]
+    B -->|跳转 Checkout| C[💳 发起支付]
+    C --> C1[创建 Invoice<br/>关联到 Order]
+    C1 --> C2[调用支付网关<br/>CreateCharge]
+    C2 --> C3[返回 pending<br/>前端开始轮询]
+    C3 -.->|~2s 异步| D[🔔 支付网关 Webhook 回调]
+
+    D --> E{回调 status?}
+    E -->|success| F[🎯 PostPaymentOrchestrator]
+    E -->|failed| X[❌ 支付失败]
+
+    F --> F1[1️⃣ ActivateOrder<br/>pending → active]
+    F --> F2[2️⃣ RecordInvoicePayment<br/>invoice → paid]
+    F --> F3[3️⃣ PurchaseProduct<br/>原子消耗库存]
+    F --> F4[4️⃣ CreatePendingInstance<br/>用户立即可见]
+
+    F3 -->|EventBus| G[📡 ProductPurchasedEvent]
+    G --> H[⚙️ ProvisionDispatcher]
+    H --> I[VPSProvisioner]
+    I --> I1[选择最小负载节点]
+    I1 --> I2[分配物理槽位]
+    I2 --> I3[创建 Provision Task]
+    I3 --> I4[Agent 执行部署]
+    I4 --> I5[✅ VM 启动完成]
+
+    C3 -.->|轮询检测| J[📊 Order status = active]
+    J --> K[✅ 前端显示支付成功<br/>跳转实例列表]
+
+    style A fill:#1a1a4e,stroke:#6366f1,color:#fff
+    style B fill:#1a3a1a,stroke:#22c55e,color:#fff
+    style C fill:#4a1a1a,stroke:#f87171,color:#fff
+    style D fill:#4a3a0a,stroke:#fbbf24,color:#fff
+    style F fill:#2a1a4a,stroke:#a78bfa,color:#fff
+    style G fill:#0a3a4a,stroke:#22d3ee,color:#fff
+    style I fill:#1a2a4a,stroke:#60a5fa,color:#fff
+    style K fill:#1a3a1a,stroke:#4ade80,color:#fff
+    style X fill:#4a0a0a,stroke:#ef4444,color:#fff
+```
+
+
+- **涉及的 Bounded Contexts 关键链路解释**
+
+| Context | 职责 | 关键文件 |
+|---------|------|----------|
+| **Catalog** | 商品目录、库存管理、发布 ProductPurchasedEvent | `internal/catalog/app/product_app.go` |
+| **Ordering** | 订单生命周期 (pending→active→suspended→terminated) | `internal/ordering/app/order_app.go` |
+| **Billing** | Invoice 创建、发行、付款记录、作废 | `internal/billing/app/invoice_app.go` |
+| **Payment** | 支付网关对接、charge 创建、webhook 处理 | `internal/payment/app/payment_app.go` |
+| **PostPayment Orchestrator** | 跨域编排：激活订单 + 记录付款 + 消耗库存 + 创建实例 | `internal/payment/app/post_payment_orchestrator.go` |
+| **Provisioning** | 资源池管理、节点选择、物理部署任务创建 | `internal/provisioning/app/provision_dispatcher.go` |
+| **Instance** | 实例 CRUD、状态管理 (pending→running→stopped) | `internal/instance/app/` |
+| **Frontend** | Vue SPA: NewInstanceView → CheckoutView → 轮询确认 | `frontend/src/views/` |
+
+#### 实际流程
+1. 用户选择产品 → `POST /checkout` → 创建订单（pending）
+2. 用户发起支付 → `POST /orders/:id/pay`
+  - PostPaymentOrchestrator 创建发票（Draft→Issued）
+  - 调用支付网关创建 charge
+  - 调度延迟事件 `invoice.check_timeout`（15分钟后检查是否超时）
+3. 支付网关回调 → `POST /payments/webhook`
+  - PostPaymentOrchestrator.HandlePaymentConfirmed：
+    - 激活订单（pending→active）
+    - 记录发票支付（Issued→Paid）
+    - **并行执行**：消费产品库存 + 创建待开通实例（`sync.WaitGroup`）
+    - 产品消费触发 `ProductPurchased` 事件 → `VPSProvisioner` 创建开通任务
+4. 如果超时未支付 → InvoiceTimeoutWorker 作废发票 + 取消订单
+
+#### **跨域编排的设计哲学**
+ddd架构一个比较头疼的问题是，如何用一个上帝编排域，调度所有域，而不过度耦合代码，同时不过度设计
+
+从我的项目架构实际流程看，我需要处理 `产品、下单、支付、创建` 四个域的逻辑，为了权衡架构设计，我选择直接在payment里面用`post_payment_orchestrator`编排调度下单后所有接口，因为目前并没有其他触发order的触发点
+
+我引入了接口
+```
+type OrderActivator interface { ... }     // 对 ordering 的端口
+type ProductPurchaser interface { ... }    // 对 catalog 的端口
+type InstanceCreator interface { ... }     // 对 instance 的端口
+type InvoiceCreator interface { ... }      // 对 billing 的端口
+```
+
+在不过度设计的同时，保留了可以拓展的空间，并且抽象接口，不产生史山依赖 ，infra 层实现 Adapter，并为每个 Adapter 包裹熔断器，编排时我还使用了并行策略，减少支付延迟
+
+- **容错策略**
+  - 订单激活是关键路径，失败直接返回错误
+  - 发票记录、库存消费、实例创建是非关键路径，失败只 log 不回滚
+  - 发票超时：延迟事件兜底，幂等检查（已支付则 no-op）
+

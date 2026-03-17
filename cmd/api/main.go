@@ -130,8 +130,19 @@ func main() {
 	nHandler := provisioningHttp.NewNodeHandler(provSvc)
 
 	// Catalog (products with event-driven provisioning & physical capacity checking)
+	//
+	// Decorator chain (outer → inner): Bloom → Singleflight → Gorm
+	//   1. Bloom filter:   O(1) bit-check rejects definitely-nonexistent IDs instantly
+	//                      → blocks cache penetration attacks with random fake IDs
+	//   2. Singleflight:   deduplicates concurrent reads for the SAME key
+	//                      → prevents thundering herd on hot products
+	//   3. Gorm:           actual database query
+	//
+	// The cheapest filter is outermost so attack traffic never reaches
+	// the more expensive layers (singleflight map ops, DB queries).
 	gormProdRepo := catalogInfra.NewGormProductRepo(db)
-	prodRepo := catalogInfra.NewSingleflightProductRepo(gormProdRepo)
+	sfProdRepo := catalogInfra.NewSingleflightProductRepo(gormProdRepo)
+	prodRepo := catalogInfra.NewBloomProductRepo(sfProdRepo, 10000, 0.01)
 	capacityCheckerRaw := catalogInfra.NewNodeCapacityAdapter(hostRepo)
 	capacityChecker := catalogInfra.NewNodeCapacityAdapterWithCB(capacityCheckerRaw,
 		circuitbreaker.New("node-capacity", 3, 2, 15*time.Second))
