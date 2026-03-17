@@ -1,0 +1,47 @@
+# Celeris API Server Configuration — Performance Testing Profile
+#
+# This config disables per-IP rate limiting and raises global QPS caps to
+# measure raw backend throughput without rate limiter interference.
+#
+# Usage:
+#   ./api.exe --config api-perftest.yaml
+#
+# Then run the perftest tool:
+#   go run ./cmd/perftest/ --scenario baseline --duration 120s --workers 1000
+#
+# ⚠️  DO NOT use this config in production! It removes per-IP protection
+#     and allows unrestricted traffic to all endpoints.
+
+database:
+  dsn: "data.db"
+
+jwt:
+  secret: "my-super-secret-key"
+  issuer: "celeris-api"
+
+grpc:
+  listen: ":50051"
+
+# ── Rate Limiting — DISABLED for pure backend throughput testing ──────────
+# All per-IP limits set to 0 (unlimited). Global limits raised 10x to
+# effectively remove rate limiting as a bottleneck. This lets perftest
+# measure actual handler + DB + middleware performance.
+rate_limit:
+  baseline:
+    global_qps: 0              # no global cap
+    ip_max_qps: 0              # no per-IP cap
+  critical:
+    global_qps: 0
+    ip_max_qps: 0
+  checkout:
+    global_qps: 0
+    ip_max_qps: 0
+  auth:
+    global_qps: 0
+    ip_max_qps: 0
+  standard:
+    global_qps: 0
+    ip_max_qps: 0
+  admin:
+    global_qps: 0
+    ip_max_qps: 0
