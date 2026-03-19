@@ -93,6 +93,16 @@ func main() {
 	engine.Token = token
 	log.Printf("✅ Authenticated (token: %s...)\n", token[:minInt(20, len(token))])
 
+	// Seed a test product for checkout scenarios
+	log.Println("📦 Seeding test product...")
+	productID := engine.SeedTestProduct()
+	if productID != "" {
+		engine.TestProductID = productID
+		log.Printf("✅ Test product ready (id: %s)\n", productID)
+	} else {
+		log.Println("⚠️  Product seeding failed — checkout tests will use random IDs (expect 500s)")
+	}
+
 	// Dispatch to scenario
 	switch *scenario {
 	case "full":

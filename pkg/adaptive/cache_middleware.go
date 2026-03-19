@@ -47,19 +47,19 @@ type adaptiveCache struct {
 //
 // Architecture:
 //
-//	                   ┌──────────────────┐
-//	  GET /products ──▶│ QPSMonitor       │──▶ Record()
-//	                   └────────┬─────────┘
-//	                   ┌────────▼─────────┐
-//	                   │ QPS < threshold? │
-//	                   └───┬──────────┬───┘
-//	                   YES │          │ NO
-//	              ┌────────▼──┐  ┌────▼───────────┐
-//	              │ Pass-thru │  │ Check cache     │
-//	              │ to handler│  │ HIT  → respond  │
-//	              │ (fresh DB)│  │ MISS → handler  │
-//	              └───────────┘  │   + cache (TTL) │
-//	                             └─────────────────┘
+//	                 ┌──────────────────┐
+//	GET /products ──▶│ QPSMonitor       │──▶ Record()
+//	                 └────────┬─────────┘
+//	                 ┌────────▼─────────┐
+//	                 │ QPS < threshold? │
+//	                 └───┬──────────┬───┘
+//	                 YES │          │ NO
+//	            ┌────────▼──┐  ┌────▼───────────┐
+//	            │ Pass-thru │  │ Check cache     │
+//	            │ to handler│  │ HIT  → respond  │
+//	            │ (fresh DB)│  │ MISS → handler  │
+//	            └───────────┘  │   + cache (TTL) │
+//	                           └─────────────────┘
 //
 // When QPS is below the threshold, requests pass through directly to the
 // handler (DB query) for fresh data. When QPS exceeds the threshold,

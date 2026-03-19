@@ -218,9 +218,10 @@ func (w *CSVWriter) Close() {
 
 // Engine is the core traffic generation engine shared by all scenarios.
 type Engine struct {
-	BaseURL string
-	Workers int
-	Token   string
+	BaseURL        string
+	Workers        int
+	Token          string
+	TestProductID  string // seeded product ID for checkout tests
 
 	Client  *http.Client
 	Latency *LatencyTracker
@@ -329,6 +330,65 @@ func (e *Engine) SetupAuth() string {
 	}
 	token, _ := result["token"].(string)
 	return token
+}
+
+// SeedTestProduct creates an enabled product with unlimited stock via the API.
+// This ensures checkout requests hit a real product instead of returning 500.
+// Returns the product ID or empty string on failure.
+func (e *Engine) SeedTestProduct() string {
+	client := &http.Client{Timeout: 5 * time.Second}
+	slug := fmt.Sprintf("perftest-vps-%d", time.Now().UnixNano()%100000)
+
+	// 1. Create product (starts disabled, unlimited slots)
+	body, _ := json.Marshal(map[string]interface{}{
+		"name":          "PerfTest VPS Plan",
+		"slug":          slug,
+		"location":      "perftest",
+		"cpu":           2,
+		"memory_mb":     2048,
+		"disk_gb":       40,
+		"price_amount":  999,
+		"currency":      "USD",
+		"billing_cycle": "monthly",
+		"total_slots":   -1, // unlimited
+	})
+	req, _ := http.NewRequest("POST", e.BaseURL+"/api/v1/products", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+e.Token)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("⚠️  seed product: create failed: %v", err)
+		return ""
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	var result map[string]interface{}
+	json.Unmarshal(respBody, &result)
+	data, _ := result["data"].(map[string]interface{})
+	if data == nil {
+		log.Printf("⚠️  seed product: unexpected response (status %d): %s", resp.StatusCode, string(respBody))
+		return ""
+	}
+	productID, _ := data["id"].(string)
+	if productID == "" {
+		log.Printf("⚠️  seed product: no ID in response")
+		return ""
+	}
+
+	// 2. Enable the product
+	req, _ = http.NewRequest("POST", e.BaseURL+"/api/v1/products/"+productID+"/enable", nil)
+	req.Header.Set("Authorization", "Bearer "+e.Token)
+	resp, err = client.Do(req)
+	if err != nil {
+		log.Printf("⚠️  seed product: enable failed: %v", err)
+		return productID // still usable, just disabled
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	return productID
 }
 
 // ─── Worker Pool & Execution ────────────────────────────────────────────────

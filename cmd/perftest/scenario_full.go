@@ -76,8 +76,12 @@ func runFullScenario(e *Engine, totalDuration time.Duration) {
 			kind: kindLegitimate, auth: true, tier: "checkout", weight: 1.8,
 			forgedIP: SimulatedClientIP("172.18"),
 			body: func(rng *rand.Rand) map[string]interface{} {
+				pid := e.TestProductID
+				if pid == "" {
+					pid = fmt.Sprintf("prod-%d", rng.Intn(100))
+				}
 				return map[string]interface{}{
-					"product_id": fmt.Sprintf("prod-%d", rng.Intn(100)),
+					"product_id": pid,
 					"hostname":   fmt.Sprintf("vps-%d", rng.Intn(99999)),
 					"os":         "ubuntu-22.04",
 				}
