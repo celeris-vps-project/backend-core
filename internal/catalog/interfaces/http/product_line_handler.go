@@ -47,14 +47,14 @@ func NewProductLineHandler(prodSvc *app.ProductAppService, dataSource app.Produc
 // GET /api/v1/product-lines
 func (h *ProductLineHandler) List(ctx context.Context, c *hz_app.RequestContext) {
 	// 1. Get all active resource pools (via port interface)
-	pools, err := h.dataSource.ListActiveResourcePools()
+	pools, err := h.dataSource.ListActiveResourcePools(ctx)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
 		return
 	}
 
 	// 2. Build a region lookup map (via port interface)
-	regions, err := h.dataSource.ListActiveRegions()
+	regions, err := h.dataSource.ListActiveRegions(ctx)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
 		return
@@ -65,7 +65,7 @@ func (h *ProductLineHandler) List(ctx context.Context, c *hz_app.RequestContext)
 	}
 
 	// 3. Get all enabled products to compute per-pool stats
-	products, err := h.prodSvc.ListEnabled()
+	products, err := h.prodSvc.ListEnabled(ctx)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
 		return

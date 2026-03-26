@@ -29,6 +29,10 @@ type HostNode struct {
 	totalSlots int  // max instances this node can host
 	usedSlots  int  // currently allocated instances
 	enabled    bool // whether the node accepts new purchases
+
+	// NAT port pool configuration
+	natPortStart int // NAT port range start (e.g. 20000); 0 = NAT not configured
+	natPortEnd   int // NAT port range end (e.g. 60000)
 }
 
 func NewHostNode(id, code, location, name, secret string) (*HostNode, error) {
@@ -61,6 +65,22 @@ func ReconstituteHostNode(
 		name: name, secret: secret, nodeToken: nodeToken,
 		createdAt:  createdAt,
 		totalSlots: totalSlots, usedSlots: usedSlots, enabled: enabled,
+	}
+}
+
+// ReconstituteHostNodeFull reconstructs a HostNode with all fields including NAT port range.
+func ReconstituteHostNodeFull(
+	id, code, location, regionID, resourcePoolID, name, secret, nodeToken string,
+	createdAt time.Time,
+	totalSlots, usedSlots int, enabled bool,
+	natPortStart, natPortEnd int,
+) *HostNode {
+	return &HostNode{
+		id: id, code: code, location: location, regionID: regionID, resourcePoolID: resourcePoolID,
+		name: name, secret: secret, nodeToken: nodeToken,
+		createdAt:  createdAt,
+		totalSlots: totalSlots, usedSlots: usedSlots, enabled: enabled,
+		natPortStart: natPortStart, natPortEnd: natPortEnd,
 	}
 }
 
@@ -129,4 +149,61 @@ func (n *HostNode) ValidateSecret(s string) bool {
 // ValidateNodeToken checks the permanent node credential issued during bootstrap.
 func (n *HostNode) ValidateNodeToken(t string) bool {
 	return n.nodeToken != "" && n.nodeToken == t
+}
+
+// ---- NAT port pool accessors ----
+
+func (n *HostNode) NATPortStart() int { return n.natPortStart }
+func (n *HostNode) NATPortEnd() int   { return n.natPortEnd }
+
+// HasNATPortPool returns true if the node has a NAT port range configured.
+func (n *HostNode) HasNATPortPool() bool {
+	return n.natPortStart > 0 && n.natPortEnd > n.natPortStart
+}
+
+// NATPortPoolSize returns the number of available ports in the NAT range.
+func (n *HostNode) NATPortPoolSize() int {
+	if !n.HasNATPortPool() {
+		return 0
+	}
+	return n.natPortEnd - n.natPortStart + 1
+}
+
+// SetNATPortRange configures the NAT port range for this node.
+func (n *HostNode) SetNATPortRange(start, end int) error {
+	if start <= 0 || end <= 0 {
+		return errors.New("domain_error: NAT port range start and end must be positive")
+	}
+	if end <= start {
+		return errors.New("domain_error: NAT port range end must be greater than start")
+	}
+	if start < 1024 {
+		return errors.New("domain_error: NAT port range must start at 1024 or above")
+	}
+	if end > 65535 {
+		return errors.New("domain_error: NAT port range must not exceed 65535")
+	}
+	n.natPortStart = start
+	n.natPortEnd = end
+	return nil
+}
+
+// ClearNATPortRange removes the NAT port range configuration.
+func (n *HostNode) ClearNATPortRange() {
+	n.natPortStart = 0
+	n.natPortEnd = 0
+}
+
+// FindFreeNATPort returns the first available port in the NAT range that is
+// not present in the usedPorts set. Returns an error if no port is available.
+func (n *HostNode) FindFreeNATPort(usedPorts map[int]struct{}) (int, error) {
+	if !n.HasNATPortPool() {
+		return 0, errors.New("domain_error: node has no NAT port pool configured")
+	}
+	for p := n.natPortStart; p <= n.natPortEnd; p++ {
+		if _, used := usedPorts[p]; !used {
+			return p, nil
+		}
+	}
+	return 0, errors.New("domain_error: no free NAT ports available on node " + n.code)
 }

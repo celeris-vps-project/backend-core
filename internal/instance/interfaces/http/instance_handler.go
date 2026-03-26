@@ -3,8 +3,10 @@ package http
 import (
 	"backend-core/internal/instance/app"
 	"backend-core/internal/instance/domain"
+	"backend-core/pkg/apperr"
 	"backend-core/pkg/authn"
 	"context"
+	"strings"
 	"time"
 
 	hz_app "github.com/cloudwego/hertz/pkg/app"
@@ -69,12 +71,12 @@ func NewInstanceHandler(svc *app.InstanceAppService) *InstanceHandler {
 func (h *InstanceHandler) Purchase(ctx context.Context, c *hz_app.RequestContext) {
 	uid, ok := authn.UserID(c)
 	if !ok {
-		c.JSON(consts.StatusUnauthorized, utils.H{"error": "unauthorized"})
+		c.JSON(consts.StatusUnauthorized, apperr.Resp(apperr.CodeUnauthorized, "unauthorized"))
 		return
 	}
 	var req PurchaseInstanceRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 	inst, err := h.svc.PurchaseInstance(
@@ -83,7 +85,7 @@ func (h *InstanceHandler) Purchase(ctx context.Context, c *hz_app.RequestContext
 		req.CPU, req.MemoryMB, req.DiskGB,
 	)
 	if err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyInstanceError(err), err.Error()))
 		return
 	}
 	c.JSON(consts.StatusCreated, utils.H{"data": toInstResp(inst)})
@@ -93,12 +95,12 @@ func (h *InstanceHandler) Purchase(ctx context.Context, c *hz_app.RequestContext
 func (h *InstanceHandler) ListByCustomer(ctx context.Context, c *hz_app.RequestContext) {
 	uid, ok := authn.UserID(c)
 	if !ok {
-		c.JSON(consts.StatusUnauthorized, utils.H{"error": "unauthorized"})
+		c.JSON(consts.StatusUnauthorized, apperr.Resp(apperr.CodeUnauthorized, "unauthorized"))
 		return
 	}
 	insts, err := h.svc.ListByCustomer(uid.String())
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	list := make([]InstanceResponse, len(insts))
@@ -112,7 +114,7 @@ func (h *InstanceHandler) ListByCustomer(ctx context.Context, c *hz_app.RequestC
 func (h *InstanceHandler) GetByID(ctx context.Context, c *hz_app.RequestContext) {
 	inst, err := h.svc.GetInstance(c.Param("id"))
 	if err != nil {
-		c.JSON(consts.StatusNotFound, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusNotFound, apperr.Resp(apperr.CodeInstanceNotFound, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": toInstResp(inst)})
@@ -121,7 +123,7 @@ func (h *InstanceHandler) GetByID(ctx context.Context, c *hz_app.RequestContext)
 // POST /instances/:id/start
 func (h *InstanceHandler) Start(ctx context.Context, c *hz_app.RequestContext) {
 	if err := h.svc.StartInstance(c.Param("id")); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyInstanceError(err), err.Error()))
 		return
 	}
 	inst, _ := h.svc.GetInstance(c.Param("id"))
@@ -131,7 +133,7 @@ func (h *InstanceHandler) Start(ctx context.Context, c *hz_app.RequestContext) {
 // POST /instances/:id/stop
 func (h *InstanceHandler) Stop(ctx context.Context, c *hz_app.RequestContext) {
 	if err := h.svc.StopInstance(c.Param("id")); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyInstanceError(err), err.Error()))
 		return
 	}
 	inst, _ := h.svc.GetInstance(c.Param("id"))
@@ -141,7 +143,7 @@ func (h *InstanceHandler) Stop(ctx context.Context, c *hz_app.RequestContext) {
 // POST /instances/:id/suspend
 func (h *InstanceHandler) Suspend(ctx context.Context, c *hz_app.RequestContext) {
 	if err := h.svc.SuspendInstance(c.Param("id")); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyInstanceError(err), err.Error()))
 		return
 	}
 	inst, _ := h.svc.GetInstance(c.Param("id"))
@@ -151,7 +153,7 @@ func (h *InstanceHandler) Suspend(ctx context.Context, c *hz_app.RequestContext)
 // POST /instances/:id/unsuspend
 func (h *InstanceHandler) Unsuspend(ctx context.Context, c *hz_app.RequestContext) {
 	if err := h.svc.UnsuspendInstance(c.Param("id")); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyInstanceError(err), err.Error()))
 		return
 	}
 	inst, _ := h.svc.GetInstance(c.Param("id"))
@@ -161,7 +163,7 @@ func (h *InstanceHandler) Unsuspend(ctx context.Context, c *hz_app.RequestContex
 // POST /instances/:id/terminate
 func (h *InstanceHandler) Terminate(ctx context.Context, c *hz_app.RequestContext) {
 	if err := h.svc.TerminateInstance(c.Param("id")); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyInstanceError(err), err.Error()))
 		return
 	}
 	inst, _ := h.svc.GetInstance(c.Param("id"))
@@ -172,11 +174,11 @@ func (h *InstanceHandler) Terminate(ctx context.Context, c *hz_app.RequestContex
 func (h *InstanceHandler) AssignIP(ctx context.Context, c *hz_app.RequestContext) {
 	var req AssignIPRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 	if err := h.svc.AssignIP(c.Param("id"), req.IPv4, req.IPv6); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyInstanceError(err), err.Error()))
 		return
 	}
 	inst, _ := h.svc.GetInstance(c.Param("id"))
@@ -210,4 +212,23 @@ func toInstResp(i *domain.Instance) InstanceResponse {
 		resp.TerminatedAt = &s
 	}
 	return resp
+}
+
+// classifyInstanceError maps instance domain errors to an error code.
+func classifyInstanceError(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "not found"):
+		return apperr.CodeInstanceNotFound
+	case strings.Contains(msg, "can only start"),
+		strings.Contains(msg, "only running"),
+		strings.Contains(msg, "only suspended"),
+		strings.Contains(msg, "already suspended"),
+		strings.Contains(msg, "already terminated"),
+		strings.Contains(msg, "cannot be suspended"),
+		strings.Contains(msg, "cannot be"):
+		return apperr.CodeInvalidStateTransition
+	default:
+		return apperr.CodeInvalidStateTransition
+	}
 }

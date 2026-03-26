@@ -3,6 +3,7 @@ package app
 import (
 	"backend-core/internal/identity/domain"
 	"backend-core/internal/identity/infra"
+	"context"
 	"fmt"
 	"testing"
 
@@ -50,22 +51,22 @@ func newTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func newTestApp(t *testing.T) (*AuthAppService, *infra.SqliteUserRepo, *mockTokenGenerator) {
+func newTestApp(t *testing.T) (*AuthAppService, *infra.GormUserRepo, *mockTokenGenerator) {
 	t.Helper()
 
 	db := newTestDB(t)
-	repo := infra.NewSqliteUserRepo(db)
+	repo := infra.NewGormUserRepo(db)
 	token := &mockTokenGenerator{token: "test-token"}
 	hasher := &mockPasswordHasher{}
 
 	return NewAuthAppService(repo, token, hasher), repo, token
 }
 
-func newTestAppWithJWT(t *testing.T, secret string) (*AuthAppService, *infra.SqliteUserRepo, *infra.JWTService) {
+func newTestAppWithJWT(t *testing.T, secret string) (*AuthAppService, *infra.GormUserRepo, *infra.JWTService) {
 	t.Helper()
 
 	db := newTestDB(t)
-	repo := infra.NewSqliteUserRepo(db)
+	repo := infra.NewGormUserRepo(db)
 	jwtSvc := infra.NewJWTService(secret, "test-issuer")
 	hasher := &mockPasswordHasher{}
 
@@ -74,8 +75,9 @@ func newTestAppWithJWT(t *testing.T, secret string) (*AuthAppService, *infra.Sql
 
 func TestRegisterUser_Success(t *testing.T) {
 	app, repo, _ := newTestApp(t)
+	ctx := context.Background()
 
-	token, err := app.RegisterUser("u@example.com", "pass123")
+	token, err := app.RegisterUser(ctx, "u@example.com", "pass123")
 	if err != nil {
 		t.Fatalf("RegisterUser error: %v", err)
 	}
@@ -83,7 +85,7 @@ func TestRegisterUser_Success(t *testing.T) {
 		t.Fatalf("token mismatch: %s", token)
 	}
 
-	user, err := repo.FindByEmail("u@example.com")
+	user, err := repo.FindByEmail(ctx, "u@example.com")
 	if err != nil {
 		t.Fatalf("FindByEmail error: %v", err)
 	}
@@ -97,13 +99,14 @@ func TestRegisterUser_Success(t *testing.T) {
 
 func TestLogin_Success(t *testing.T) {
 	app, repo, _ := newTestApp(t)
+	ctx := context.Background()
 
 	existing := domain.ReconstituteUser("id-1", "login@example.com", "hash:secret", "active")
-	if err := repo.Save(existing); err != nil {
+	if err := repo.Save(ctx, existing); err != nil {
 		t.Fatalf("Save error: %v", err)
 	}
 
-	token, _, err := app.Login("login@example.com", "secret")
+	token, _, err := app.Login(ctx, "login@example.com", "secret")
 	if err != nil {
 		t.Fatalf("Login error: %v", err)
 	}
@@ -114,8 +117,9 @@ func TestLogin_Success(t *testing.T) {
 
 func TestRegisterUser_JWTSignatureValidation(t *testing.T) {
 	app, _, jwtSvc := newTestAppWithJWT(t, "secret-1")
+	ctx := context.Background()
 
-	token, err := app.RegisterUser("jwt@example.com", "pass123")
+	token, err := app.RegisterUser(ctx, "jwt@example.com", "pass123")
 	if err != nil {
 		t.Fatalf("RegisterUser error: %v", err)
 	}

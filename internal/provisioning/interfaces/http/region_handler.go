@@ -3,6 +3,7 @@ package http
 import (
 	"backend-core/internal/provisioning/app"
 	"backend-core/internal/provisioning/domain"
+	"backend-core/pkg/apperr"
 	"context"
 
 	hz_app "github.com/cloudwego/hertz/pkg/app"
@@ -41,12 +42,12 @@ func NewRegionHandler(svc *app.ProvisioningAppService) *RegionHandler {
 func (h *RegionHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 	var req CreateRegionRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 	r, err := h.svc.CreateRegion(req.Code, req.Name, req.FlagIcon)
 	if err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(apperr.CodeInvalidStateTransition, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusCreated, utils.H{"data": toRegionResp(r)})
@@ -56,7 +57,7 @@ func (h *RegionHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 func (h *RegionHandler) ListRegions(ctx context.Context, c *hz_app.RequestContext) {
 	regions, err := h.svc.ListActiveRegions()
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	list := make([]RegionResponse, len(regions))
@@ -70,7 +71,7 @@ func (h *RegionHandler) ListRegions(ctx context.Context, c *hz_app.RequestContex
 func (h *RegionHandler) ListAll(ctx context.Context, c *hz_app.RequestContext) {
 	regions, err := h.svc.ListRegions()
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	list := make([]RegionResponse, len(regions))
@@ -84,7 +85,7 @@ func (h *RegionHandler) ListAll(ctx context.Context, c *hz_app.RequestContext) {
 func (h *RegionHandler) GetByID(ctx context.Context, c *hz_app.RequestContext) {
 	r, err := h.svc.GetRegion(c.Param("id"))
 	if err != nil {
-		c.JSON(consts.StatusNotFound, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusNotFound, apperr.Resp(apperr.CodeRegionNotFound, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": toRegionResp(r)})
@@ -93,7 +94,7 @@ func (h *RegionHandler) GetByID(ctx context.Context, c *hz_app.RequestContext) {
 // POST /regions/:id/activate
 func (h *RegionHandler) Activate(ctx context.Context, c *hz_app.RequestContext) {
 	if err := h.svc.ActivateRegion(c.Param("id")); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(apperr.CodeInvalidStateTransition, err.Error()))
 		return
 	}
 	r, _ := h.svc.GetRegion(c.Param("id"))
@@ -103,7 +104,7 @@ func (h *RegionHandler) Activate(ctx context.Context, c *hz_app.RequestContext) 
 // POST /regions/:id/deactivate
 func (h *RegionHandler) Deactivate(ctx context.Context, c *hz_app.RequestContext) {
 	if err := h.svc.DeactivateRegion(c.Param("id")); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(apperr.CodeInvalidStateTransition, err.Error()))
 		return
 	}
 	r, _ := h.svc.GetRegion(c.Param("id"))

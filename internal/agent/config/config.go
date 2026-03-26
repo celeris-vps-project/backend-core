@@ -7,6 +7,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// NATConfig holds NAT-specific configuration for the agent.
+type NATConfig struct {
+	SSHTargetPort   int    `json:"ssh_target_port" yaml:"ssh_target_port"`     // VM internal SSH port (default: 22)
+	InternalNetwork string `json:"internal_network" yaml:"internal_network"`   // NAT internal network CIDR (e.g. "10.0.0.0/24")
+}
+
 // Config holds the agent's runtime configuration.
 type Config struct {
 	BootstrapToken string            `json:"bootstrap_token" yaml:"bootstrap_token"` // one-time bootstrap token for initial registration
@@ -16,6 +22,7 @@ type Config struct {
 	PollInterval   int               `json:"poll_interval" yaml:"poll_interval"`     // seconds between heartbeats
 	VirtBackend    string            `json:"virt_backend" yaml:"virt_backend"`       // "libvirt", "incus", or "stub"
 	VirtOpts       map[string]string `json:"virt_opts" yaml:"virt_opts"`             // backend-specific: {"uri":"qemu:///system"} or {"project":"default"}
+	NAT            NATConfig         `json:"nat" yaml:"nat"`                         // NAT mode configuration
 }
 
 // DefaultConfig returns the default configuration for the agent.
@@ -27,6 +34,10 @@ func DefaultConfig() Config {
 		CredentialFile: "node-credential.yaml",
 		VirtBackend:    "stub",
 		VirtOpts:       map[string]string{},
+		NAT: NATConfig{
+			SSHTargetPort:   22,
+			InternalNetwork: "10.0.0.0/24",
+		},
 	}
 }
 

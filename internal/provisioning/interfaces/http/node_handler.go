@@ -3,11 +3,13 @@ package http
 import (
 	"backend-core/internal/provisioning/app"
 	"backend-core/internal/provisioning/domain"
+	"backend-core/pkg/apperr"
 	"backend-core/pkg/contracts"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	hz_app "github.com/cloudwego/hertz/pkg/app"
@@ -118,7 +120,7 @@ func NewNodeHandler(svc *app.ProvisioningAppService) *NodeHandler { return &Node
 func (h *NodeHandler) CreateHost(ctx context.Context, c *hz_app.RequestContext) {
 	var req CreateHostRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 
@@ -137,13 +139,13 @@ func (h *NodeHandler) CreateHost(ctx context.Context, c *hz_app.RequestContext) 
 	// Auto-generate an internal secret (legacy field; agents use bootstrap tokens now)
 	autoSecret, err := domain.GenerateNodeToken()
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": "failed to generate node secret"})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, "failed to generate node secret"))
 		return
 	}
 
 	node, err := h.svc.CreateHost(code, req.Location, name, autoSecret, req.TotalSlots)
 	if err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
 		return
 	}
 
@@ -161,6 +163,7 @@ func (h *NodeHandler) CreateHost(ctx context.Context, c *hz_app.RequestContext) 
 		// Node was created but token creation failed ---?still return the node
 		c.JSON(consts.StatusCreated, utils.H{
 			"data":  toHostResp(node, nil),
+			"code":  apperr.CodeInternalError,
 			"error": "node created but bootstrap token generation failed: " + err.Error(),
 		})
 		return
@@ -183,7 +186,7 @@ func (h *NodeHandler) ListHosts(ctx context.Context, c *hz_app.RequestContext) {
 		nodes, err = h.svc.ListHosts()
 	}
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	// Fetch all cached states in one call
@@ -199,7 +202,7 @@ func (h *NodeHandler) ListHosts(ctx context.Context, c *hz_app.RequestContext) {
 func (h *NodeHandler) GetHost(ctx context.Context, c *hz_app.RequestContext) {
 	node, err := h.svc.GetHost(c.Param("id"))
 	if err != nil {
-		c.JSON(consts.StatusNotFound, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusNotFound, apperr.Resp(apperr.CodeNodeNotFound, err.Error()))
 		return
 	}
 	state, _ := h.svc.StateCache().GetNodeState(node.ID())
@@ -209,7 +212,7 @@ func (h *NodeHandler) GetHost(ctx context.Context, c *hz_app.RequestContext) {
 // POST /host-nodes/:id/enable
 func (h *NodeHandler) EnableHost(ctx context.Context, c *hz_app.RequestContext) {
 	if err := h.svc.EnableHost(c.Param("id")); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
 		return
 	}
 	node, _ := h.svc.GetHost(c.Param("id"))
@@ -220,7 +223,7 @@ func (h *NodeHandler) EnableHost(ctx context.Context, c *hz_app.RequestContext) 
 // POST /host-nodes/:id/disable
 func (h *NodeHandler) DisableHost(ctx context.Context, c *hz_app.RequestContext) {
 	if err := h.svc.DisableHost(c.Param("id")); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
 		return
 	}
 	node, _ := h.svc.GetHost(c.Param("id"))
@@ -232,7 +235,7 @@ func (h *NodeHandler) DisableHost(ctx context.Context, c *hz_app.RequestContext)
 func (h *NodeHandler) ListLocations(ctx context.Context, c *hz_app.RequestContext) {
 	locs, err := h.svc.AvailableLocations()
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": locs})
@@ -242,12 +245,12 @@ func (h *NodeHandler) ListLocations(ctx context.Context, c *hz_app.RequestContex
 func (h *NodeHandler) AddIP(ctx context.Context, c *hz_app.RequestContext) {
 	var req AddIPRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 	ip, err := h.svc.AddIP(c.Param("id"), req.Address, req.Version)
 	if err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
 		return
 	}
 	c.JSON(consts.StatusCreated, utils.H{"data": toIPResp(ip)})
@@ -257,7 +260,7 @@ func (h *NodeHandler) AddIP(ctx context.Context, c *hz_app.RequestContext) {
 func (h *NodeHandler) ListIPs(ctx context.Context, c *hz_app.RequestContext) {
 	ips, err := h.svc.ListIPs(c.Param("id"))
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	list := make([]IPResponse, len(ips))
@@ -271,12 +274,12 @@ func (h *NodeHandler) ListIPs(ctx context.Context, c *hz_app.RequestContext) {
 func (h *NodeHandler) EnqueueTask(ctx context.Context, c *hz_app.RequestContext) {
 	var req EnqueueTaskRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 	task, err := h.svc.EnqueueTask(c.Param("id"), req.Type, req.Spec)
 	if err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
 		return
 	}
 	c.JSON(consts.StatusCreated, utils.H{"data": task})
@@ -290,12 +293,13 @@ func (h *NodeHandler) EnqueueTask(ctx context.Context, c *hz_app.RequestContext)
 func (h *NodeHandler) AgentRegister(ctx context.Context, c *hz_app.RequestContext) {
 	var reg contracts.AgentRegistration
 	if err := c.BindAndValidate(&reg); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 	result, err := h.svc.RegisterAgent(reg)
 	if err != nil {
-		c.JSON(consts.StatusUnauthorized, utils.H{"error": err.Error()})
+		code := classifyAgentError(err)
+		c.JSON(consts.StatusUnauthorized, apperr.Resp(code, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"ok": true, "node_id": result.NodeID, "node_token": result.NodeToken})
@@ -327,7 +331,7 @@ type BootstrapTokenResponse struct {
 func (h *NodeHandler) CreateBootstrapToken(ctx context.Context, c *hz_app.RequestContext) {
 	var req CreateBootstrapTokenRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 	ttl := time.Duration(req.TTLMinutes) * time.Minute
@@ -336,7 +340,7 @@ func (h *NodeHandler) CreateBootstrapToken(ctx context.Context, c *hz_app.Reques
 	}
 	bt, err := h.svc.CreateBootstrapToken(req.NodeID, ttl, req.Description)
 	if err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
 		return
 	}
 	c.JSON(consts.StatusCreated, utils.H{"data": toBtResp(bt)})
@@ -346,7 +350,7 @@ func (h *NodeHandler) CreateBootstrapToken(ctx context.Context, c *hz_app.Reques
 func (h *NodeHandler) ListBootstrapTokens(ctx context.Context, c *hz_app.RequestContext) {
 	tokens, err := h.svc.ListBootstrapTokens()
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	list := make([]BootstrapTokenResponse, len(tokens))
@@ -359,7 +363,7 @@ func (h *NodeHandler) ListBootstrapTokens(ctx context.Context, c *hz_app.Request
 // DELETE /admin/bootstrap-tokens/:id
 func (h *NodeHandler) RevokeBootstrapToken(ctx context.Context, c *hz_app.RequestContext) {
 	if err := h.svc.RevokeBootstrapToken(c.Param("id")); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"ok": true})
@@ -368,7 +372,7 @@ func (h *NodeHandler) RevokeBootstrapToken(ctx context.Context, c *hz_app.Reques
 // POST /admin/nodes/:id/revoke-token
 func (h *NodeHandler) RevokeNodeToken(ctx context.Context, c *hz_app.RequestContext) {
 	if err := h.svc.RevokeNodeToken(c.Param("id")); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"ok": true})
@@ -396,12 +400,12 @@ func toBtResp(bt *domain.BootstrapToken) BootstrapTokenResponse {
 func (h *NodeHandler) AgentHeartbeat(ctx context.Context, c *hz_app.RequestContext) {
 	var hb contracts.Heartbeat
 	if err := c.BindAndValidate(&hb); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 	ack, err := h.svc.Heartbeat(hb)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, ack)
@@ -411,11 +415,11 @@ func (h *NodeHandler) AgentHeartbeat(ctx context.Context, c *hz_app.RequestConte
 func (h *NodeHandler) AgentTaskResult(ctx context.Context, c *hz_app.RequestContext) {
 	var result contracts.TaskResult
 	if err := c.BindAndValidate(&result); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 	if err := h.svc.ReportTaskResult(result); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"ok": true})
@@ -429,12 +433,12 @@ func (h *NodeHandler) AgentTaskResult(ctx context.Context, c *hz_app.RequestCont
 func (h *NodeHandler) CreateResourcePool(ctx context.Context, c *hz_app.RequestContext) {
 	var req CreateResourcePoolRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 	pool, err := h.svc.CreateResourcePool(req.Name, req.RegionID)
 	if err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
 		return
 	}
 	c.JSON(consts.StatusCreated, utils.H{"data": toPoolResp(pool)})
@@ -444,7 +448,7 @@ func (h *NodeHandler) CreateResourcePool(ctx context.Context, c *hz_app.RequestC
 func (h *NodeHandler) ListResourcePools(ctx context.Context, c *hz_app.RequestContext) {
 	summaries, err := h.svc.ListPoolCapacities()
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": summaries})
@@ -454,7 +458,7 @@ func (h *NodeHandler) ListResourcePools(ctx context.Context, c *hz_app.RequestCo
 func (h *NodeHandler) GetResourcePool(ctx context.Context, c *hz_app.RequestContext) {
 	pool, err := h.svc.GetResourcePool(c.Param("id"))
 	if err != nil {
-		c.JSON(consts.StatusNotFound, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusNotFound, apperr.Resp(apperr.CodePoolNotFound, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": h.toPoolDetailResp(pool)})
@@ -464,12 +468,12 @@ func (h *NodeHandler) GetResourcePool(ctx context.Context, c *hz_app.RequestCont
 func (h *NodeHandler) UpdateResourcePool(ctx context.Context, c *hz_app.RequestContext) {
 	var req UpdateResourcePoolRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 	pool, err := h.svc.UpdateResourcePool(c.Param("id"), req.Name, req.RegionID)
 	if err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": toPoolResp(pool)})
@@ -478,7 +482,7 @@ func (h *NodeHandler) UpdateResourcePool(ctx context.Context, c *hz_app.RequestC
 // POST /resource-pools/:id/activate
 func (h *NodeHandler) ActivateResourcePool(ctx context.Context, c *hz_app.RequestContext) {
 	if err := h.svc.ActivateResourcePool(c.Param("id")); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
 		return
 	}
 	pool, _ := h.svc.GetResourcePool(c.Param("id"))
@@ -488,7 +492,7 @@ func (h *NodeHandler) ActivateResourcePool(ctx context.Context, c *hz_app.Reques
 // POST /resource-pools/:id/deactivate
 func (h *NodeHandler) DeactivateResourcePool(ctx context.Context, c *hz_app.RequestContext) {
 	if err := h.svc.DeactivateResourcePool(c.Param("id")); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
 		return
 	}
 	pool, _ := h.svc.GetResourcePool(c.Param("id"))
@@ -499,11 +503,11 @@ func (h *NodeHandler) DeactivateResourcePool(ctx context.Context, c *hz_app.Requ
 func (h *NodeHandler) AssignNodeToPool(ctx context.Context, c *hz_app.RequestContext) {
 	var req AssignNodeRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 	if err := h.svc.AssignNodeToPool(req.NodeID, c.Param("id")); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"ok": true})
@@ -512,7 +516,7 @@ func (h *NodeHandler) AssignNodeToPool(ctx context.Context, c *hz_app.RequestCon
 // DELETE /resource-pools/:id/nodes/:nodeId ---?remove a node from this pool
 func (h *NodeHandler) RemoveNodeFromPool(ctx context.Context, c *hz_app.RequestContext) {
 	if err := h.svc.RemoveNodeFromPool(c.Param("nodeId")); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"ok": true})
@@ -593,4 +597,46 @@ func shortRandHex(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// classifyNodeError maps provisioning domain errors to an error code.
+func classifyNodeError(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "host node not found"), strings.Contains(msg, "node not found"), strings.Contains(msg, "target node not found"):
+		return apperr.CodeNodeNotFound
+	case strings.Contains(msg, "resource pool not found"):
+		return apperr.CodePoolNotFound
+	case strings.Contains(msg, "bootstrap token not found"):
+		return apperr.CodeTokenNotFound
+	case strings.Contains(msg, "ip not found"), strings.Contains(msg, "no available ip"):
+		return apperr.CodeIPNotFound
+	case strings.Contains(msg, "task not found"):
+		return apperr.CodeTaskNotFound
+	case strings.Contains(msg, "no available slots"), strings.Contains(msg, "no available nodes"):
+		return apperr.CodeNoAvailableSlots
+	case strings.Contains(msg, "node is disabled"):
+		return apperr.CodeNodeDisabled
+	case strings.Contains(msg, "token expired"):
+		return apperr.CodeTokenExpired
+	case strings.Contains(msg, "token already used"):
+		return apperr.CodeTokenAlreadyUsed
+	default:
+		return apperr.CodeInvalidStateTransition
+	}
+}
+
+// classifyAgentError maps agent registration errors to an error code.
+func classifyAgentError(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "invalid bootstrap token"), strings.Contains(msg, "invalid node token"):
+		return apperr.CodeUnauthorized
+	case strings.Contains(msg, "expired"), strings.Contains(msg, "already used"):
+		return apperr.CodeTokenExpired
+	case strings.Contains(msg, "not found"):
+		return apperr.CodeNodeNotFound
+	default:
+		return apperr.CodeUnauthorized
+	}
 }

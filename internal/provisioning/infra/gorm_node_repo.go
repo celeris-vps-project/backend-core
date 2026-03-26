@@ -19,7 +19,7 @@ type HostNodePO struct {
 	Code           string    `gorm:"uniqueIndex;column:code"`
 	Location       string    `gorm:"index;column:location"`
 	RegionID       string    `gorm:"index;column:region_id"`
-	ResourcePoolID string    `gorm:"index;column:resource_pool_id"`
+	ResourcePoolID *string   `gorm:"index;column:resource_pool_id"`
 	Name           string    `gorm:"column:name"`
 	Secret         string    `gorm:"column:secret"`
 	NodeToken      string    `gorm:"column:node_token;index"`
@@ -29,6 +29,10 @@ type HostNodePO struct {
 	TotalSlots int  `gorm:"column:total_slots;default:0"`
 	UsedSlots  int  `gorm:"column:used_slots;default:0"`
 	Enabled    bool `gorm:"column:enabled;default:true"`
+
+	// NAT port pool configuration
+	NATPortStart int `gorm:"column:nat_port_start;default:0"`
+	NATPortEnd   int `gorm:"column:nat_port_end;default:0"`
 }
 
 func (HostNodePO) TableName() string { return "host_nodes" }
@@ -38,6 +42,8 @@ type IPAddressPO struct {
 	NodeID     string `gorm:"index;column:node_id"`
 	Address    string `gorm:"column:address"`
 	Version    int    `gorm:"column:version"`
+	Mode       string `gorm:"column:mode;default:dedicated"` // "dedicated" or "nat"
+	Port       int    `gorm:"column:port;default:0"`         // NAT only: high port on host
 	InstanceID string `gorm:"column:instance_id"`
 }
 
@@ -252,6 +258,32 @@ func (r *GormIPAddressRepo) Save(ip *domain.IPAddress) error {
 	return r.db.Save(&po).Error
 }
 
+// ListNATPortsByNodeID returns all allocated NAT ports on a node.
+func (r *GormIPAddressRepo) ListNATPortsByNodeID(nodeID string) ([]int, error) {
+	var ports []int
+	err := r.db.Model(&IPAddressPO{}).
+		Where("node_id = ? AND mode = ?", nodeID, string(domain.NetworkModeNAT)).
+		Pluck("port", &ports).Error
+	if err != nil {
+		return nil, err
+	}
+	return ports, nil
+}
+
+// FindAvailableNAT returns an available (unassigned) NAT port allocation on the node, if any.
+func (r *GormIPAddressRepo) FindAvailableNAT(nodeID string) (*domain.IPAddress, error) {
+	var po IPAddressPO
+	err := r.db.Where("node_id = ? AND mode = ? AND instance_id = ''", nodeID, string(domain.NetworkModeNAT)).
+		First(&po).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("no available NAT port allocation")
+		}
+		return nil, err
+	}
+	return ipToDomain(po), nil
+}
+
 // ---- Task Repository ----
 
 type GormTaskRepo struct{ db *gorm.DB }
@@ -290,29 +322,43 @@ func (r *GormTaskRepo) Save(t *contracts.Task) error {
 // ---- Mapping helpers ----
 
 func hostToDomain(po HostNodePO) *domain.HostNode {
-	return domain.ReconstituteHostNode(
-		po.ID, po.Code, po.Location, po.RegionID, po.ResourcePoolID, po.Name, po.Secret, po.NodeToken,
+	poolID := ""
+	if po.ResourcePoolID != nil {
+		poolID = *po.ResourcePoolID
+	}
+	return domain.ReconstituteHostNodeFull(
+		po.ID, po.Code, po.Location, po.RegionID, poolID, po.Name, po.Secret, po.NodeToken,
 		po.CreatedAt,
 		po.TotalSlots, po.UsedSlots, po.Enabled,
+		po.NATPortStart, po.NATPortEnd,
 	)
 }
 
 func hostFromDomain(n *domain.HostNode) HostNodePO {
+	var poolID *string
+	if n.ResourcePoolID() != "" {
+		s := n.ResourcePoolID()
+		poolID = &s
+	}
 	return HostNodePO{
 		ID: n.ID(), Code: n.Code(), Location: n.Location(), RegionID: n.RegionID(),
-		ResourcePoolID: n.ResourcePoolID(), Name: n.Name(), Secret: n.Secret(),
-		NodeToken:  n.NodeToken(),
-		CreatedAt:  n.CreatedAt(),
-		TotalSlots: n.TotalSlots(), UsedSlots: n.UsedSlots(), Enabled: n.Enabled(),
+		ResourcePoolID: poolID, Name: n.Name(), Secret: n.Secret(),
+		NodeToken:    n.NodeToken(),
+		CreatedAt:    n.CreatedAt(),
+		TotalSlots:   n.TotalSlots(), UsedSlots: n.UsedSlots(), Enabled: n.Enabled(),
+		NATPortStart: n.NATPortStart(), NATPortEnd: n.NATPortEnd(),
 	}
 }
 
 func ipToDomain(po IPAddressPO) *domain.IPAddress {
-	return domain.ReconstituteIPAddress(po.ID, po.NodeID, po.Address, po.Version, po.InstanceID)
+	return domain.ReconstituteIPAddressFull(po.ID, po.NodeID, po.Address, po.Version, domain.NetworkMode(po.Mode), po.Port, po.InstanceID)
 }
 
 func ipFromDomain(ip *domain.IPAddress) IPAddressPO {
-	return IPAddressPO{ID: ip.ID(), NodeID: ip.NodeID(), Address: ip.Address(), Version: ip.Version(), InstanceID: ip.InstanceID()}
+	return IPAddressPO{
+		ID: ip.ID(), NodeID: ip.NodeID(), Address: ip.Address(), Version: ip.Version(),
+		Mode: string(ip.Mode()), Port: ip.Port(), InstanceID: ip.InstanceID(),
+	}
 }
 
 func taskToDomain(po TaskPO) contracts.Task {

@@ -10,10 +10,11 @@ import (
 
 // Config holds the API server's runtime configuration.
 type Config struct {
-	Database  DatabaseConfig  `json:"database" yaml:"database"`
-	JWT       JWTConfig       `json:"jwt" yaml:"jwt"`
-	GRPC      GRPCConfig      `json:"grpc" yaml:"grpc"`
-	RateLimit RateLimitConfig `json:"rate_limit" yaml:"rate_limit"`
+	Database  DatabaseConfig       `json:"database" yaml:"database"`
+	JWT       JWTConfig            `json:"jwt" yaml:"jwt"`
+	GRPC      GRPCConfig           `json:"grpc" yaml:"grpc"`
+	RateLimit RateLimitConfig      `json:"rate_limit" yaml:"rate_limit"`
+	Crypto    CryptoPaymentConfig  `json:"crypto" yaml:"crypto"`
 }
 
 // DatabaseConfig holds database connection settings.
@@ -109,6 +110,39 @@ type RateLimitConfig struct {
 	Admin RateLimitTier `json:"admin" yaml:"admin"`
 }
 
+// CryptoPaymentConfig holds USDT crypto payment settings.
+//
+// The payment module supports two modes:
+//
+//   - MockMode (development): charges are auto-confirmed after MockConfirmDelay.
+//     No real blockchain interaction. Good for local development and testing.
+//
+//   - Production mode (mock_mode: false): the system waits for a real webhook
+//     callback from a blockchain monitoring service to confirm on-chain payments.
+//     Configure Wallets with your actual receiving addresses per network.
+//
+// Supported networks: arbitrum, solana, trc20, bsc, polygon
+//
+// Environment variable override: CRYPTO_MOCK_MODE=false disables mock mode.
+type CryptoPaymentConfig struct {
+	// MockMode: true = auto-confirm payments after MockConfirmDelay (dev/testing).
+	// false = wait for real blockchain confirmation via webhook (production).
+	MockMode bool `json:"mock_mode" yaml:"mock_mode"`
+
+	// MockConfirmDelay is the delay before auto-confirming in mock mode.
+	// Parsed as Go duration string (e.g. "3s", "500ms"). Default: "3s".
+	MockConfirmDelay string `json:"mock_confirm_delay" yaml:"mock_confirm_delay"`
+
+	// PaymentTimeout is how long a charge remains valid before expiring.
+	// Parsed as Go duration string (e.g. "30m", "1h"). Default: "30m".
+	PaymentTimeout string `json:"payment_timeout" yaml:"payment_timeout"`
+
+	// Wallets maps each blockchain network to the receiving wallet address.
+	// Keys: "arbitrum", "solana", "trc20", "bsc", "polygon"
+	// In production, replace these with your actual receiving addresses.
+	Wallets map[string]string `json:"wallets" yaml:"wallets"`
+}
+
 // DefaultConfig returns sensible defaults for development.
 func DefaultConfig() Config {
 	return Config{
@@ -130,6 +164,18 @@ func DefaultConfig() Config {
 			Auth:     RateLimitTier{GlobalQPS: 500, IPMaxQPS: 3},
 			Standard: RateLimitTier{GlobalQPS: 1000, IPMaxQPS: 15},
 			Admin:    RateLimitTier{GlobalQPS: 0, IPMaxQPS: 20},
+		},
+		Crypto: CryptoPaymentConfig{
+			MockMode:         true,
+			MockConfirmDelay: "3s",
+			PaymentTimeout:   "30m",
+			Wallets: map[string]string{
+				"arbitrum": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD3E",
+				"solana":   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+				"trc20":    "TN3W4H6rK2ce4vX9YnFQHwKENnHjoxb3m9",
+				"bsc":      "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD3E",
+				"polygon":  "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD3E",
+			},
 		},
 	}
 }

@@ -1,11 +1,13 @@
 package app
 
+import "context"
+
 // ProductLineDataSource provides region and resource pool information
 // needed to build the customer-facing product line view.
 // Implemented by the provisioning context via an infra adapter.
 type ProductLineDataSource interface {
-	ListActiveResourcePools() ([]ResourcePoolInfo, error)
-	ListActiveRegions() ([]RegionInfo, error)
+	ListActiveResourcePools(ctx context.Context) ([]ResourcePoolInfo, error)
+	ListActiveRegions(ctx context.Context) ([]RegionInfo, error)
 }
 
 // ResourcePoolInfo is a read-model DTO for product line display.

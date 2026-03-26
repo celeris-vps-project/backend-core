@@ -28,6 +28,10 @@ type Instance struct {
 	ipv6       string
 	status     string
 
+	// NAT mode fields
+	networkMode string // "dedicated" or "nat"; empty defaults to "dedicated"
+	natPort     int    // NAT mode: the high port on the host mapped to VM SSH
+
 	createdAt    time.Time
 	startedAt    *time.Time
 	stoppedAt    *time.Time
@@ -88,6 +92,26 @@ func ReconstituteInstance(
 	}
 }
 
+// ReconstituteInstanceFull reconstructs an Instance with all fields including NAT support.
+func ReconstituteInstanceFull(
+	id, customerID, orderID, nodeID, hostname, plan, os string,
+	cpu, memoryMB, diskGB int,
+	ipv4, ipv6, status string,
+	networkMode string, natPort int,
+	createdAt time.Time,
+	startedAt, stoppedAt, suspendedAt, terminatedAt *time.Time,
+) *Instance {
+	return &Instance{
+		id: id, customerID: customerID, orderID: orderID, nodeID: nodeID,
+		hostname: hostname, plan: plan, os: os,
+		cpu: cpu, memoryMB: memoryMB, diskGB: diskGB,
+		ipv4: ipv4, ipv6: ipv6, status: status,
+		networkMode: networkMode, natPort: natPort,
+		createdAt: createdAt, startedAt: startedAt, stoppedAt: stoppedAt,
+		suspendedAt: suspendedAt, terminatedAt: terminatedAt,
+	}
+}
+
 func (i *Instance) ID() string               { return i.id }
 func (i *Instance) CustomerID() string       { return i.customerID }
 func (i *Instance) OrderID() string          { return i.orderID }
@@ -106,6 +130,32 @@ func (i *Instance) StartedAt() *time.Time    { return i.startedAt }
 func (i *Instance) StoppedAt() *time.Time    { return i.stoppedAt }
 func (i *Instance) SuspendedAt() *time.Time  { return i.suspendedAt }
 func (i *Instance) TerminatedAt() *time.Time { return i.terminatedAt }
+
+// ---- NAT accessors ----
+
+// NetworkMode returns the network mode: "dedicated" or "nat".
+// Empty string is treated as "dedicated" for backward compatibility.
+func (i *Instance) NetworkMode() string {
+	if i.networkMode == "" {
+		return "dedicated"
+	}
+	return i.networkMode
+}
+
+func (i *Instance) NATPort() int              { return i.natPort }
+func (i *Instance) IsNAT() bool               { return i.networkMode == "nat" }
+func (i *Instance) SetNetworkMode(mode string) { i.networkMode = mode }
+func (i *Instance) SetNATPort(port int)        { i.natPort = port }
+
+// AssignNAT sets the NAT network mode and port for this instance.
+func (i *Instance) AssignNAT(port int) error {
+	if port <= 0 || port > 65535 {
+		return errors.New("domain_error: NAT port must be between 1 and 65535")
+	}
+	i.networkMode = "nat"
+	i.natPort = port
+	return nil
+}
 
 func (i *Instance) AssignIP(ipv4, ipv6 string) error {
 	if ipv4 == "" && ipv6 == "" {

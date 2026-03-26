@@ -56,6 +56,13 @@ type IPAddressRepository interface {
 	ListByNodeID(nodeID string) ([]*IPAddress, error)
 	FindAvailable(nodeID string, version int) (*IPAddress, error)
 	Save(ip *IPAddress) error
+
+	// NAT port allocation support
+
+	// ListNATPortsByNodeID returns all allocated NAT ports on a node (both assigned and released).
+	ListNATPortsByNodeID(nodeID string) ([]int, error)
+	// FindAvailableNAT returns an available (unassigned) NAT port allocation on the node, if any.
+	FindAvailableNAT(nodeID string) (*IPAddress, error)
 }
 
 // TaskRepository persists provisioning tasks for agents to poll.

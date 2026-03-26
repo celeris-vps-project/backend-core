@@ -3,8 +3,10 @@ package http
 import (
 	"backend-core/internal/billing/app"
 	"backend-core/internal/billing/domain"
+	"backend-core/pkg/apperr"
 	"backend-core/pkg/authn"
 	"context"
+	"strings"
 	"time"
 
 	hz_app "github.com/cloudwego/hertz/pkg/app"
@@ -91,7 +93,7 @@ func NewInvoiceHandler(invoiceApp *app.InvoiceAppService) *InvoiceHandler {
 func (h *InvoiceHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 	var req CreateInvoiceRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 
@@ -102,7 +104,7 @@ func (h *InvoiceHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 	}
 	billingCycle, err := domain.NewBillingCycle(cycleType)
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 
@@ -111,7 +113,7 @@ func (h *InvoiceHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 	if req.PeriodStart != nil {
 		parsed, err := time.Parse(time.RFC3339, *req.PeriodStart)
 		if err != nil {
-			c.JSON(consts.StatusBadRequest, utils.H{"error": "invalid period_start format, use RFC3339"})
+			c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, "invalid period_start format, use RFC3339"))
 			return
 		}
 		periodStart = &parsed
@@ -119,7 +121,7 @@ func (h *InvoiceHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 	if req.PeriodEnd != nil {
 		parsed, err := time.Parse(time.RFC3339, *req.PeriodEnd)
 		if err != nil {
-			c.JSON(consts.StatusBadRequest, utils.H{"error": "invalid period_end format, use RFC3339"})
+			c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, "invalid period_end format, use RFC3339"))
 			return
 		}
 		periodEnd = &parsed
@@ -127,7 +129,7 @@ func (h *InvoiceHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 
 	invoice, err := h.invoiceApp.CreateDraft(req.CustomerID, req.Currency, billingCycle, periodStart, periodEnd)
 	if err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyInvoiceError(err), err.Error()))
 		return
 	}
 
@@ -139,7 +141,7 @@ func (h *InvoiceHandler) GetByID(ctx context.Context, c *hz_app.RequestContext) 
 	id := c.Param("id")
 	invoice, err := h.invoiceApp.GetInvoice(id)
 	if err != nil {
-		c.JSON(consts.StatusNotFound, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusNotFound, apperr.Resp(apperr.CodeInvoiceNotFound, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": toInvoiceResponse(invoice)})
@@ -150,7 +152,7 @@ func (h *InvoiceHandler) GetByID(ctx context.Context, c *hz_app.RequestContext) 
 func (h *InvoiceHandler) ListByCustomer(ctx context.Context, c *hz_app.RequestContext) {
 	uid, ok := authn.UserID(c)
 	if !ok {
-		c.JSON(consts.StatusUnauthorized, utils.H{"error": "unauthorized"})
+		c.JSON(consts.StatusUnauthorized, apperr.Resp(apperr.CodeUnauthorized, "unauthorized"))
 		return
 	}
 
@@ -160,7 +162,7 @@ func (h *InvoiceHandler) ListByCustomer(ctx context.Context, c *hz_app.RequestCo
 	if qp := c.Query("customer_id"); qp != "" {
 		role, _ := authn.UserRole(c)
 		if role != "admin" {
-			c.JSON(consts.StatusForbidden, utils.H{"error": "only admin can query other customers' invoices"})
+			c.JSON(consts.StatusForbidden, apperr.Resp(apperr.CodeForbidden, "only admin can query other customers' invoices"))
 			return
 		}
 		customerID = qp
@@ -168,7 +170,7 @@ func (h *InvoiceHandler) ListByCustomer(ctx context.Context, c *hz_app.RequestCo
 
 	invoices, err := h.invoiceApp.ListByCustomer(customerID)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 
@@ -184,36 +186,36 @@ func (h *InvoiceHandler) AddLineItem(ctx context.Context, c *hz_app.RequestConte
 	id := c.Param("id")
 	var req AddLineItemRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 
 	// Need currency from existing invoice
 	invoice, err := h.invoiceApp.GetInvoice(id)
 	if err != nil {
-		c.JSON(consts.StatusNotFound, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusNotFound, apperr.Resp(apperr.CodeInvoiceNotFound, err.Error()))
 		return
 	}
 
 	unitPrice, err := domain.NewMoney(invoice.Currency(), req.UnitPrice)
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 	item, err := domain.NewLineItem(req.ID, req.Description, req.Quantity, unitPrice)
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 	if err := h.invoiceApp.AddLineItem(id, item); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyInvoiceError(err), err.Error()))
 		return
 	}
 
 	// Return updated invoice
 	updated, err := h.invoiceApp.GetInvoice(id)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": toInvoiceResponse(updated)})
@@ -224,29 +226,29 @@ func (h *InvoiceHandler) SetTax(ctx context.Context, c *hz_app.RequestContext) {
 	id := c.Param("id")
 	var req SetTaxRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 
 	invoice, err := h.invoiceApp.GetInvoice(id)
 	if err != nil {
-		c.JSON(consts.StatusNotFound, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusNotFound, apperr.Resp(apperr.CodeInvoiceNotFound, err.Error()))
 		return
 	}
 
 	tax, err := domain.NewMoney(invoice.Currency(), req.Amount)
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 	if err := h.invoiceApp.SetTaxAmount(id, tax); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyInvoiceError(err), err.Error()))
 		return
 	}
 
 	updated, err := h.invoiceApp.GetInvoice(id)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": toInvoiceResponse(updated)})
@@ -257,7 +259,7 @@ func (h *InvoiceHandler) Issue(ctx context.Context, c *hz_app.RequestContext) {
 	id := c.Param("id")
 	var req IssueInvoiceRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 
@@ -266,20 +268,20 @@ func (h *InvoiceHandler) Issue(ctx context.Context, c *hz_app.RequestContext) {
 	if req.DueAt != nil {
 		parsed, err := time.Parse(time.RFC3339, *req.DueAt)
 		if err != nil {
-			c.JSON(consts.StatusBadRequest, utils.H{"error": "invalid due_at format, use RFC3339"})
+			c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, "invalid due_at format, use RFC3339"))
 			return
 		}
 		dueAt = &parsed
 	}
 
 	if err := h.invoiceApp.IssueInvoice(id, issuedAt, dueAt); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyInvoiceError(err), err.Error()))
 		return
 	}
 
 	updated, err := h.invoiceApp.GetInvoice(id)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": toInvoiceResponse(updated)})
@@ -290,31 +292,31 @@ func (h *InvoiceHandler) RecordPayment(ctx context.Context, c *hz_app.RequestCon
 	id := c.Param("id")
 	var req RecordPaymentRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 
 	invoice, err := h.invoiceApp.GetInvoice(id)
 	if err != nil {
-		c.JSON(consts.StatusNotFound, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusNotFound, apperr.Resp(apperr.CodeInvoiceNotFound, err.Error()))
 		return
 	}
 
 	amount, err := domain.NewMoney(invoice.Currency(), req.Amount)
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 
 	paidAt := time.Now()
 	if err := h.invoiceApp.RecordPayment(id, amount, paidAt); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyInvoiceError(err), err.Error()))
 		return
 	}
 
 	updated, err := h.invoiceApp.GetInvoice(id)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": toInvoiceResponse(updated)})
@@ -325,18 +327,18 @@ func (h *InvoiceHandler) Void(ctx context.Context, c *hz_app.RequestContext) {
 	id := c.Param("id")
 	var req VoidInvoiceRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 
 	if err := h.invoiceApp.VoidInvoice(id, req.Reason); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyInvoiceError(err), err.Error()))
 		return
 	}
 
 	updated, err := h.invoiceApp.GetInvoice(id)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": toInvoiceResponse(updated)})
@@ -346,13 +348,13 @@ func (h *InvoiceHandler) Void(ctx context.Context, c *hz_app.RequestContext) {
 func (h *InvoiceHandler) Renew(ctx context.Context, c *hz_app.RequestContext) {
 	var req RenewInvoiceRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 
 	renewal, err := h.invoiceApp.GenerateRenewalInvoice(req.SourceInvoiceID)
 	if err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyInvoiceError(err), err.Error()))
 		return
 	}
 
@@ -410,10 +412,6 @@ func toInvoiceResponse(inv *domain.Invoice) InvoiceResponse {
 	}
 
 	// Compute next billing date for recurring invoices.
-	// For paid recurring invoices, the next billing date is the start of the
-	// next period (i.e. periodEnd of the current invoice). For issued/draft
-	// recurring invoices, we also show the next billing date so the user
-	// knows when the next cycle would begin.
 	if inv.IsRecurring() && inv.PeriodEnd() != nil {
 		cycle := inv.BillingCycle()
 		nextStart, _ := cycle.NextPeriod(*inv.PeriodEnd())
@@ -422,4 +420,29 @@ func toInvoiceResponse(inv *domain.Invoice) InvoiceResponse {
 	}
 
 	return resp
+}
+
+// classifyInvoiceError maps invoice domain errors to an error code.
+func classifyInvoiceError(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "not found"):
+		return apperr.CodeInvoiceNotFound
+	case strings.Contains(msg, "currency mismatch"):
+		return apperr.CodeCurrencyMismatch
+	case strings.Contains(msg, "line item id already exists"):
+		return apperr.CodeDuplicateLineItem
+	case strings.Contains(msg, "paid invoices cannot be voided"):
+		return apperr.CodeAlreadyPaid
+	case strings.Contains(msg, "only draft"),
+		strings.Contains(msg, "only issued"),
+		strings.Contains(msg, "only paid"),
+		strings.Contains(msg, "only recurring"),
+		strings.Contains(msg, "already void"),
+		strings.Contains(msg, "invoice total must be"),
+		strings.Contains(msg, "at least one line item"):
+		return apperr.CodeInvoiceInvalidState
+	default:
+		return apperr.CodeInvoiceInvalidState
+	}
 }

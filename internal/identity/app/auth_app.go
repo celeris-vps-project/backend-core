@@ -2,6 +2,7 @@ package app
 
 import (
 	"backend-core/internal/identity/domain"
+	"context"
 	"errors"
 
 	"github.com/google/uuid"
@@ -29,9 +30,9 @@ func NewAuthAppService(r domain.UserRepository, t TokenGenerator, h PasswordHash
 }
 
 // Login 登录用例 — returns token and role
-func (app *AuthAppService) Login(email, plainPassword string) (string, string, error) {
+func (app *AuthAppService) Login(ctx context.Context, email, plainPassword string) (string, string, error) {
 	// 1. 获取实体
-	user, err := app.repo.FindByEmail(email)
+	user, err := app.repo.FindByEmail(ctx, email)
 	if err != nil {
 		return "", "", err
 	}
@@ -49,9 +50,9 @@ func (app *AuthAppService) Login(email, plainPassword string) (string, string, e
 	return token, user.Role(), nil
 }
 
-func (app *AuthAppService) RegisterUser(email, plainPassword string) (string, error) {
+func (app *AuthAppService) RegisterUser(ctx context.Context, email, plainPassword string) (string, error) {
 	// 1. 检查邮箱是否已被注册
-	if _, err := app.repo.FindByEmail(email); err == nil {
+	if _, err := app.repo.FindByEmail(ctx, email); err == nil {
 		return "", errors.New("该邮箱已被注册")
 	}
 
@@ -65,7 +66,7 @@ func (app *AuthAppService) RegisterUser(email, plainPassword string) (string, er
 	newUser := domain.ReconstituteUser(uuid.New().String(), email, hash, "active")
 
 	// 4. 保存用户到数据库
-	if err := app.repo.Save(newUser); err != nil {
+	if err := app.repo.Save(ctx, newUser); err != nil {
 		return "", err
 	}
 

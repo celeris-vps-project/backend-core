@@ -53,6 +53,28 @@ func main() {
 	if sock := os.Getenv("AGENT_INCUS_SOCKET"); sock != "" {
 		cfg.VirtOpts["socket"] = sock
 	}
+	// PVE environment variable overrides
+	if v := os.Getenv("AGENT_PVE_API_URL"); v != "" {
+		cfg.VirtOpts["api_url"] = v
+	}
+	if v := os.Getenv("AGENT_PVE_TOKEN_ID"); v != "" {
+		cfg.VirtOpts["api_token_id"] = v
+	}
+	if v := os.Getenv("AGENT_PVE_TOKEN_SECRET"); v != "" {
+		cfg.VirtOpts["api_token_secret"] = v
+	}
+	if v := os.Getenv("AGENT_PVE_NODE"); v != "" {
+		cfg.VirtOpts["node"] = v
+	}
+	if v := os.Getenv("AGENT_PVE_INSECURE"); v != "" {
+		cfg.VirtOpts["insecure"] = v
+	}
+	if v := os.Getenv("AGENT_PVE_TEMPLATE_VMID"); v != "" {
+		cfg.VirtOpts["template_vmid"] = v
+	}
+	if v := os.Getenv("AGENT_PVE_STORAGE"); v != "" {
+		cfg.VirtOpts["storage"] = v
+	}
 
 	driver, err := vm.NewHypervisor(vm.Backend(cfg.VirtBackend), cfg.VirtOpts)
 	if err != nil {

@@ -35,6 +35,10 @@ type ProvisionCommand struct {
 	CPU            int
 	MemoryMB       int
 	DiskGB         int
+	VirtType       string // "kvm" or "lxc", defaults to "kvm"
+	StoragePool    string // e.g. "default", "zfs-pool"
+	NetworkName    string // e.g. "incusbr0", "br0"
+	NetworkMode    string // "dedicated" or "nat"; empty = dedicated
 }
 
 // ProvisionResult contains the outcome of a provisioning operation.
@@ -106,9 +110,12 @@ type VPSProvisioner struct {
 	hostRepo       domain.HostNodeRepository
 	poolRepo       domain.ResourcePoolRepository
 	taskRepo       domain.TaskRepository
+	ipRepo         domain.IPAddressRepository // for NAT port allocation
+	stateCache     domain.NodeStateCache      // for resolving host IP in NAT mode
 	ids            IDGenerator
 	delayPublisher delayed.Publisher // async boot confirmation queue (nil = skip)
 	bootCheckDelay time.Duration    // how long to wait before checking boot status
+	mockMode       bool             // when true, auto-complete tasks (dev/test without real agents)
 }
 
 // NewVPSProvisioner creates a provisioner for VPS-type products.
@@ -151,6 +158,40 @@ func WithBootCheckDelay(d time.Duration) VPSProvisionerOption {
 	}
 }
 
+// WithMockMode enables mock mode: tasks are auto-completed without a real agent.
+// Use for development/testing when no agent is connected. Default is false
+// (production mode — tasks stay queued until a real agent picks them up).
+func WithMockMode(mock bool) VPSProvisionerOption {
+	return func(p *VPSProvisioner) {
+		p.mockMode = mock
+	}
+}
+
+// WithIPRepo sets the IP address repository for NAT port allocation.
+func WithIPRepo(repo domain.IPAddressRepository) VPSProvisionerOption {
+	return func(p *VPSProvisioner) {
+		p.ipRepo = repo
+	}
+}
+
+// WithStateCache sets the node state cache for resolving host IP in NAT mode.
+func WithStateCache(cache domain.NodeStateCache) VPSProvisionerOption {
+	return func(p *VPSProvisioner) {
+		p.stateCache = cache
+	}
+}
+
+// resolveVirtType converts a string virt type to the contracts.VirtType enum.
+// Defaults to KVM if empty or unrecognised.
+func resolveVirtType(vt string) contracts.VirtType {
+	switch vt {
+	case "lxc", "container":
+		return contracts.VirtLXC
+	default:
+		return contracts.VirtKVM
+	}
+}
+
 func (p *VPSProvisioner) ProductType() string { return "vps" }
 
 func (p *VPSProvisioner) Provision(cmd ProvisionCommand) (*ProvisionResult, error) {
@@ -184,22 +225,42 @@ func (p *VPSProvisioner) Provision(cmd ProvisionCommand) (*ProvisionResult, erro
 		return nil, err
 	}
 
-	// 4. Enqueue a provisioning task for the agent
+	// 4. Build the provision spec
+	virtType := resolveVirtType(cmd.VirtType)
 	instanceID := p.ids.NewID()
+	spec := contracts.ProvisionSpec{
+		InstanceID:  instanceID,
+		Hostname:    cmd.Hostname,
+		OS:          cmd.OS,
+		CPU:         cmd.CPU,
+		MemoryMB:    cmd.MemoryMB,
+		DiskGB:      cmd.DiskGB,
+		VirtType:    virtType,
+		StoragePool: cmd.StoragePool,
+		NetworkName: cmd.NetworkName,
+	}
+
+	// 4a. Network resource allocation (dedicated IP or NAT port)
+	if cmd.NetworkMode == "nat" {
+		natPort, err := p.allocateNATPort(node, instanceID)
+		if err != nil {
+			log.Printf("[vps-provisioner] WARNING: NAT port allocation failed on %s: %v", node.Code(), err)
+			// Non-fatal: continue provisioning, agent will need manual NAT setup
+		} else {
+			spec.NetworkMode = contracts.NetworkModeNAT
+			spec.NATPort = natPort
+			log.Printf("[vps-provisioner] NAT port %d allocated on node %s for instance %s",
+				natPort, node.Code(), instanceID)
+		}
+	}
+
+	// 5. Enqueue a provisioning task for the agent
 	task := &contracts.Task{
-		ID:     p.ids.NewID(),
-		NodeID: node.ID(),
-		Type:   contracts.TaskProvision,
-		Status: contracts.TaskStatusQueued,
-		Spec: contracts.ProvisionSpec{
-			InstanceID: instanceID,
-			Hostname:   cmd.Hostname,
-			OS:         cmd.OS,
-			CPU:        cmd.CPU,
-			MemoryMB:   cmd.MemoryMB,
-			DiskGB:     cmd.DiskGB,
-			VirtType:   contracts.VirtKVM,
-		},
+		ID:        p.ids.NewID(),
+		NodeID:    node.ID(),
+		Type:      contracts.TaskProvision,
+		Status:    contracts.TaskStatusQueued,
+		Spec:      spec,
 		CreatedAt: time.Now().Format(time.RFC3339),
 	}
 	if err := p.taskRepo.Save(task); err != nil {
@@ -207,8 +268,8 @@ func (p *VPSProvisioner) Provision(cmd ProvisionCommand) (*ProvisionResult, erro
 		return nil, err
 	}
 
-	log.Printf("[vps-provisioner] SUCCESS: task %s on node %s (pool %s) for order %s",
-		task.ID, node.Code(), pool.Name(), cmd.OrderID)
+	log.Printf("[vps-provisioner] SUCCESS: task %s on node %s (pool %s) for order %s virt=%s network=%s",
+		task.ID, node.Code(), pool.Name(), cmd.OrderID, virtType, cmd.NetworkMode)
 
 	// 5. Schedule async boot confirmation check via delayed queue.
 	// After bootCheckDelay, the BootConfirmationWorker verifies whether
@@ -216,8 +277,12 @@ func (p *VPSProvisioner) Provision(cmd ProvisionCommand) (*ProvisionResult, erro
 	// InMemoryPublisher (dev) and AsynqPublisher (production).
 	p.scheduleBootConfirmation(instanceID, task.ID, node.ID())
 
-	// MVP MOCK: auto-complete the task (remove when real agents are connected)
-	p.mockCompleteTask(task)
+	// Mock mode: auto-complete the task for dev/test without real agents.
+	// In production (mockMode=false), tasks stay queued until a real agent
+	// picks them up via heartbeat polling.
+	if p.mockMode {
+		p.mockCompleteTask(task)
+	}
 
 	return &ProvisionResult{
 		InstanceID: instanceID,
@@ -273,19 +338,72 @@ func (p *VPSProvisioner) enqueuePendingTask(cmd ProvisionCommand, nodeID string)
 		Type:   contracts.TaskProvision,
 		Status: contracts.TaskStatusQueued,
 		Spec: contracts.ProvisionSpec{
-			InstanceID: instanceID,
-			Hostname:   cmd.Hostname,
-			OS:         cmd.OS,
-			CPU:        cmd.CPU,
-			MemoryMB:   cmd.MemoryMB,
-			DiskGB:     cmd.DiskGB,
-			VirtType:   contracts.VirtKVM,
+			InstanceID:  instanceID,
+			Hostname:    cmd.Hostname,
+			OS:          cmd.OS,
+			CPU:         cmd.CPU,
+			MemoryMB:    cmd.MemoryMB,
+			DiskGB:      cmd.DiskGB,
+			VirtType:    resolveVirtType(cmd.VirtType),
+			StoragePool: cmd.StoragePool,
+			NetworkName: cmd.NetworkName,
 		},
 		CreatedAt: time.Now().Format(time.RFC3339),
 	}
 	if err := p.taskRepo.Save(task); err != nil {
 		log.Printf("[vps-provisioner] ERROR: failed to enqueue pending task: %v", err)
 	}
+}
+
+// allocateNATPort finds a free port on the node's NAT port range, creates an
+// IPAddress record (mode=nat) in the ip_pool, assigns it to the instance,
+// and returns the allocated port number.
+func (p *VPSProvisioner) allocateNATPort(node *domain.HostNode, instanceID string) (int, error) {
+	if p.ipRepo == nil {
+		return 0, errors.New("provisioning: ipRepo not configured for NAT allocation")
+	}
+	if !node.HasNATPortPool() {
+		return 0, errors.New("provisioning: node " + node.Code() + " has no NAT port pool configured")
+	}
+
+	// 1. Try to reuse a previously released (available) NAT port allocation
+	existing, err := p.ipRepo.FindAvailableNAT(node.ID())
+	if err == nil && existing != nil {
+		if err := existing.Assign(instanceID); err != nil {
+			return 0, err
+		}
+		if err := p.ipRepo.Save(existing); err != nil {
+			return 0, err
+		}
+		return existing.Port(), nil
+	}
+
+	// 2. No reusable allocation — find a free port from the node's range
+	usedPorts, err := p.ipRepo.ListNATPortsByNodeID(node.ID())
+	if err != nil {
+		return 0, err
+	}
+	usedSet := make(map[int]struct{}, len(usedPorts))
+	for _, port := range usedPorts {
+		usedSet[port] = struct{}{}
+	}
+	freePort, err := node.FindFreeNATPort(usedSet)
+	if err != nil {
+		return 0, err
+	}
+
+	// 3. Create a new IPAddress record (mode=nat) and assign it
+	alloc, err := domain.NewNATPortAllocation(p.ids.NewID(), node.ID(), freePort)
+	if err != nil {
+		return 0, err
+	}
+	if err := alloc.Assign(instanceID); err != nil {
+		return 0, err
+	}
+	if err := p.ipRepo.Save(alloc); err != nil {
+		return 0, err
+	}
+	return freePort, nil
 }
 
 func (p *VPSProvisioner) mockCompleteTask(task *contracts.Task) {
@@ -363,6 +481,7 @@ func (d *ProvisionDispatcher) onProductPurchased(evt eventbus.Event) {
 		CPU:            e.CPU,
 		MemoryMB:       e.MemoryMB,
 		DiskGB:         e.DiskGB,
+		NetworkMode:    e.NetworkMode,
 	}
 
 	if _, err := d.Dispatch(cmd); err != nil {

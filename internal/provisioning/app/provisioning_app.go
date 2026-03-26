@@ -364,6 +364,106 @@ func (s *ProvisioningAppService) ReleaseIP(ipID string) error {
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// NAT port management
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+// SetNATPortRange configures the NAT port range for a host node.
+func (s *ProvisioningAppService) SetNATPortRange(nodeID string, start, end int) error {
+	h, err := s.hostRepo.GetByID(nodeID)
+	if err != nil {
+		return err
+	}
+	if err := h.SetNATPortRange(start, end); err != nil {
+		return err
+	}
+	return s.hostRepo.Save(h)
+}
+
+// ClearNATPortRange removes the NAT port range configuration for a node.
+func (s *ProvisioningAppService) ClearNATPortRange(nodeID string) error {
+	h, err := s.hostRepo.GetByID(nodeID)
+	if err != nil {
+		return err
+	}
+	h.ClearNATPortRange()
+	return s.hostRepo.Save(h)
+}
+
+// AllocateNATPort dynamically allocates a NAT port from the node's configured range.
+// It finds a free port, creates an IPAddress record (mode=nat), assigns it to the instance,
+// and returns the allocated port along with the host's public IP from NodeStateCache.
+func (s *ProvisioningAppService) AllocateNATPort(nodeID, instanceID string) (hostIP string, port int, err error) {
+	node, err := s.hostRepo.GetByID(nodeID)
+	if err != nil {
+		return "", 0, err
+	}
+	if !node.HasNATPortPool() {
+		return "", 0, errors.New("app_error: node has no NAT port pool configured")
+	}
+
+	// 1. Try to reuse a previously released NAT port
+	existing, findErr := s.ipRepo.FindAvailableNAT(nodeID)
+	if findErr == nil && existing != nil {
+		if err := existing.Assign(instanceID); err != nil {
+			return "", 0, err
+		}
+		if err := s.ipRepo.Save(existing); err != nil {
+			return "", 0, err
+		}
+		hostIP = s.resolveHostIP(nodeID)
+		return hostIP, existing.Port(), nil
+	}
+
+	// 2. Find a free port from the node's range
+	usedPorts, err := s.ipRepo.ListNATPortsByNodeID(nodeID)
+	if err != nil {
+		return "", 0, err
+	}
+	usedSet := make(map[int]struct{}, len(usedPorts))
+	for _, p := range usedPorts {
+		usedSet[p] = struct{}{}
+	}
+	freePort, err := node.FindFreeNATPort(usedSet)
+	if err != nil {
+		return "", 0, err
+	}
+
+	// 3. Create and assign a new NAT port allocation
+	alloc, err := domain.NewNATPortAllocation(s.ids.NewID(), nodeID, freePort)
+	if err != nil {
+		return "", 0, err
+	}
+	if err := alloc.Assign(instanceID); err != nil {
+		return "", 0, err
+	}
+	if err := s.ipRepo.Save(alloc); err != nil {
+		return "", 0, err
+	}
+
+	hostIP = s.resolveHostIP(nodeID)
+	return hostIP, freePort, nil
+}
+
+// ReleaseNATPort releases a NAT port allocation back to the pool.
+func (s *ProvisioningAppService) ReleaseNATPort(ipID string) error {
+	return s.ReleaseIP(ipID) // same lifecycle as dedicated IP
+}
+
+// ListNATPorts returns all NAT port allocations on a node.
+func (s *ProvisioningAppService) ListNATPorts(nodeID string) ([]int, error) {
+	return s.ipRepo.ListNATPortsByNodeID(nodeID)
+}
+
+// resolveHostIP gets the host's public IP from the NodeStateCache.
+func (s *ProvisioningAppService) resolveHostIP(nodeID string) string {
+	state, err := s.stateCache.GetNodeState(nodeID)
+	if err != nil || state == nil {
+		return ""
+	}
+	return state.IP
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 // Region CRUD
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 

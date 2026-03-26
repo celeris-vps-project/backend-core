@@ -48,6 +48,7 @@ type Product struct {
 	sortOrder      int
 	totalSlots     int          // commercial inventory (how many units admin wants to sell)
 	soldSlots      int          // number of slots already sold / allocated
+	networkMode    string       // "dedicated" or "nat"; empty defaults to "dedicated"
 
 	// domainEvents collects events raised by this aggregate during a use-case.
 	domainEvents []DomainEvent
@@ -99,6 +100,18 @@ func ReconstituteProduct(id, name, slug, location, regionID, resourcePoolID stri
 	}
 }
 
+// ReconstituteProductFull reconstructs a Product with all fields including networkMode.
+func ReconstituteProductFull(id, name, slug, location, regionID, resourcePoolID string, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle BillingCycle, enabled bool, sortOrder, totalSlots, soldSlots int, networkMode string) *Product {
+	return &Product{
+		id: id, name: name, slug: slug, location: location, regionID: regionID,
+		resourcePoolID: resourcePoolID,
+		cpu:            cpu, memoryMB: memoryMB, diskGB: diskGB, bandwidthGB: bandwidthGB,
+		priceAmount: priceAmount, currency: currency, billingCycle: cycle,
+		enabled: enabled, sortOrder: sortOrder, totalSlots: totalSlots, soldSlots: soldSlots,
+		networkMode: networkMode,
+	}
+}
+
 func (p *Product) ID() string                { return p.id }
 func (p *Product) Name() string              { return p.name }
 func (p *Product) Slug() string              { return p.slug }
@@ -126,6 +139,18 @@ func (p *Product) AvailableSlots() int {
 func (p *Product) SetRegionID(regionID string)     { p.regionID = regionID }
 func (p *Product) ResourcePoolID() string          { return p.resourcePoolID }
 func (p *Product) SetResourcePoolID(poolID string) { p.resourcePoolID = poolID }
+
+// NetworkMode returns the network allocation mode: "dedicated" or "nat".
+// Empty string is treated as "dedicated" for backward compatibility.
+func (p *Product) NetworkMode() string {
+	if p.networkMode == "" {
+		return "dedicated"
+	}
+	return p.networkMode
+}
+
+func (p *Product) SetNetworkMode(mode string) { p.networkMode = mode }
+func (p *Product) IsNATMode() bool            { return p.networkMode == "nat" }
 
 func (p *Product) Enable()            { p.enabled = true }
 func (p *Product) Disable()           { p.enabled = false }

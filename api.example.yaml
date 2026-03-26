@@ -46,3 +46,34 @@ rate_limit:
   admin:
     global_qps: 0          # no global cap for admin (RBAC is the real gate)
     ip_max_qps: 20
+
+# ── USDT Crypto Payment ────────────────────────────────────────────────
+# Supports multi-chain USDT payments: Arbitrum, Solana, TRC-20, BSC, Polygon.
+#
+# Two modes:
+#   mock_mode: true  → Development: payments auto-confirm after mock_confirm_delay.
+#                       No real blockchain interaction. Good for local testing.
+#   mock_mode: false → Production: the system waits for a real webhook callback
+#                       from a blockchain monitoring service (e.g. Alchemy, Moralis,
+#                       or custom chain indexer) to confirm on-chain USDT transfers.
+#                       The webhook endpoint is: POST /api/v1/payments/webhook
+#
+# Environment variable override: CRYPTO_MOCK_MODE=false (overrides yaml setting)
+#
+# Wallet addresses:
+#   Replace the example addresses below with your actual receiving addresses.
+#   Each network requires a separate wallet that can receive USDT on that chain.
+#   EVM chains (arbitrum, bsc, polygon) can share the same address if desired.
+crypto:
+  mock_mode: true              # true = dev (auto-confirm), false = production (webhook)
+  mock_confirm_delay: "3s"     # delay before auto-confirming in mock mode
+  payment_timeout: "30m"       # how long before a pending charge expires
+
+  # Receiving wallet addresses per network.
+  # In production, replace with your actual cold/hot wallet addresses.
+  wallets:
+    arbitrum: "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD3E"   # Arbitrum One (L2, ~$0.10 fee)
+    solana:   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" # Solana (~$0.001 fee)
+    trc20:    "TN3W4H6rK2ce4vX9YnFQHwKENnHjoxb3m9"           # TRON TRC-20 (~$1.00 fee)
+    bsc:      "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD3E"   # BNB Smart Chain (~$0.05 fee)
+    polygon:  "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD3E"   # Polygon PoS (~$0.01 fee)

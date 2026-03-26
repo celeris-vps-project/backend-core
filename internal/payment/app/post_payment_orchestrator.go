@@ -47,7 +47,7 @@ type PayableOrder struct {
 
 // ProductPurchaser is a port for the catalog context.
 type ProductPurchaser interface {
-	PurchaseProduct(productID, customerID, orderID, hostname, os string) (PurchasedProduct, error)
+	PurchaseProduct(ctx context.Context, productID, customerID, orderID, hostname, os string) (PurchasedProduct, error)
 }
 
 // PurchasedProduct is the minimal read-model returned after purchase.
@@ -157,6 +157,7 @@ func (s *PostPaymentOrchestrator) HandlePaymentConfirmed(orderID string) error {
 	go func() {
 		defer wg.Done()
 		_, purchaseErr = s.products.PurchaseProduct(
+			context.Background(),
 			order.ProductID,
 			order.CustomerID,
 			orderID,

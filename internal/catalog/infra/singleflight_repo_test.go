@@ -2,6 +2,7 @@ package infra
 
 import (
 	"backend-core/internal/catalog/domain"
+	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -9,7 +10,7 @@ import (
 	"time"
 )
 
-// ------ Mock Repository ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// ------ Mock Repository ------
 
 type mockProductRepo struct {
 	getByIDCount      int64
@@ -19,14 +20,10 @@ type mockProductRepo struct {
 	listByRegionCount int64
 	saveCount         int64
 
-	// Configurable return values
 	product  *domain.Product
 	products []*domain.Product
 	err      error
-
-	// delay simulates DB query latency so singleflight's in-flight window
-	// overlaps across concurrent goroutines in tests.
-	delay time.Duration
+	delay    time.Duration
 }
 
 func newMockProduct(id string) *domain.Product {
@@ -39,7 +36,7 @@ func newMockProduct(id string) *domain.Product {
 	)
 }
 
-func (m *mockProductRepo) GetByID(id string) (*domain.Product, error) {
+func (m *mockProductRepo) GetByID(ctx context.Context, id string) (*domain.Product, error) {
 	atomic.AddInt64(&m.getByIDCount, 1)
 	if m.delay > 0 {
 		time.Sleep(m.delay)
@@ -53,7 +50,7 @@ func (m *mockProductRepo) GetByID(id string) (*domain.Product, error) {
 	return newMockProduct(id), nil
 }
 
-func (m *mockProductRepo) GetBySlug(slug string) (*domain.Product, error) {
+func (m *mockProductRepo) GetBySlug(ctx context.Context, slug string) (*domain.Product, error) {
 	atomic.AddInt64(&m.getBySlugCount, 1)
 	if m.delay > 0 {
 		time.Sleep(m.delay)
@@ -64,7 +61,7 @@ func (m *mockProductRepo) GetBySlug(slug string) (*domain.Product, error) {
 	return newMockProduct("slug-" + slug), nil
 }
 
-func (m *mockProductRepo) ListAll() ([]*domain.Product, error) {
+func (m *mockProductRepo) ListAll(ctx context.Context) ([]*domain.Product, error) {
 	atomic.AddInt64(&m.listAllCount, 1)
 	if m.delay > 0 {
 		time.Sleep(m.delay)
@@ -78,7 +75,7 @@ func (m *mockProductRepo) ListAll() ([]*domain.Product, error) {
 	return []*domain.Product{newMockProduct("p1"), newMockProduct("p2")}, nil
 }
 
-func (m *mockProductRepo) ListEnabled() ([]*domain.Product, error) {
+func (m *mockProductRepo) ListEnabled(ctx context.Context) ([]*domain.Product, error) {
 	atomic.AddInt64(&m.listEnabledCount, 1)
 	if m.delay > 0 {
 		time.Sleep(m.delay)
@@ -92,7 +89,7 @@ func (m *mockProductRepo) ListEnabled() ([]*domain.Product, error) {
 	return []*domain.Product{newMockProduct("p1"), newMockProduct("p2")}, nil
 }
 
-func (m *mockProductRepo) ListByRegionID(regionID string) ([]*domain.Product, error) {
+func (m *mockProductRepo) ListByRegionID(ctx context.Context, regionID string) ([]*domain.Product, error) {
 	atomic.AddInt64(&m.listByRegionCount, 1)
 	if m.delay > 0 {
 		time.Sleep(m.delay)
@@ -103,18 +100,19 @@ func (m *mockProductRepo) ListByRegionID(regionID string) ([]*domain.Product, er
 	return []*domain.Product{newMockProduct("region-" + regionID)}, nil
 }
 
-func (m *mockProductRepo) ConsumeSlotAtomic(productID string) error { return nil }
+func (m *mockProductRepo) ConsumeSlotAtomic(ctx context.Context, productID string) error { return nil }
 
-func (m *mockProductRepo) ReleaseSlotAtomic(productID string) error { return nil }
+func (m *mockProductRepo) ReleaseSlotAtomic(ctx context.Context, productID string) error { return nil }
 
-func (m *mockProductRepo) Save(product *domain.Product) error {
+func (m *mockProductRepo) Save(ctx context.Context, product *domain.Product) error {
 	atomic.AddInt64(&m.saveCount, 1)
 	return m.err
 }
 
-// ------ Tests ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// ------ Tests ------
 
 func TestSingleflightRepo_GetByID_Deduplicates(t *testing.T) {
+	ctx := context.Background()
 	mock := &mockProductRepo{delay: 50 * time.Millisecond}
 	repo := NewSingleflightProductRepo(mock)
 
@@ -123,35 +121,31 @@ func TestSingleflightRepo_GetByID_Deduplicates(t *testing.T) {
 	results := make([]*domain.Product, concurrency)
 	errs := make([]error, concurrency)
 
-	// Use a barrier to ensure all goroutines start at the same time
 	barrier := make(chan struct{})
 
 	wg.Add(concurrency)
 	for i := 0; i < concurrency; i++ {
 		go func(idx int) {
 			defer wg.Done()
-			<-barrier // wait for all goroutines to be ready
-			results[idx], errs[idx] = repo.GetByID("prod-1")
+			<-barrier
+			results[idx], errs[idx] = repo.GetByID(ctx, "prod-1")
 		}(i)
 	}
 
-	close(barrier) // release all goroutines simultaneously
+	close(barrier)
 	wg.Wait()
 
-	// All calls should succeed
 	for i, err := range errs {
 		if err != nil {
 			t.Fatalf("goroutine %d got error: %v", i, err)
 		}
 	}
 
-	// The inner repo should have been called only ONCE (singleflight dedup)
 	dbCalls := atomic.LoadInt64(&mock.getByIDCount)
 	if dbCalls != 1 {
 		t.Fatalf("expected 1 DB call, got %d (singleflight did not deduplicate)", dbCalls)
 	}
 
-	// All results should have the same ID
 	for i, p := range results {
 		if p.ID() != "prod-1" {
 			t.Fatalf("goroutine %d got wrong product ID: %s", i, p.ID())
@@ -160,6 +154,7 @@ func TestSingleflightRepo_GetByID_Deduplicates(t *testing.T) {
 }
 
 func TestSingleflightRepo_GetByID_DeepCopy(t *testing.T) {
+	ctx := context.Background()
 	mock := &mockProductRepo{delay: 50 * time.Millisecond}
 	repo := NewSingleflightProductRepo(mock)
 
@@ -173,23 +168,23 @@ func TestSingleflightRepo_GetByID_DeepCopy(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			<-barrier
-			results[idx], _ = repo.GetByID("prod-1")
+			results[idx], _ = repo.GetByID(ctx, "prod-1")
 		}(i)
 	}
 
 	close(barrier)
 	wg.Wait()
 
-	// Mutate one result --?should NOT affect others (deep-copy safety)
 	results[0].Disable()
 	for i := 1; i < concurrency; i++ {
 		if !results[i].Enabled() {
-			t.Fatalf("goroutine %d's product was mutated by goroutine 0 --?deep-copy failed", i)
+			t.Fatalf("goroutine %d's product was mutated by goroutine 0 — deep-copy failed", i)
 		}
 	}
 }
 
 func TestSingleflightRepo_ListEnabled_Deduplicates(t *testing.T) {
+	ctx := context.Background()
 	mock := &mockProductRepo{delay: 50 * time.Millisecond}
 	repo := NewSingleflightProductRepo(mock)
 
@@ -203,7 +198,7 @@ func TestSingleflightRepo_ListEnabled_Deduplicates(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			<-barrier
-			results[idx], _ = repo.ListEnabled()
+			results[idx], _ = repo.ListEnabled(ctx)
 		}(i)
 	}
 
@@ -215,7 +210,6 @@ func TestSingleflightRepo_ListEnabled_Deduplicates(t *testing.T) {
 		t.Fatalf("expected 1 DB call for ListEnabled, got %d", dbCalls)
 	}
 
-	// All should return 2 products
 	for i, list := range results {
 		if len(list) != 2 {
 			t.Fatalf("goroutine %d got %d products, expected 2", i, len(list))
@@ -224,6 +218,7 @@ func TestSingleflightRepo_ListEnabled_Deduplicates(t *testing.T) {
 }
 
 func TestSingleflightRepo_ListAll_Deduplicates(t *testing.T) {
+	ctx := context.Background()
 	mock := &mockProductRepo{delay: 50 * time.Millisecond}
 	repo := NewSingleflightProductRepo(mock)
 
@@ -236,7 +231,7 @@ func TestSingleflightRepo_ListAll_Deduplicates(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-barrier
-			repo.ListAll()
+			repo.ListAll(ctx)
 		}()
 	}
 
@@ -250,13 +245,13 @@ func TestSingleflightRepo_ListAll_Deduplicates(t *testing.T) {
 }
 
 func TestSingleflightRepo_DifferentKeys_NotDeduplicated(t *testing.T) {
+	ctx := context.Background()
 	mock := &mockProductRepo{}
 	repo := NewSingleflightProductRepo(mock)
 
-	// Sequential calls with different IDs --?each should hit the DB
-	repo.GetByID("prod-1")
-	repo.GetByID("prod-2")
-	repo.GetByID("prod-3")
+	repo.GetByID(ctx, "prod-1")
+	repo.GetByID(ctx, "prod-2")
+	repo.GetByID(ctx, "prod-3")
 
 	dbCalls := atomic.LoadInt64(&mock.getByIDCount)
 	if dbCalls != 3 {
@@ -265,15 +260,15 @@ func TestSingleflightRepo_DifferentKeys_NotDeduplicated(t *testing.T) {
 }
 
 func TestSingleflightRepo_Save_NeverDeduplicated(t *testing.T) {
+	ctx := context.Background()
 	mock := &mockProductRepo{}
 	repo := NewSingleflightProductRepo(mock)
 
 	p := newMockProduct("prod-1")
 
-	// Save should always pass through
-	repo.Save(p)
-	repo.Save(p)
-	repo.Save(p)
+	repo.Save(ctx, p)
+	repo.Save(ctx, p)
+	repo.Save(ctx, p)
 
 	if mock.saveCount != 3 {
 		t.Fatalf("expected 3 Save calls, got %d (Save should never be deduplicated)", mock.saveCount)
@@ -281,22 +276,24 @@ func TestSingleflightRepo_Save_NeverDeduplicated(t *testing.T) {
 }
 
 func TestSingleflightRepo_ErrorPropagation(t *testing.T) {
+	ctx := context.Background()
 	expectedErr := errors.New("database connection failed")
 	mock := &mockProductRepo{err: expectedErr}
 	repo := NewSingleflightProductRepo(mock)
 
-	_, err := repo.GetByID("prod-1")
+	_, err := repo.GetByID(ctx, "prod-1")
 	if !errors.Is(err, expectedErr) {
 		t.Fatalf("expected error %v, got %v", expectedErr, err)
 	}
 
-	_, err = repo.ListEnabled()
+	_, err = repo.ListEnabled(ctx)
 	if !errors.Is(err, expectedErr) {
 		t.Fatalf("expected error %v, got %v", expectedErr, err)
 	}
 }
 
 func TestSingleflightRepo_GetBySlug_Deduplicates(t *testing.T) {
+	ctx := context.Background()
 	mock := &mockProductRepo{delay: 50 * time.Millisecond}
 	repo := NewSingleflightProductRepo(mock)
 
@@ -309,7 +306,7 @@ func TestSingleflightRepo_GetBySlug_Deduplicates(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-barrier
-			repo.GetBySlug("vps-starter")
+			repo.GetBySlug(ctx, "vps-starter")
 		}()
 	}
 
@@ -323,6 +320,7 @@ func TestSingleflightRepo_GetBySlug_Deduplicates(t *testing.T) {
 }
 
 func TestSingleflightRepo_ListByRegionID_Deduplicates(t *testing.T) {
+	ctx := context.Background()
 	mock := &mockProductRepo{delay: 50 * time.Millisecond}
 	repo := NewSingleflightProductRepo(mock)
 
@@ -335,7 +333,7 @@ func TestSingleflightRepo_ListByRegionID_Deduplicates(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-barrier
-			repo.ListByRegionID("region-eu")
+			repo.ListByRegionID(ctx, "region-eu")
 		}()
 	}
 
@@ -362,6 +360,5 @@ func TestSingleflightRepo_Stats(t *testing.T) {
 }
 
 func TestSingleflightRepo_ImplementsInterface(t *testing.T) {
-	// Compile-time check is in the source file; this just verifies at test time.
 	var _ domain.ProductRepository = (*SingleflightProductRepo)(nil)
 }

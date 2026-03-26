@@ -88,7 +88,7 @@ func NewAsyncCheckoutProcessor(
 // (product slot consumption, order creation) in the background worker.
 // This means there's a brief window where the slot count is optimistic,
 // but for non-flash-sale scenarios this is acceptable.
-func (p *AsyncCheckoutProcessor) Process(req domain.CheckoutRequest) (*domain.CheckoutResult, error) {
+func (p *AsyncCheckoutProcessor) Process(ctx context.Context, req domain.CheckoutRequest) (*domain.CheckoutResult, error) {
 	if req.ProductID == "" || req.CustomerID == "" {
 		return nil, fmt.Errorf("checkout_error: product_id and customer_id are required")
 	}
@@ -192,7 +192,7 @@ func (p *AsyncCheckoutProcessor) processOrder(order asyncOrder, workerID int) {
 	}
 
 	// Execute the full checkout flow via the app service
-	result, err := p.svc.Execute(domain.CheckoutRequest{
+	result, err := p.svc.Execute(context.Background(), domain.CheckoutRequest{
 		ProductID:  order.ProductID,
 		CustomerID: order.CustomerID,
 		Hostname:   order.Hostname,

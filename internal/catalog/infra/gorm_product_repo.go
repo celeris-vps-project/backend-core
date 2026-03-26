@@ -2,6 +2,7 @@ package infra
 
 import (
 	"backend-core/internal/catalog/domain"
+	"context"
 	"errors"
 
 	"gorm.io/gorm"
@@ -25,6 +26,7 @@ type ProductPO struct {
 	SortOrder      int    `gorm:"column:sort_order"`
 	TotalSlots     int    `gorm:"column:total_slots;default:0"`
 	SoldSlots      int    `gorm:"column:sold_slots;default:0"`
+	NetworkMode    string `gorm:"column:network_mode;default:dedicated"` // "dedicated" or "nat"
 }
 
 func (ProductPO) TableName() string { return "products" }
@@ -35,9 +37,9 @@ type GormProductRepo struct{ db *gorm.DB }
 
 func NewGormProductRepo(db *gorm.DB) *GormProductRepo { return &GormProductRepo{db: db} }
 
-func (r *GormProductRepo) GetByID(id string) (*domain.Product, error) {
+func (r *GormProductRepo) GetByID(ctx context.Context, id string) (*domain.Product, error) {
 	var po ProductPO
-	if err := r.db.Where("id = ?", id).First(&po).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("id = ?", id).First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("product not found")
 		}
@@ -46,9 +48,9 @@ func (r *GormProductRepo) GetByID(id string) (*domain.Product, error) {
 	return productToDomain(po), nil
 }
 
-func (r *GormProductRepo) GetBySlug(slug string) (*domain.Product, error) {
+func (r *GormProductRepo) GetBySlug(ctx context.Context, slug string) (*domain.Product, error) {
 	var po ProductPO
-	if err := r.db.Where("slug = ?", slug).First(&po).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("slug = ?", slug).First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("product not found")
 		}
@@ -57,49 +59,38 @@ func (r *GormProductRepo) GetBySlug(slug string) (*domain.Product, error) {
 	return productToDomain(po), nil
 }
 
-func (r *GormProductRepo) ListAll() ([]*domain.Product, error) {
+func (r *GormProductRepo) ListAll(ctx context.Context) ([]*domain.Product, error) {
 	var pos []ProductPO
-	if err := r.db.Order("sort_order ASC").Find(&pos).Error; err != nil {
+	if err := r.db.WithContext(ctx).Order("sort_order ASC").Find(&pos).Error; err != nil {
 		return nil, err
 	}
 	return mapProducts(pos), nil
 }
 
-func (r *GormProductRepo) ListEnabled() ([]*domain.Product, error) {
+func (r *GormProductRepo) ListEnabled(ctx context.Context) ([]*domain.Product, error) {
 	var pos []ProductPO
-	if err := r.db.Where("enabled = ?", true).Order("sort_order ASC").Find(&pos).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("enabled = ?", true).Order("sort_order ASC").Find(&pos).Error; err != nil {
 		return nil, err
 	}
 	return mapProducts(pos), nil
 }
 
-func (r *GormProductRepo) ListByRegionID(regionID string) ([]*domain.Product, error) {
+func (r *GormProductRepo) ListByRegionID(ctx context.Context, regionID string) ([]*domain.Product, error) {
 	var pos []ProductPO
-	if err := r.db.Where("region_id = ?", regionID).Order("sort_order ASC").Find(&pos).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("region_id = ?", regionID).Order("sort_order ASC").Find(&pos).Error; err != nil {
 		return nil, err
 	}
 	return mapProducts(pos), nil
 }
 
-func (r *GormProductRepo) Save(p *domain.Product) error {
+func (r *GormProductRepo) Save(ctx context.Context, p *domain.Product) error {
 	po := productFromDomain(p)
-	return r.db.Save(&po).Error
+	return r.db.WithContext(ctx).Save(&po).Error
 }
 
 // ConsumeSlotAtomic atomically increments sold_slots using a conditional UPDATE.
-// This eliminates the read-modify-write race condition that occurs under
-// concurrent purchase requests (two goroutines reading sold_slots=5, both
-// writing sold_slots=6 → one sale is lost).
-//
-// SQL: UPDATE products SET sold_slots = sold_slots + 1
-//
-//	WHERE id = ? AND enabled = true
-//	AND (total_slots = -1 OR sold_slots < total_slots)
-//
-// If RowsAffected == 0, either the product doesn't exist, is disabled,
-// or has no available slots.
-func (r *GormProductRepo) ConsumeSlotAtomic(productID string) error {
-	result := r.db.Model(&ProductPO{}).
+func (r *GormProductRepo) ConsumeSlotAtomic(ctx context.Context, productID string) error {
+	result := r.db.WithContext(ctx).Model(&ProductPO{}).
 		Where("id = ? AND enabled = ? AND (total_slots = -1 OR sold_slots < total_slots)", productID, true).
 		Update("sold_slots", gorm.Expr("sold_slots + 1"))
 	if result.Error != nil {
@@ -112,8 +103,8 @@ func (r *GormProductRepo) ConsumeSlotAtomic(productID string) error {
 }
 
 // ReleaseSlotAtomic atomically decrements sold_slots using a conditional UPDATE.
-func (r *GormProductRepo) ReleaseSlotAtomic(productID string) error {
-	result := r.db.Model(&ProductPO{}).
+func (r *GormProductRepo) ReleaseSlotAtomic(ctx context.Context, productID string) error {
+	result := r.db.WithContext(ctx).Model(&ProductPO{}).
 		Where("id = ? AND sold_slots > 0", productID).
 		Update("sold_slots", gorm.Expr("sold_slots - 1"))
 	if result.Error != nil {
@@ -134,11 +125,12 @@ func mapProducts(pos []ProductPO) []*domain.Product {
 }
 
 func productToDomain(po ProductPO) *domain.Product {
-	return domain.ReconstituteProduct(
+	return domain.ReconstituteProductFull(
 		po.ID, po.Name, po.Slug, po.Location, po.RegionID, po.ResourcePoolID,
 		po.CPU, po.MemoryMB, po.DiskGB, po.BandwidthGB,
 		po.PriceAmount, po.Currency, domain.BillingCycle(po.BillingCycle),
 		po.Enabled, po.SortOrder, po.TotalSlots, po.SoldSlots,
+		po.NetworkMode,
 	)
 }
 
@@ -150,5 +142,6 @@ func productFromDomain(p *domain.Product) ProductPO {
 		PriceAmount: p.PriceAmount(), Currency: p.Currency(),
 		BillingCycle: string(p.BillingCycle()), Enabled: p.Enabled(), SortOrder: p.SortOrder(),
 		TotalSlots: p.TotalSlots(), SoldSlots: p.SoldSlots(),
+		NetworkMode: p.NetworkMode(),
 	}
 }

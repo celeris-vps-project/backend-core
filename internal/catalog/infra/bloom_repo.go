@@ -3,6 +3,7 @@ package infra
 import (
 	"backend-core/internal/catalog/domain"
 	"backend-core/pkg/bloom"
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -37,10 +38,10 @@ import (
 var ErrBloomNotFound = errors.New("product not found")
 
 type BloomProductRepo struct {
-	inner    domain.ProductRepository
+	inner      domain.ProductRepository
 	idFilter   *bloom.Filter // Bloom filter for product IDs
 	slugFilter *bloom.Filter // Bloom filter for product slugs
-	blocked  int64         // atomic counter of requests blocked by bloom
+	blocked    int64         // atomic counter of requests blocked by bloom
 }
 
 // NewBloomProductRepo wraps a ProductRepository with Bloom filter protection.
@@ -68,7 +69,7 @@ func NewBloomProductRepo(inner domain.ProductRepository, expectedN int, fpRate f
 // warmUp loads all products from the database and adds their IDs and slugs
 // to the Bloom filters. Called once during construction.
 func (r *BloomProductRepo) warmUp() error {
-	products, err := r.inner.ListAll()
+	products, err := r.inner.ListAll(context.Background())
 	if err != nil {
 		return err
 	}
@@ -90,40 +91,40 @@ func (r *BloomProductRepo) warmUp() error {
 
 // ── Read operations (Bloom-protected) ──────────────────────────────────────
 
-func (r *BloomProductRepo) GetByID(id string) (*domain.Product, error) {
+func (r *BloomProductRepo) GetByID(ctx context.Context, id string) (*domain.Product, error) {
 	if !r.idFilter.Test(id) {
 		atomic.AddInt64(&r.blocked, 1)
 		return nil, ErrBloomNotFound
 	}
-	return r.inner.GetByID(id)
+	return r.inner.GetByID(ctx, id)
 }
 
-func (r *BloomProductRepo) GetBySlug(slug string) (*domain.Product, error) {
+func (r *BloomProductRepo) GetBySlug(ctx context.Context, slug string) (*domain.Product, error) {
 	if !r.slugFilter.Test(slug) {
 		atomic.AddInt64(&r.blocked, 1)
 		return nil, ErrBloomNotFound
 	}
-	return r.inner.GetBySlug(slug)
+	return r.inner.GetBySlug(ctx, slug)
 }
 
 // ── List operations (pass-through, no Bloom needed) ────────────────────────
 
-func (r *BloomProductRepo) ListAll() ([]*domain.Product, error) {
-	return r.inner.ListAll()
+func (r *BloomProductRepo) ListAll(ctx context.Context) ([]*domain.Product, error) {
+	return r.inner.ListAll(ctx)
 }
 
-func (r *BloomProductRepo) ListEnabled() ([]*domain.Product, error) {
-	return r.inner.ListEnabled()
+func (r *BloomProductRepo) ListEnabled(ctx context.Context) ([]*domain.Product, error) {
+	return r.inner.ListEnabled(ctx)
 }
 
-func (r *BloomProductRepo) ListByRegionID(regionID string) ([]*domain.Product, error) {
-	return r.inner.ListByRegionID(regionID)
+func (r *BloomProductRepo) ListByRegionID(ctx context.Context, regionID string) ([]*domain.Product, error) {
+	return r.inner.ListByRegionID(ctx, regionID)
 }
 
 // ── Write operations (write-through: save + add to Bloom) ──────────────────
 
-func (r *BloomProductRepo) Save(product *domain.Product) error {
-	if err := r.inner.Save(product); err != nil {
+func (r *BloomProductRepo) Save(ctx context.Context, product *domain.Product) error {
+	if err := r.inner.Save(ctx, product); err != nil {
 		return err
 	}
 	// Add the new/updated product's ID and slug to the Bloom filter
@@ -137,12 +138,12 @@ func (r *BloomProductRepo) Save(product *domain.Product) error {
 
 // ── Atomic operations (pass-through) ───────────────────────────────────────
 
-func (r *BloomProductRepo) ConsumeSlotAtomic(productID string) error {
-	return r.inner.ConsumeSlotAtomic(productID)
+func (r *BloomProductRepo) ConsumeSlotAtomic(ctx context.Context, productID string) error {
+	return r.inner.ConsumeSlotAtomic(ctx, productID)
 }
 
-func (r *BloomProductRepo) ReleaseSlotAtomic(productID string) error {
-	return r.inner.ReleaseSlotAtomic(productID)
+func (r *BloomProductRepo) ReleaseSlotAtomic(ctx context.Context, productID string) error {
+	return r.inner.ReleaseSlotAtomic(ctx, productID)
 }
 
 // ── Maintenance ────────────────────────────────────────────────────────────

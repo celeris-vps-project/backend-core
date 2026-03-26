@@ -3,8 +3,10 @@ package http
 import (
 	"backend-core/internal/catalog/app"
 	"backend-core/internal/catalog/domain"
+	"backend-core/pkg/apperr"
 	"backend-core/pkg/authn"
 	"context"
+	"strings"
 
 	hz_app "github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
@@ -41,7 +43,7 @@ type UpdatePriceRequest struct {
 
 type AdjustStockRequest struct {
 	TotalSlots int  `json:"total_slots" vd:"$>=-1"`
-	Confirmed  bool `json:"confirmed"` // true = admin confirmed the over-sell warning
+	Confirmed  bool `json:"confirmed"`
 }
 
 type SetRegionRequest struct {
@@ -70,7 +72,6 @@ type ProductResponse struct {
 	IsUnlimited    bool   `json:"is_unlimited"`
 }
 
-// AdjustStockResponse includes an optional warning for the admin frontend.
 type AdjustStockResponse struct {
 	Data                 ProductResponse `json:"data"`
 	Warning              bool            `json:"warning,omitempty"`
@@ -89,52 +90,49 @@ func NewProductHandler(svc *app.ProductAppService) *ProductHandler {
 func (h *ProductHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 	var req CreateProductRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
-	p, err := h.svc.CreateProduct(req.Name, req.Slug, req.Location, req.RegionID, req.ResourcePoolID, req.CPU, req.MemoryMB, req.DiskGB, req.BandwidthGB, req.PriceAmount, req.Currency, domain.BillingCycle(req.BillingCycle), req.TotalSlots)
+	p, err := h.svc.CreateProduct(ctx, req.Name, req.Slug, req.Location, req.RegionID, req.ResourcePoolID, req.CPU, req.MemoryMB, req.DiskGB, req.BandwidthGB, req.PriceAmount, req.Currency, domain.BillingCycle(req.BillingCycle), req.TotalSlots)
 	if err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyProductError(err), err.Error()))
 		return
 	}
 	c.JSON(consts.StatusCreated, utils.H{"data": toProductResp(p)})
 }
 
-// Purchase handles a customer purchasing a product. This consumes a
-// commercial slot and publishes a ProductPurchasedEvent for the Node
-// domain to handle physical provisioning.
 func (h *ProductHandler) Purchase(ctx context.Context, c *hz_app.RequestContext) {
 	uid, ok := authn.UserID(c)
 	if !ok {
-		c.JSON(consts.StatusUnauthorized, utils.H{"error": "unauthorized"})
+		c.JSON(consts.StatusUnauthorized, apperr.Resp(apperr.CodeUnauthorized, "unauthorized"))
 		return
 	}
 	var req PurchaseProductRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
-	p, err := h.svc.PurchaseProduct(req.ProductID, uid.String(), req.OrderID, req.Hostname, req.OS)
+	p, err := h.svc.PurchaseProduct(ctx, req.ProductID, uid.String(), req.OrderID, req.Hostname, req.OS)
 	if err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyProductError(err), err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": toProductResp(p)})
 }
 
 func (h *ProductHandler) GetByID(ctx context.Context, c *hz_app.RequestContext) {
-	p, err := h.svc.GetProduct(c.Param("id"))
+	p, err := h.svc.GetProduct(ctx, c.Param("id"))
 	if err != nil {
-		c.JSON(consts.StatusNotFound, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusNotFound, apperr.Resp(apperr.CodeProductNotFound, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": toProductResp(p)})
 }
 
 func (h *ProductHandler) List(ctx context.Context, c *hz_app.RequestContext) {
-	products, err := h.svc.ListEnabled()
+	products, err := h.svc.ListEnabled(ctx)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	list := make([]ProductResponse, len(products))
@@ -145,9 +143,9 @@ func (h *ProductHandler) List(ctx context.Context, c *hz_app.RequestContext) {
 }
 
 func (h *ProductHandler) ListAll(ctx context.Context, c *hz_app.RequestContext) {
-	products, err := h.svc.ListAll()
+	products, err := h.svc.ListAll(ctx)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	list := make([]ProductResponse, len(products))
@@ -158,50 +156,46 @@ func (h *ProductHandler) ListAll(ctx context.Context, c *hz_app.RequestContext) 
 }
 
 func (h *ProductHandler) Enable(ctx context.Context, c *hz_app.RequestContext) {
-	if err := h.svc.EnableProduct(c.Param("id")); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+	if err := h.svc.EnableProduct(ctx, c.Param("id")); err != nil {
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyProductError(err), err.Error()))
 		return
 	}
-	p, _ := h.svc.GetProduct(c.Param("id"))
+	p, _ := h.svc.GetProduct(ctx, c.Param("id"))
 	c.JSON(consts.StatusOK, utils.H{"data": toProductResp(p)})
 }
 
 func (h *ProductHandler) Disable(ctx context.Context, c *hz_app.RequestContext) {
-	if err := h.svc.DisableProduct(c.Param("id")); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+	if err := h.svc.DisableProduct(ctx, c.Param("id")); err != nil {
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyProductError(err), err.Error()))
 		return
 	}
-	p, _ := h.svc.GetProduct(c.Param("id"))
+	p, _ := h.svc.GetProduct(ctx, c.Param("id"))
 	c.JSON(consts.StatusOK, utils.H{"data": toProductResp(p)})
 }
 
 func (h *ProductHandler) UpdatePrice(ctx context.Context, c *hz_app.RequestContext) {
 	var req UpdatePriceRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
-	if err := h.svc.UpdatePrice(c.Param("id"), req.Amount, req.Currency); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+	if err := h.svc.UpdatePrice(ctx, c.Param("id"), req.Amount, req.Currency); err != nil {
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyProductError(err), err.Error()))
 		return
 	}
-	p, _ := h.svc.GetProduct(c.Param("id"))
+	p, _ := h.svc.GetProduct(ctx, c.Param("id"))
 	c.JSON(consts.StatusOK, utils.H{"data": toProductResp(p)})
 }
 
-// AdjustStock handles admin restocking with a soft-limit warning.
-// If the requested stock exceeds physical capacity and confirmed=false,
-// the response includes a warning payload for the frontend to show a
-// confirmation modal. The frontend must re-call with confirmed=true.
 func (h *ProductHandler) AdjustStock(ctx context.Context, c *hz_app.RequestContext) {
 	var req AdjustStockRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
-	result, err := h.svc.AdjustStock(c.Param("id"), req.TotalSlots, req.Confirmed)
+	result, err := h.svc.AdjustStock(ctx, c.Param("id"), req.TotalSlots, req.Confirmed)
 	if err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyProductError(err), err.Error()))
 		return
 	}
 
@@ -216,18 +210,17 @@ func (h *ProductHandler) AdjustStock(ctx context.Context, c *hz_app.RequestConte
 	c.JSON(consts.StatusOK, resp)
 }
 
-// SetRegion binds a product to a region (resource pool).
 func (h *ProductHandler) SetRegion(ctx context.Context, c *hz_app.RequestContext) {
 	var req SetRegionRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
-	if err := h.svc.SetRegion(c.Param("id"), req.RegionID); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+	if err := h.svc.SetRegion(ctx, c.Param("id"), req.RegionID); err != nil {
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyProductError(err), err.Error()))
 		return
 	}
-	p, _ := h.svc.GetProduct(c.Param("id"))
+	p, _ := h.svc.GetProduct(ctx, c.Param("id"))
 	c.JSON(consts.StatusOK, utils.H{"data": toProductResp(p)})
 }
 
@@ -240,5 +233,22 @@ func toProductResp(p *domain.Product) ProductResponse {
 		BillingCycle: string(p.BillingCycle()), Enabled: p.Enabled(), SortOrder: p.SortOrder(),
 		TotalSlots: p.TotalSlots(), SoldSlots: p.SoldSlots(), AvailableSlots: p.AvailableSlots(),
 		IsUnlimited: p.IsUnlimited(),
+	}
+}
+
+// classifyProductError maps product domain errors to an error code.
+func classifyProductError(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "not found"):
+		return apperr.CodeProductNotFound
+	case strings.Contains(msg, "no available slots"):
+		return apperr.CodeNoAvailableSlots
+	case strings.Contains(msg, "total slots"):
+		return apperr.CodeSlotConflict
+	case strings.Contains(msg, "currency"):
+		return apperr.CodeCurrencyMismatch
+	default:
+		return apperr.CodeInvalidStateTransition
 	}
 }

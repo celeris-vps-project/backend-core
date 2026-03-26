@@ -2,6 +2,7 @@ package infra
 
 import (
 	"backend-core/internal/identity/domain"
+	"context"
 	"errors"
 
 	"gorm.io/gorm"
@@ -32,7 +33,7 @@ func NewGormUserRepo(db *gorm.DB) *GormUserRepo {
 	return &GormUserRepo{db: db}
 }
 
-func (r *GormUserRepo) Save(u *domain.User) error {
+func (r *GormUserRepo) Save(ctx context.Context, u *domain.User) error {
 	if u == nil {
 		return errors.New("user is nil")
 	}
@@ -45,14 +46,14 @@ func (r *GormUserRepo) Save(u *domain.User) error {
 		Role:         u.Role(),
 	}
 
-	return r.db.Create(&po).Error
+	return r.db.WithContext(ctx).Create(&po).Error
 }
 
 // FindByEmail 實現了 domain.UserRepository 介面
-func (r *GormUserRepo) FindByEmail(email string) (*domain.User, error) {
+func (r *GormUserRepo) FindByEmail(ctx context.Context, email string) (*domain.User, error) {
 	var po UserPO
 
-	err := r.db.Where("email = ?", email).First(&po).Error
+	err := r.db.WithContext(ctx).Where("email = ?", email).First(&po).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("user not found")

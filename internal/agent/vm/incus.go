@@ -163,6 +163,41 @@ func (d *IncusDriver) Destroy(instanceID string) error {
 	return delOp.Wait()
 }
 
+func (d *IncusDriver) List() ([]*VMInfo, error) {
+	instances, err := d.client.GetInstances(api.InstanceTypeAny)
+	if err != nil {
+		return nil, fmt.Errorf("incus list: %w", err)
+	}
+
+	var list []*VMInfo
+	for _, inst := range instances {
+		// Only include instances managed by Celeris (prefixed with "celeris-")
+		if len(inst.Name) <= len("celeris-") {
+			continue
+		}
+		if inst.Name[:8] != "celeris-" {
+			continue
+		}
+		instanceID := inst.Name[8:] // strip "celeris-" prefix
+
+		state := "unknown"
+		switch inst.StatusCode {
+		case api.Running:
+			state = "running"
+		case api.Stopped:
+			state = "stopped"
+		case api.Frozen:
+			state = "paused"
+		}
+
+		list = append(list, &VMInfo{
+			InstanceID: instanceID,
+			State:      state,
+		})
+	}
+	return list, nil
+}
+
 func (d *IncusDriver) Info(instanceID string) (*VMInfo, error) {
 	name := incusName(instanceID)
 	inst, _, err := d.client.GetInstance(name)

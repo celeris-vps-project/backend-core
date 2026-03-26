@@ -2,8 +2,10 @@ package http
 
 import (
 	"backend-core/internal/identity/app"
+	"backend-core/pkg/apperr"
 	"backend-core/pkg/authn"
 	"context"
+	"strings"
 
 	hz_app "github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
@@ -34,13 +36,14 @@ func (h *AuthHandler) Login(ctx context.Context, c *hz_app.RequestContext) {
 	var req LoginRequest
 
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": "参数格式错误: " + err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 
-	token, role, err := h.authApp.Login(req.Email, req.Password)
+	token, role, err := h.authApp.Login(ctx, req.Email, req.Password)
 	if err != nil {
-		c.JSON(consts.StatusUnauthorized, utils.H{"error": err.Error()})
+		code := classifyAuthError(err)
+		c.JSON(consts.StatusUnauthorized, apperr.Resp(code, err.Error()))
 		return
 	}
 
@@ -56,16 +59,17 @@ func (h *AuthHandler) Register(ctx context.Context, c *hz_app.RequestContext) {
 	var req RegisterRequest
 
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": "参数格式错误: " + err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 
-	token, err := h.authApp.RegisterUser(req.Email, req.Password)
+	token, err := h.authApp.RegisterUser(ctx, req.Email, req.Password)
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		code := classifyRegisterError(err)
+		c.JSON(consts.StatusBadRequest, apperr.Resp(code, err.Error()))
 		return
 	}
-	
+
 	c.JSON(consts.StatusOK, utils.H{
 		"message": "注册成功",
 		"token":   token,
@@ -84,4 +88,30 @@ func (h *AuthHandler) Me(ctx context.Context, c *hz_app.RequestContext) {
 		"user_id": uid.String(),
 		"role":    role,
 	})
+}
+
+// classifyAuthError maps login domain/infra errors to an error code.
+func classifyAuthError(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "user not found"):
+		return apperr.CodeUserNotFound
+	case strings.Contains(msg, "密码错误"):
+		return apperr.CodeWrongPassword
+	case strings.Contains(msg, "封禁"), strings.Contains(msg, "未激活"):
+		return apperr.CodeAccountDisabled
+	default:
+		return apperr.CodeUnauthorized
+	}
+}
+
+// classifyRegisterError maps registration errors to an error code.
+func classifyRegisterError(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "已被注册"):
+		return apperr.CodeEmailTaken
+	default:
+		return apperr.CodeInternalError
+	}
 }

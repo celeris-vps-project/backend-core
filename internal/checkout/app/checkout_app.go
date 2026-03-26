@@ -1,35 +1,21 @@
 // Package app provides the application service for the unified checkout module.
-//
-// CheckoutAppService is a thin orchestration layer that delegates real business
-// logic to the product and ordering domains. It is consumed by both the
-// SyncCheckoutProcessor and AsyncCheckoutProcessor via the adaptive dispatcher.
 package app
 
 import (
 	productApp "backend-core/internal/catalog/app"
 	"backend-core/internal/checkout/domain"
 	orderingApp "backend-core/internal/ordering/app"
+	"context"
 	"fmt"
 	"log"
 )
 
-// CheckoutAppService orchestrates the cross-domain checkout flow:
-//
-//  1. Validate the product (enabled? has available slots?)
-//  2. Call ordering.CreateOrder() → persist the order in pending status
-//
-// Slot consumption (PurchaseProduct) and provisioning happen ONLY after
-// payment confirmation, in the payment webhook handler. This ensures
-// inventory is never burned until the customer actually pays.
-//
-// This service is called by both the sync and async checkout processors.
-// It does NOT decide sync vs. async — that's the adaptive dispatcher's job.
+// CheckoutAppService orchestrates the cross-domain checkout flow.
 type CheckoutAppService struct {
 	productSvc  *productApp.ProductAppService
 	orderingSvc *orderingApp.OrderAppService
 }
 
-// NewCheckoutAppService creates a checkout orchestration service.
 func NewCheckoutAppService(
 	productSvc *productApp.ProductAppService,
 	orderingSvc *orderingApp.OrderAppService,
@@ -41,11 +27,7 @@ func NewCheckoutAppService(
 }
 
 // Execute performs the full checkout flow synchronously.
-// Both the sync processor (directly) and async processor (via background worker)
-// call this method.
-//
-// Returns a CheckoutResult with HTTPStatus=200 on success.
-func (s *CheckoutAppService) Execute(req domain.CheckoutRequest) (*domain.CheckoutResult, error) {
+func (s *CheckoutAppService) Execute(ctx context.Context, req domain.CheckoutRequest) (*domain.CheckoutResult, error) {
 	if req.ProductID == "" || req.CustomerID == "" {
 		return nil, fmt.Errorf("checkout_error: product_id and customer_id are required")
 	}
@@ -57,7 +39,7 @@ func (s *CheckoutAppService) Execute(req domain.CheckoutRequest) (*domain.Checko
 	}
 
 	// 1. Look up the product to get pricing info
-	product, err := s.productSvc.GetProduct(req.ProductID)
+	product, err := s.productSvc.GetProduct(ctx, req.ProductID)
 	if err != nil {
 		return nil, fmt.Errorf("checkout_error: product not found: %w", err)
 	}
@@ -66,12 +48,11 @@ func (s *CheckoutAppService) Execute(req domain.CheckoutRequest) (*domain.Checko
 	}
 
 	// 2. Create the order first (in pending status)
-	// Use the billing cycle defined on the product (monthly, quarterly, annually, etc.)
 	billingCycle := string(product.BillingCycle())
 	order, err := s.orderingSvc.CreateOrder(
 		req.CustomerID,
 		req.ProductID,
-		"", // invoiceID — will be linked after payment
+		"",
 		billingCycle,
 		req.Hostname,
 		product.Slug(),

@@ -31,6 +31,14 @@ const (
 	VirtLXC VirtType = "lxc"
 )
 
+// NetworkMode selects the network allocation strategy.
+type NetworkMode string
+
+const (
+	NetworkModeDedicated NetworkMode = "dedicated" // one public IP per instance
+	NetworkModeNAT       NetworkMode = "nat"       // shared host IP + port mapping
+)
+
 // ProvisionSpec describes the VM/container that should be created on the host.
 type ProvisionSpec struct {
 	InstanceID  string   `json:"instance_id"`
@@ -45,6 +53,10 @@ type ProvisionSpec struct {
 	StoragePool string   `json:"storage_pool,omitempty"` // e.g. "default", "zfs-pool"
 	NetworkName string   `json:"network_name,omitempty"` // e.g. "br0", "default"
 	SSHKeys     []string `json:"ssh_keys,omitempty"`
+
+	// NAT mode fields (only set when NetworkMode == "nat")
+	NetworkMode NetworkMode `json:"network_mode,omitempty"` // "dedicated" or "nat"; empty = dedicated
+	NATPort     int         `json:"nat_port,omitempty"`     // high port on host mapped to VM SSH (e.g. 20001)
 }
 
 // Task is a unit of work sent from the controller to an agent.

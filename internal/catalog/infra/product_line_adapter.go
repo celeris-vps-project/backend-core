@@ -3,12 +3,11 @@ package infra
 import (
 	catalogApp "backend-core/internal/catalog/app"
 	provApp "backend-core/internal/provisioning/app"
+	"context"
 )
 
 // ProvisioningProductLineAdapter implements catalogApp.ProductLineDataSource
 // by delegating to the provisioning app service.
-// It converts provisioning domain types into catalog-context DTOs so that
-// catalog/interfaces/http never imports the provisioning package.
 type ProvisioningProductLineAdapter struct {
 	provSvc *provApp.ProvisioningAppService
 }
@@ -17,7 +16,7 @@ func NewProvisioningProductLineAdapter(provSvc *provApp.ProvisioningAppService) 
 	return &ProvisioningProductLineAdapter{provSvc: provSvc}
 }
 
-func (a *ProvisioningProductLineAdapter) ListActiveResourcePools() ([]catalogApp.ResourcePoolInfo, error) {
+func (a *ProvisioningProductLineAdapter) ListActiveResourcePools(ctx context.Context) ([]catalogApp.ResourcePoolInfo, error) {
 	pools, err := a.provSvc.ListActiveResourcePools()
 	if err != nil {
 		return nil, err
@@ -33,7 +32,7 @@ func (a *ProvisioningProductLineAdapter) ListActiveResourcePools() ([]catalogApp
 	return result, nil
 }
 
-func (a *ProvisioningProductLineAdapter) ListActiveRegions() ([]catalogApp.RegionInfo, error) {
+func (a *ProvisioningProductLineAdapter) ListActiveRegions(ctx context.Context) ([]catalogApp.RegionInfo, error) {
 	regions, err := a.provSvc.ListActiveRegions()
 	if err != nil {
 		return nil, err

@@ -1,12 +1,14 @@
 package domain
 
+import "context"
+
 type ProductRepository interface {
-	GetByID(id string) (*Product, error)
-	GetBySlug(slug string) (*Product, error)
-	ListAll() ([]*Product, error)
-	ListEnabled() ([]*Product, error)
-	ListByRegionID(regionID string) ([]*Product, error)
-	Save(product *Product) error
+	GetByID(ctx context.Context, id string) (*Product, error)
+	GetBySlug(ctx context.Context, slug string) (*Product, error)
+	ListAll(ctx context.Context) ([]*Product, error)
+	ListEnabled(ctx context.Context) ([]*Product, error)
+	ListByRegionID(ctx context.Context, regionID string) ([]*Product, error)
+	Save(ctx context.Context, product *Product) error
 
 	// ConsumeSlotAtomic atomically increments sold_slots by 1 using a database-level
 	// conditional UPDATE. This prevents the read-modify-write race condition that
@@ -17,11 +19,11 @@ type ProductRepository interface {
 	//   - total_slots == -1 (unlimited) OR sold_slots < total_slots
 	//
 	// Returns ErrNoAvailableSlots if the atomic update matched zero rows.
-	ConsumeSlotAtomic(productID string) error
+	ConsumeSlotAtomic(ctx context.Context, productID string) error
 
 	// ReleaseSlotAtomic atomically decrements sold_slots by 1.
 	// Returns an error if sold_slots is already 0.
-	ReleaseSlotAtomic(productID string) error
+	ReleaseSlotAtomic(ctx context.Context, productID string) error
 }
 
 // PhysicalCapacityChecker is a port (interface) that the Product application
@@ -30,5 +32,5 @@ type ProductRepository interface {
 type PhysicalCapacityChecker interface {
 	// AvailablePhysicalSlots returns the number of unused physical slots
 	// in the resource pool (region) identified by regionID.
-	AvailablePhysicalSlots(regionID string) (int, error)
+	AvailablePhysicalSlots(ctx context.Context, regionID string) (int, error)
 }

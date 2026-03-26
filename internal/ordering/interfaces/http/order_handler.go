@@ -3,8 +3,10 @@ package http
 import (
 	"backend-core/internal/ordering/app"
 	"backend-core/internal/ordering/domain"
+	"backend-core/pkg/apperr"
 	"backend-core/pkg/authn"
 	"context"
+	"strings"
 	"time"
 
 	hz_app "github.com/cloudwego/hertz/pkg/app"
@@ -75,14 +77,14 @@ func NewOrderHandler(orderApp *app.OrderAppService) *OrderHandler {
 func (h *OrderHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 	uid, ok := authn.UserID(c)
 	if !ok {
-		c.JSON(consts.StatusUnauthorized, utils.H{"error": "unauthorized: missing user identity"})
+		c.JSON(consts.StatusUnauthorized, apperr.Resp(apperr.CodeUnauthorized, "unauthorized: missing user identity"))
 		return
 	}
 	customerID := uid.String()
 
 	var req CreateOrderRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 
@@ -103,7 +105,7 @@ func (h *OrderHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 		req.Currency, req.PriceAmount,
 	)
 	if err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyOrderError(err), err.Error()))
 		return
 	}
 
@@ -115,7 +117,7 @@ func (h *OrderHandler) GetByID(ctx context.Context, c *hz_app.RequestContext) {
 	id := c.Param("id")
 	order, err := h.orderApp.GetOrder(id)
 	if err != nil {
-		c.JSON(consts.StatusNotFound, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusNotFound, apperr.Resp(apperr.CodeOrderNotFound, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": toOrderResponse(order)})
@@ -125,14 +127,14 @@ func (h *OrderHandler) GetByID(ctx context.Context, c *hz_app.RequestContext) {
 func (h *OrderHandler) ListByCustomer(ctx context.Context, c *hz_app.RequestContext) {
 	uid, ok := authn.UserID(c)
 	if !ok {
-		c.JSON(consts.StatusUnauthorized, utils.H{"error": "unauthorized: missing user identity"})
+		c.JSON(consts.StatusUnauthorized, apperr.Resp(apperr.CodeUnauthorized, "unauthorized: missing user identity"))
 		return
 	}
 	customerID := uid.String()
 
 	orders, err := h.orderApp.ListByCustomer(customerID)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 
@@ -147,12 +149,12 @@ func (h *OrderHandler) ListByCustomer(ctx context.Context, c *hz_app.RequestCont
 func (h *OrderHandler) Activate(ctx context.Context, c *hz_app.RequestContext) {
 	id := c.Param("id")
 	if err := h.orderApp.ActivateOrder(id); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyOrderError(err), err.Error()))
 		return
 	}
 	order, err := h.orderApp.GetOrder(id)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": toOrderResponse(order)})
@@ -162,12 +164,12 @@ func (h *OrderHandler) Activate(ctx context.Context, c *hz_app.RequestContext) {
 func (h *OrderHandler) Suspend(ctx context.Context, c *hz_app.RequestContext) {
 	id := c.Param("id")
 	if err := h.orderApp.SuspendOrder(id); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyOrderError(err), err.Error()))
 		return
 	}
 	order, err := h.orderApp.GetOrder(id)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": toOrderResponse(order)})
@@ -177,12 +179,12 @@ func (h *OrderHandler) Suspend(ctx context.Context, c *hz_app.RequestContext) {
 func (h *OrderHandler) Unsuspend(ctx context.Context, c *hz_app.RequestContext) {
 	id := c.Param("id")
 	if err := h.orderApp.UnsuspendOrder(id); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyOrderError(err), err.Error()))
 		return
 	}
 	order, err := h.orderApp.GetOrder(id)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": toOrderResponse(order)})
@@ -193,16 +195,16 @@ func (h *OrderHandler) Cancel(ctx context.Context, c *hz_app.RequestContext) {
 	id := c.Param("id")
 	var req CancelOrderRequest
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
 	if err := h.orderApp.CancelOrder(id, req.Reason); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyOrderError(err), err.Error()))
 		return
 	}
 	order, err := h.orderApp.GetOrder(id)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": toOrderResponse(order)})
@@ -212,12 +214,12 @@ func (h *OrderHandler) Cancel(ctx context.Context, c *hz_app.RequestContext) {
 func (h *OrderHandler) Terminate(ctx context.Context, c *hz_app.RequestContext) {
 	id := c.Param("id")
 	if err := h.orderApp.TerminateOrder(id); err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyOrderError(err), err.Error()))
 		return
 	}
 	order, err := h.orderApp.GetOrder(id)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, utils.H{"error": err.Error()})
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": toOrderResponse(order)})
@@ -265,4 +267,23 @@ func toOrderResponse(o *domain.Order) OrderResponse {
 		resp.TerminatedAt = &s
 	}
 	return resp
+}
+
+// classifyOrderError maps order domain errors to an error code.
+func classifyOrderError(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "not found"):
+		return apperr.CodeOrderNotFound
+	case strings.Contains(msg, "only pending"):
+		return apperr.CodeOrderNotPending
+	case strings.Contains(msg, "only active"),
+		strings.Contains(msg, "only suspended"),
+		strings.Contains(msg, "already cancelled"),
+		strings.Contains(msg, "already terminated"),
+		strings.Contains(msg, "cannot be cancelled"):
+		return apperr.CodeInvalidStateTransition
+	default:
+		return apperr.CodeInvalidStateTransition
+	}
 }

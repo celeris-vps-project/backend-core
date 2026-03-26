@@ -13,9 +13,27 @@ grpc_address: "127.0.0.1:50051"          # gRPC address of the API server
 controller_url: "http://127.0.0.1:8888"  # Legacy HTTP controller URL (optional)
 poll_interval: 15                        # Seconds between heartbeats
 
-virt_backend: "stub"          # Virtualization backend: "libvirt", "incus", or "stub"
+virt_backend: "stub"          # Virtualization backend: "libvirt", "incus", "pve", or "stub"
+
+# NAT mode configuration (used when provisioning tasks have network_mode=nat)
+nat:
+  ssh_target_port: 22                    # VM internal SSH port (fixed mapping)
+  internal_network: "10.0.0.0/24"        # NAT internal network CIDR
+
 virt_opts: {}                 # Backend-specific options, e.g.:
-  # uri: "qemu:///system"          # for libvirt
-  # project: "default"             # for incus
-  # socket: "/var/lib/incus/unix.socket"  # for incus
+  # ── libvirt ──
+  # uri: "qemu:///system"
+
+  # ── incus ──
+  # project: "default"
+  # socket: "/var/lib/incus/unix.socket"
+
+  # ── pve (Proxmox VE) ──
+  # api_url: "https://127.0.0.1:8006"       # PVE API endpoint
+  # api_token_id: "root@pam!celeris"         # API token ID
+  # api_token_secret: "xxxxxxxx-xxxx-xxxx"   # API token secret
+  # node: "pve1"                             # PVE node name
+  # insecure: "true"                         # skip TLS verify (self-signed certs)
+  # template_vmid: "9000"                    # default template VMID for cloning
+  # storage: "local-lvm"                     # target storage for cloned disks
 

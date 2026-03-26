@@ -97,6 +97,8 @@ type InstancePO struct {
 	IPv4         string     `gorm:"column:ipv4"`
 	IPv6         string     `gorm:"column:ipv6"`
 	Status       string     `gorm:"column:status"`
+	NetworkMode  string     `gorm:"column:network_mode;default:dedicated"` // "dedicated" or "nat"
+	NATPort      int        `gorm:"column:nat_port;default:0"`             // NAT SSH port
 	CreatedAt    time.Time  `gorm:"column:created_at"`
 	StartedAt    *time.Time `gorm:"column:started_at"`
 	StoppedAt    *time.Time `gorm:"column:stopped_at"`
@@ -157,11 +159,12 @@ func (r *GormInstanceRepo) Save(inst *domain.Instance) error {
 // ---- Mapping ----
 
 func instanceToDomain(po InstancePO) *domain.Instance {
-	return domain.ReconstituteInstance(
+	return domain.ReconstituteInstanceFull(
 		po.ID, po.CustomerID, po.OrderID, po.NodeID,
 		po.Hostname, po.Plan, po.OS,
 		po.CPU, po.MemoryMB, po.DiskGB,
 		po.IPv4, po.IPv6, po.Status,
+		po.NetworkMode, po.NATPort,
 		po.CreatedAt,
 		po.StartedAt, po.StoppedAt, po.SuspendedAt, po.TerminatedAt,
 	)
@@ -173,6 +176,7 @@ func instanceFromDomain(i *domain.Instance) InstancePO {
 		Hostname: i.Hostname(), Plan: i.Plan(), OS: i.OS(),
 		CPU: i.CPU(), MemoryMB: i.MemoryMB(), DiskGB: i.DiskGB(),
 		IPv4: i.IPv4(), IPv6: i.IPv6(), Status: i.Status(),
+		NetworkMode: i.NetworkMode(), NATPort: i.NATPort(),
 		CreatedAt: i.CreatedAt(),
 		StartedAt: i.StartedAt(), StoppedAt: i.StoppedAt(),
 		SuspendedAt: i.SuspendedAt(), TerminatedAt: i.TerminatedAt(),

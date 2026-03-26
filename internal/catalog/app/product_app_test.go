@@ -4,6 +4,7 @@ import (
 	"backend-core/internal/catalog/domain"
 	"backend-core/pkg/eventbus"
 	"backend-core/pkg/events"
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -19,7 +20,7 @@ func newMemProductRepo() *memProductRepo {
 	return &memProductRepo{items: map[string]*domain.Product{}}
 }
 
-func (r *memProductRepo) GetByID(id string) (*domain.Product, error) {
+func (r *memProductRepo) GetByID(ctx context.Context, id string) (*domain.Product, error) {
 	p, ok := r.items[id]
 	if !ok {
 		return nil, errors.New("not found")
@@ -27,7 +28,7 @@ func (r *memProductRepo) GetByID(id string) (*domain.Product, error) {
 	return p, nil
 }
 
-func (r *memProductRepo) GetBySlug(slug string) (*domain.Product, error) {
+func (r *memProductRepo) GetBySlug(ctx context.Context, slug string) (*domain.Product, error) {
 	for _, p := range r.items {
 		if p.Slug() == slug {
 			return p, nil
@@ -36,7 +37,7 @@ func (r *memProductRepo) GetBySlug(slug string) (*domain.Product, error) {
 	return nil, errors.New("not found")
 }
 
-func (r *memProductRepo) ListAll() ([]*domain.Product, error) {
+func (r *memProductRepo) ListAll(ctx context.Context) ([]*domain.Product, error) {
 	out := make([]*domain.Product, 0, len(r.items))
 	for _, p := range r.items {
 		out = append(out, p)
@@ -44,7 +45,7 @@ func (r *memProductRepo) ListAll() ([]*domain.Product, error) {
 	return out, nil
 }
 
-func (r *memProductRepo) ListEnabled() ([]*domain.Product, error) {
+func (r *memProductRepo) ListEnabled(ctx context.Context) ([]*domain.Product, error) {
 	var out []*domain.Product
 	for _, p := range r.items {
 		if p.Enabled() {
@@ -54,7 +55,7 @@ func (r *memProductRepo) ListEnabled() ([]*domain.Product, error) {
 	return out, nil
 }
 
-func (r *memProductRepo) ListByRegionID(regionID string) ([]*domain.Product, error) {
+func (r *memProductRepo) ListByRegionID(ctx context.Context, regionID string) ([]*domain.Product, error) {
 	var out []*domain.Product
 	for _, p := range r.items {
 		if p.RegionID() == regionID {
@@ -64,7 +65,7 @@ func (r *memProductRepo) ListByRegionID(regionID string) ([]*domain.Product, err
 	return out, nil
 }
 
-func (r *memProductRepo) ConsumeSlotAtomic(productID string) error {
+func (r *memProductRepo) ConsumeSlotAtomic(ctx context.Context, productID string) error {
 	p, ok := r.items[productID]
 	if !ok {
 		return fmt.Errorf("product not found")
@@ -72,7 +73,7 @@ func (r *memProductRepo) ConsumeSlotAtomic(productID string) error {
 	return p.ConsumeSlot()
 }
 
-func (r *memProductRepo) ReleaseSlotAtomic(productID string) error {
+func (r *memProductRepo) ReleaseSlotAtomic(ctx context.Context, productID string) error {
 	p, ok := r.items[productID]
 	if !ok {
 		return fmt.Errorf("product not found")
@@ -80,7 +81,7 @@ func (r *memProductRepo) ReleaseSlotAtomic(productID string) error {
 	return p.ReleaseSlot()
 }
 
-func (r *memProductRepo) Save(p *domain.Product) error {
+func (r *memProductRepo) Save(ctx context.Context, p *domain.Product) error {
 	r.items[p.ID()] = p
 	return nil
 }
@@ -89,12 +90,11 @@ type staticIDGen struct{ id string }
 
 func (g staticIDGen) NewID() string { return g.id }
 
-// stubCapacityChecker simulates physical capacity in a region.
 type stubCapacityChecker struct {
-	slots map[string]int // regionID --?available physical slots
+	slots map[string]int
 }
 
-func (c *stubCapacityChecker) AvailablePhysicalSlots(regionID string) (int, error) {
+func (c *stubCapacityChecker) AvailablePhysicalSlots(ctx context.Context, regionID string) (int, error) {
 	s, ok := c.slots[regionID]
 	if !ok {
 		return 0, errors.New("region not found")
@@ -105,31 +105,28 @@ func (c *stubCapacityChecker) AvailablePhysicalSlots(regionID string) (int, erro
 // ---- Tests ----
 
 func TestProductApp_PurchasePublishesEvent(t *testing.T) {
+	ctx := context.Background()
 	repo := newMemProductRepo()
 	bus := eventbus.New()
 
 	svc := NewProductAppService(repo, staticIDGen{id: "prod-1"}, bus, nil)
 
-	// Create a product with 5 commercial slots
-	p, err := svc.CreateProduct("VPS Starter", "vps-starter", "DE-fra", "region-de", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 5)
+	p, err := svc.CreateProduct(ctx, "VPS Starter", "vps-starter", "DE-fra", "region-de", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Subscribe to the purchase event
 	var receivedEvent *events.ProductPurchasedEvent
 	bus.Subscribe("product.purchased", func(evt eventbus.Event) {
 		e := evt.(events.ProductPurchasedEvent)
 		receivedEvent = &e
 	})
 
-	// Purchase the product
-	result, err := svc.PurchaseProduct(p.ID(), "cust-1", "ord-1", "web-01", "ubuntu-22.04")
+	result, err := svc.PurchaseProduct(ctx, p.ID(), "cust-1", "ord-1", "web-01", "ubuntu-22.04")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify commercial slot was consumed
 	if result.SoldSlots() != 1 {
 		t.Fatalf("expected sold slots 1, got %d", result.SoldSlots())
 	}
@@ -137,7 +134,6 @@ func TestProductApp_PurchasePublishesEvent(t *testing.T) {
 		t.Fatalf("expected available slots 4, got %d", result.AvailableSlots())
 	}
 
-	// Verify event was published
 	if receivedEvent == nil {
 		t.Fatal("expected ProductPurchasedEvent to be published")
 	}
@@ -159,46 +155,46 @@ func TestProductApp_PurchasePublishesEvent(t *testing.T) {
 }
 
 func TestProductApp_PurchaseFailsWhenOutOfStock(t *testing.T) {
+	ctx := context.Background()
 	repo := newMemProductRepo()
 	bus := eventbus.New()
 	svc := NewProductAppService(repo, staticIDGen{id: "prod-2"}, bus, nil)
 
-	p, _ := svc.CreateProduct("VPS Tiny", "vps-tiny", "US-nyc", "", "", 1, 512, 10, 500, 299, "USD", domain.BillingMonthly, 1)
+	p, _ := svc.CreateProduct(ctx, "VPS Tiny", "vps-tiny", "US-nyc", "", "", 1, 512, 10, 500, 299, "USD", domain.BillingMonthly, 1)
 
-	// Purchase once --?should succeed
-	if _, err := svc.PurchaseProduct(p.ID(), "cust-1", "ord-1", "h1", "ubuntu"); err != nil {
+	if _, err := svc.PurchaseProduct(ctx, p.ID(), "cust-1", "ord-1", "h1", "ubuntu"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Purchase again --?should fail (out of stock)
-	if _, err := svc.PurchaseProduct(p.ID(), "cust-2", "ord-2", "h2", "ubuntu"); err == nil {
+	if _, err := svc.PurchaseProduct(ctx, p.ID(), "cust-2", "ord-2", "h2", "ubuntu"); err == nil {
 		t.Fatal("expected error when no slots available")
 	}
 }
 
 func TestProductApp_PurchaseFailsWhenDisabled(t *testing.T) {
+	ctx := context.Background()
 	repo := newMemProductRepo()
 	bus := eventbus.New()
 	svc := NewProductAppService(repo, staticIDGen{id: "prod-3"}, bus, nil)
 
-	p, _ := svc.CreateProduct("VPS Off", "vps-off", "DE-fra", "", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 10)
-	_ = svc.DisableProduct(p.ID())
+	p, _ := svc.CreateProduct(ctx, "VPS Off", "vps-off", "DE-fra", "", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 10)
+	_ = svc.DisableProduct(ctx, p.ID())
 
-	if _, err := svc.PurchaseProduct(p.ID(), "cust-1", "ord-1", "h1", "ubuntu"); err == nil {
+	if _, err := svc.PurchaseProduct(ctx, p.ID(), "cust-1", "ord-1", "h1", "ubuntu"); err == nil {
 		t.Fatal("expected error when product disabled")
 	}
 }
 
 func TestProductApp_AdjustStock_NormalSave(t *testing.T) {
+	ctx := context.Background()
 	repo := newMemProductRepo()
 	bus := eventbus.New()
 	checker := &stubCapacityChecker{slots: map[string]int{"region-de": 50}}
 	svc := NewProductAppService(repo, staticIDGen{id: "prod-4"}, bus, checker)
 
-	p, _ := svc.CreateProduct("VPS Stock", "vps-stock", "DE-fra", "region-de", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 10)
+	p, _ := svc.CreateProduct(ctx, "VPS Stock", "vps-stock", "DE-fra", "region-de", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 10)
 
-	// Adjust to 30 --?under physical capacity of 50 --?no warning
-	result, err := svc.AdjustStock(p.ID(), 30, false)
+	result, err := svc.AdjustStock(ctx, p.ID(), 30, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -211,15 +207,15 @@ func TestProductApp_AdjustStock_NormalSave(t *testing.T) {
 }
 
 func TestProductApp_AdjustStock_WarningWhenExceedsPhysical(t *testing.T) {
+	ctx := context.Background()
 	repo := newMemProductRepo()
 	bus := eventbus.New()
 	checker := &stubCapacityChecker{slots: map[string]int{"region-de": 10}}
 	svc := NewProductAppService(repo, staticIDGen{id: "prod-5"}, bus, checker)
 
-	p, _ := svc.CreateProduct("VPS Over", "vps-over", "DE-fra", "region-de", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 5)
+	p, _ := svc.CreateProduct(ctx, "VPS Over", "vps-over", "DE-fra", "region-de", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 5)
 
-	// Adjust to 50 --?exceeds physical capacity of 10 --?warning, not saved (confirmed=false)
-	result, err := svc.AdjustStock(p.ID(), 50, false)
+	result, err := svc.AdjustStock(ctx, p.ID(), 50, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -230,38 +226,37 @@ func TestProductApp_AdjustStock_WarningWhenExceedsPhysical(t *testing.T) {
 		t.Fatal("expected requires_confirmation=true")
 	}
 
-	// Verify NOT saved (still at old value in repo)
-	stored, _ := repo.GetByID(p.ID())
+	stored, _ := repo.GetByID(ctx, p.ID())
 	if stored.TotalSlots() != 5 {
 		t.Fatalf("expected 5 total slots (not saved), got %d", stored.TotalSlots())
 	}
 
-	// Now confirm --?should save
-	result2, err := svc.AdjustStock(p.ID(), 50, true)
+	result2, err := svc.AdjustStock(ctx, p.ID(), 50, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !result2.Warning {
 		t.Fatal("expected warning flag still present even when confirmed")
 	}
-	stored2, _ := repo.GetByID(p.ID())
+	stored2, _ := repo.GetByID(ctx, p.ID())
 	if stored2.TotalSlots() != 50 {
 		t.Fatalf("expected 50 total slots (saved after confirm), got %d", stored2.TotalSlots())
 	}
 }
 
 func TestProductApp_SetRegion(t *testing.T) {
+	ctx := context.Background()
 	repo := newMemProductRepo()
 	bus := eventbus.New()
 	svc := NewProductAppService(repo, staticIDGen{id: "prod-6"}, bus, nil)
 
-	p, _ := svc.CreateProduct("VPS Region", "vps-region", "DE-fra", "", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 10)
+	p, _ := svc.CreateProduct(ctx, "VPS Region", "vps-region", "DE-fra", "", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 10)
 
-	if err := svc.SetRegion(p.ID(), "region-de-fra"); err != nil {
+	if err := svc.SetRegion(ctx, p.ID(), "region-de-fra"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	stored, _ := repo.GetByID(p.ID())
+	stored, _ := repo.GetByID(ctx, p.ID())
 	if stored.RegionID() != "region-de-fra" {
 		t.Fatalf("expected region-de-fra, got %s", stored.RegionID())
 	}

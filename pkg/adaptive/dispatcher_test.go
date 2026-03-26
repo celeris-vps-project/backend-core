@@ -1,6 +1,7 @@
 package adaptive
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -24,7 +25,7 @@ type mockSyncProcessor struct {
 	callCount int64
 }
 
-func (p *mockSyncProcessor) Process(req testRequest) (*testResult, error) {
+func (p *mockSyncProcessor) Process(ctx context.Context, req testRequest) (*testResult, error) {
 	atomic.AddInt64(&p.callCount, 1)
 	return &testResult{ID: req.ID, Mode: "sync", Status: 200}, nil
 }
@@ -34,7 +35,7 @@ type mockAsyncProcessor struct {
 	callCount int64
 }
 
-func (p *mockAsyncProcessor) Process(req testRequest) (*testResult, error) {
+func (p *mockAsyncProcessor) Process(ctx context.Context, req testRequest) (*testResult, error) {
 	atomic.AddInt64(&p.callCount, 1)
 	return &testResult{ID: req.ID, Mode: "async", Status: 202}, nil
 }
@@ -47,7 +48,7 @@ func TestDispatcher_RoutesToSyncUnderThreshold(t *testing.T) {
 	monitor := NewSlidingWindowQPSMonitor(10)
 	dispatcher := NewDispatcher[testRequest, *testResult](syncProc, asyncProc, monitor, 1000)
 
-	result, err := dispatcher.Dispatch(testRequest{ID: "order-1"})
+	result, err := dispatcher.Dispatch(context.Background(), testRequest{ID: "order-1"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -77,7 +78,7 @@ func TestDispatcher_RoutesToAsyncAboveThreshold(t *testing.T) {
 		monitor.Record()
 	}
 
-	result, err := dispatcher.Dispatch(testRequest{ID: "order-high"})
+	result, err := dispatcher.Dispatch(context.Background(), testRequest{ID: "order-high"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -129,7 +130,7 @@ func TestDispatcher_ConcurrentSafety(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		go func(idx int) {
 			defer wg.Done()
-			_, err := dispatcher.Dispatch(testRequest{ID: fmt.Sprintf("order-%d", idx)})
+			_, err := dispatcher.Dispatch(context.Background(), testRequest{ID: fmt.Sprintf("order-%d", idx)})
 			if err != nil {
 				errors <- err
 			}

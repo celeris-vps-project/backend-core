@@ -2,9 +2,10 @@ package domain
 
 // ChargeResult represents the outcome of a payment charge request.
 type ChargeResult struct {
-	ChargeID   string // unique identifier from the payment gateway
-	Status     string // "success", "pending", "failed"
-	PaymentURL string // redirect URL for hosted checkout (empty if direct charge)
+	ChargeID   string              // unique identifier from the payment gateway
+	Status     string              // "success", "pending", "failed"
+	PaymentURL string              // redirect URL for hosted checkout (empty if direct charge)
+	Crypto     *CryptoChargeDetail // non-nil when payment is crypto (USDT)
 }
 
 const (
@@ -33,6 +34,22 @@ type PaymentProvider interface {
 	// and returns the normalised payload. Returns an error if the signature is
 	// invalid or the body cannot be parsed.
 	VerifyWebhook(rawBody []byte, signature string) (*WebhookPayload, error)
+}
+
+// CryptoPaymentProvider extends PaymentProvider with crypto-specific operations.
+// Implementations handle USDT payments across multiple blockchain networks.
+type CryptoPaymentProvider interface {
+	PaymentProvider
+
+	// CreateCryptoCharge creates a payment charge on a specific blockchain network.
+	CreateCryptoCharge(orderID string, amountMinor int64, network CryptoNetwork) (*ChargeResult, error)
+
+	// GetNetworks returns all supported blockchain networks and their info.
+	GetNetworks() []NetworkInfo
+
+	// GetChargeDetail returns the crypto-specific details for a charge.
+	// Returns nil if the charge is not found.
+	GetChargeDetail(chargeID string) *CryptoChargeDetail
 }
 
 // CheckoutProcessor is the application-level entry-point for the payment

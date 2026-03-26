@@ -3,25 +3,21 @@ package infra
 import (
 	catalogApp "backend-core/internal/catalog/app"
 	paymentApp "backend-core/internal/payment/app"
+	"context"
 )
 
 // CatalogAdapter implements paymentApp.ProductPurchaser by wrapping the
-// catalog context's ProductAppService. It converts catalog domain types into
-// the payment context's PurchasedProduct DTO so the payment context never
-// imports catalog domain types directly.
+// catalog context's ProductAppService.
 type CatalogAdapter struct {
 	svc *catalogApp.ProductAppService
 }
 
-// NewCatalogAdapter wraps a ProductAppService as a ProductPurchaser.
 func NewCatalogAdapter(svc *catalogApp.ProductAppService) *CatalogAdapter {
 	return &CatalogAdapter{svc: svc}
 }
 
-// PurchaseProduct delegates to the catalog app service and maps the result
-// to a PurchasedProduct DTO.
-func (a *CatalogAdapter) PurchaseProduct(productID, customerID, orderID, hostname, os string) (paymentApp.PurchasedProduct, error) {
-	product, err := a.svc.PurchaseProduct(productID, customerID, orderID, hostname, os)
+func (a *CatalogAdapter) PurchaseProduct(ctx context.Context, productID, customerID, orderID, hostname, os string) (paymentApp.PurchasedProduct, error) {
+	product, err := a.svc.PurchaseProduct(ctx, productID, customerID, orderID, hostname, os)
 	if err != nil {
 		return paymentApp.PurchasedProduct{}, err
 	}

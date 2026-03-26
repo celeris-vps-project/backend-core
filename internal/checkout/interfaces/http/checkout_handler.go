@@ -4,6 +4,7 @@ import (
 	"backend-core/internal/checkout/domain"
 	"backend-core/internal/checkout/infra"
 	"backend-core/pkg/adaptive"
+	"backend-core/pkg/apperr"
 	"backend-core/pkg/authn"
 	"context"
 	"encoding/json"
@@ -49,34 +50,26 @@ func (h *CheckoutHandler) Checkout(c context.Context, ctx *hertzApp.RequestConte
 	// Extract customer ID from JWT context (set by auth middleware)
 	uid, ok := authn.UserID(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, map[string]string{
-			"error": "unauthorized — login required",
-		})
+		ctx.JSON(http.StatusUnauthorized, apperr.RespMap(apperr.CodeUnauthorized, "unauthorized — login required"))
 		return
 	}
 
 	var req domain.CheckoutRequest
 	if err := ctx.BindJSON(&req); err != nil {
-		ctx.JSON(http.StatusBadRequest, map[string]string{
-			"error": "invalid request body: " + err.Error(),
-		})
+		ctx.JSON(http.StatusBadRequest, apperr.RespMap(apperr.CodeInvalidParams, "invalid request body: "+err.Error()))
 		return
 	}
 
 	// Override customer ID from JWT (don't trust client-provided value)
 	req.CustomerID = uid.String()
 
-	result, err := h.dispatcher.Dispatch(req)
+	result, err := h.dispatcher.Dispatch(c, req)
 	if err != nil {
 		if isSlotError(err) {
-			ctx.JSON(http.StatusConflict, map[string]string{
-				"error": err.Error(),
-			})
+			ctx.JSON(http.StatusConflict, apperr.RespMap(apperr.CodeNoAvailableSlots, err.Error()))
 			return
 		}
-		ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error": err.Error(),
-		})
+		ctx.JSON(http.StatusInternalServerError, apperr.RespMap(apperr.CodeInternalError, err.Error()))
 		return
 	}
 
@@ -89,17 +82,13 @@ func (h *CheckoutHandler) Checkout(c context.Context, ctx *hertzApp.RequestConte
 func (h *CheckoutHandler) OrderStatus(c context.Context, ctx *hertzApp.RequestContext) {
 	orderID := ctx.Param("id")
 	if orderID == "" {
-		ctx.JSON(http.StatusBadRequest, map[string]string{
-			"error": "order id is required",
-		})
+		ctx.JSON(http.StatusBadRequest, apperr.RespMap(apperr.CodeInvalidParams, "order id is required"))
 		return
 	}
 
 	status, ok := h.statusStore.Get(orderID)
 	if !ok {
-		ctx.JSON(http.StatusNotFound, map[string]string{
-			"error": "order not found — it may have been processed synchronously",
-		})
+		ctx.JSON(http.StatusNotFound, apperr.RespMap(apperr.CodeOrderNotFound, "order not found — it may have been processed synchronously"))
 		return
 	}
 
@@ -142,18 +131,14 @@ func (h *CheckoutHandler) OrderStatus(c context.Context, ctx *hertzApp.RequestCo
 func (h *CheckoutHandler) OrderStatusStream(c context.Context, ctx *hertzApp.RequestContext) {
 	orderID := ctx.Param("id")
 	if orderID == "" {
-		ctx.JSON(http.StatusBadRequest, map[string]string{
-			"error": "order id is required",
-		})
+		ctx.JSON(http.StatusBadRequest, apperr.RespMap(apperr.CodeInvalidParams, "order id is required"))
 		return
 	}
 
 	// Check that the order exists before establishing the SSE connection
 	currentStatus, exists := h.statusStore.Get(orderID)
 	if !exists {
-		ctx.JSON(http.StatusNotFound, map[string]string{
-			"error": "order not found — it may have been processed synchronously",
-		})
+		ctx.JSON(http.StatusNotFound, apperr.RespMap(apperr.CodeOrderNotFound, "order not found — it may have been processed synchronously"))
 		return
 	}
 
@@ -257,9 +242,7 @@ func (h *CheckoutHandler) SetThreshold(c context.Context, ctx *hertzApp.RequestC
 		Threshold int `json:"threshold"`
 	}
 	if err := ctx.BindJSON(&body); err != nil || body.Threshold <= 0 {
-		ctx.JSON(http.StatusBadRequest, map[string]string{
-			"error": "threshold must be > 0",
-		})
+		ctx.JSON(http.StatusBadRequest, apperr.RespMap(apperr.CodeInvalidParams, "threshold must be > 0"))
 		return
 	}
 	h.dispatcher.SetThreshold(body.Threshold)

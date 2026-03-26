@@ -22,6 +22,7 @@ import (
 	orderingInfra "backend-core/internal/ordering/infra"
 	orderingHttp "backend-core/internal/ordering/interfaces/http"
 	paymentApp "backend-core/internal/payment/app"
+	paymentDomain "backend-core/internal/payment/domain"
 	paymentInfra "backend-core/internal/payment/infra"
 	paymentHttp "backend-core/internal/payment/interfaces/http"
 	provisioningApp "backend-core/internal/provisioning/app"
@@ -90,6 +91,7 @@ func main() {
 	db.AutoMigrate(&instanceInfra.InstancePO{})
 	db.AutoMigrate(&catalogInfra.ProductPO{})
 	db.AutoMigrate(&provisioningInfra.RegionPO{}, &provisioningInfra.HostNodePO{}, &provisioningInfra.IPAddressPO{}, &provisioningInfra.TaskPO{}, &provisioningInfra.ResourcePoolPO{}, &provisioningInfra.BootstrapTokenPO{})
+	db.AutoMigrate(&paymentInfra.PaymentProviderPO{})
 
 	// 2. Wire up infrastructure
 	pwdHasher := infra.NewBcryptPasswordService(bcrypt.DefaultCost)
@@ -111,9 +113,36 @@ func main() {
 	orderApp := orderingApp.NewOrderAppService(orderRepo, idGen)
 	orderHandler := orderingHttp.NewOrderHandler(orderApp)
 
-	// Payment — mock provider (webhook callback wired after payHandler is created below)
-	mockPayProvider := paymentInfra.NewMockPaymentProvider(nil) // callback set below
-	paySvc := paymentApp.NewPaymentAppService(mockPayProvider)
+	// Payment — USDT crypto payment provider (loaded from config YAML)
+	// Config source: crypto section in api.yaml (see api.example.yaml)
+	// Environment override: CRYPTO_MOCK_MODE=false forces production mode.
+	cryptoCfg := paymentInfra.DefaultCryptoConfig()
+
+	// Apply YAML config values
+	if len(cfg.Crypto.Wallets) > 0 {
+		wallets := make(map[paymentDomain.CryptoNetwork]string)
+		for network, addr := range cfg.Crypto.Wallets {
+			wallets[paymentDomain.CryptoNetwork(network)] = addr
+		}
+		cryptoCfg.Wallets = wallets
+	}
+	cryptoCfg.MockMode = cfg.Crypto.MockMode
+	if d, err := time.ParseDuration(cfg.Crypto.PaymentTimeout); err == nil && d > 0 {
+		cryptoCfg.PaymentTimeout = d
+	}
+	if d, err := time.ParseDuration(cfg.Crypto.MockConfirmDelay); err == nil && d > 0 {
+		cryptoCfg.MockConfirmDelay = d
+	}
+
+	// Environment variable override takes precedence over YAML
+	if v := os.Getenv("CRYPTO_MOCK_MODE"); v == "false" || v == "0" {
+		cryptoCfg.MockMode = false
+	} else if v == "true" || v == "1" {
+		cryptoCfg.MockMode = true
+	}
+
+	cryptoProvider := paymentInfra.NewCryptoPaymentProvider(cryptoCfg, nil) // callback set below
+	paySvc := paymentApp.NewPaymentAppService(cryptoProvider)
 
 	// Event Bus — in-process synchronous bus for domain event integration
 	bus := eventbus.New()
@@ -187,12 +216,26 @@ func main() {
 
 	// Provision Dispatcher - routes provisioning commands by product type
 	// VPSProvisioner receives the delayed publisher for async boot confirmation.
+	//
+	// MockMode: when true, tasks are auto-completed without a real agent.
+	// Set to false (or remove WithMockMode) when real agents are connected.
+	// Env override: PROVISION_MOCK_MODE=false disables mock mode.
+	provisionMockMode := true // default: mock mode for dev (no real agent)
+	if v := os.Getenv("PROVISION_MOCK_MODE"); v == "false" || v == "0" {
+		provisionMockMode = false
+	}
 	vpsProvisioner := provisioningApp.NewVPSProvisioner(hostRepo, poolRepo, taskRepo, idGen,
 		provisioningApp.WithDelayedPublisher(delayedPublisher),
+		provisioningApp.WithMockMode(provisionMockMode),
 	)
 	provDispatcher := provisioningApp.NewProvisionDispatcher("vps")
 	provDispatcher.Register(vpsProvisioner)
 	provDispatcher.RegisterEventHandlers(bus)
+	if provisionMockMode {
+		log.Printf("[api] VPS provisioner: MOCK MODE (tasks auto-completed, set PROVISION_MOCK_MODE=false for real agents)")
+	} else {
+		log.Printf("[api] VPS provisioner: PRODUCTION MODE (tasks queued for real agents)")
+	}
 	log.Printf("[api] boot confirmation queue enabled (InMemory, delay=30s)")
 
 	// WebSocket Hub - broadcasts real-time node state to admin clients
@@ -246,13 +289,26 @@ func main() {
 		circuitbreaker.New("pay-billing", 3, 2, 20*time.Second))
 
 	postPayOrch := paymentApp.NewPostPaymentOrchestrator(orderAdapter, catalogAdapter, instanceAdapter, billingAdapter, delayedPublisher)
-	payHandler := paymentHttp.NewPaymentHandler(paySvc, postPayOrch, mockPayProvider)
-	log.Printf("[api] payment orchestrator circuit breakers enabled (ordering=5/30s, catalog=5/30s, instance=3/20s)")
+	payHandler := paymentHttp.NewPaymentHandler(paySvc, postPayOrch, cryptoProvider)
 
-	// Phase 2: wire the mock provider's async webhook callback to the payHandler.
-	// When the mock "gateway" fires the callback, it calls payHandler.HandleWebhookPayload
-	// which activates the order and triggers provisioning.
-	mockPayProvider.SetCallback(payHandler.HandleWebhookPayload)
+	// Payment Provider management — dynamic provider configuration via admin UI
+	providerRepo := paymentInfra.NewGormPaymentProviderRepo(db)
+	providerSvc := paymentApp.NewProviderAppService(providerRepo, idGen)
+	providerHandler := paymentHttp.NewProviderHandler(providerSvc)
+	payHandler.SetProviderService(providerSvc)
+	log.Printf("[api] payment provider management enabled (dynamic admin configuration)")
+	log.Printf("[api] payment orchestrator circuit breakers enabled (ordering=5/30s, catalog=5/30s, instance=3/20s)")
+	if cryptoCfg.MockMode {
+		log.Printf("[api] USDT crypto payment: MOCK MODE (auto-confirms after %v, set CRYPTO_MOCK_MODE=false for real blockchain)", cryptoCfg.MockConfirmDelay)
+	} else {
+		log.Printf("[api] USDT crypto payment: PRODUCTION MODE (awaiting real blockchain confirmations via webhook)")
+	}
+	log.Printf("[api]   payment timeout: %v, wallets configured: %d networks", cryptoCfg.PaymentTimeout, len(cryptoCfg.Wallets))
+
+	// Wire the crypto provider's async webhook callback to the payHandler.
+	// When payment is confirmed (mock auto-confirm or real blockchain callback),
+	// it calls payHandler.HandleWebhookPayload to activate the order and trigger provisioning.
+	cryptoProvider.SetCallback(payHandler.HandleWebhookPayload)
 
 	// Region handler (using ProvisioningAppService)
 	rHandler := provisioningHttp.NewRegionHandler(provSvc)
@@ -396,10 +452,19 @@ func main() {
 		v1.POST("/agent/heartbeat", nHandler.AgentHeartbeat)
 		v1.POST("/agent/tasks/result", nHandler.AgentTaskResult)
 
-		// ── No rate limit: Payment webhook (gateway callback) ────────────
+		// ── Payment: public endpoints ────────────────────────────────────
+		// Payment network list (no auth needed — used by frontend before login)
+		v1.GET("/payment/networks", criticalRL, payHandler.Networks)
+		// Dynamic payment providers (user-facing — shows enabled providers for checkout)
+		v1.GET("/payment/providers", criticalRL, providerHandler.ListEnabled)
+
+		// ── No rate limit: Payment webhook (gateway/blockchain callback) ──
 		// Dropping a payment callback could leave orders in limbo.
 		v1.POST("/payments/webhook", payHandler.Webhook)
 		v1.POST("/payments/webhook/simulate", payHandler.SimulateWebhook)
+		// Custom provider webhook — receives callbacks from third-party gateways
+		// configured as "custom" providers. Route: /api/v1/payments/webhook/custom/:providerId
+		v1.POST("/payments/webhook/custom/:providerId", payHandler.CustomWebhook)
 	}
 
 	// 傳入真實的 jwtService 給中間件
@@ -431,8 +496,9 @@ func main() {
 		privateAPI.POST("/orders/:id/terminate", standardRL, orderHandler.Terminate)
 
 		// ── Checkout tier (strict per-IP: purchase/payment writes) ─────
-		// Payment — MVP flow
+		// Payment — USDT crypto payment flow
 		privateAPI.POST("/orders/:id/pay", checkoutRL, payHandler.Pay)
+		privateAPI.GET("/payment/charges/:id", standardRL, payHandler.ChargeDetail)
 
 		// Node admin routes (served by node module)
 		privateAPI.POST("/nodes", standardRL, nHandler.CreateHost)
@@ -541,6 +607,16 @@ func main() {
 		adminAPI.POST("/ws/perf-ticket", perfHub.IssueTicket)
 		adminAPI.PUT("/performance/interval", perfHub.SetIntervalHandler)
 		adminAPI.GET("/performance/snapshot", perfHub.GetSnapshotHandler)
+
+		// Payment Provider management (dynamic provider configuration)
+		adminAPI.POST("/payment-providers", providerHandler.Create)
+		adminAPI.GET("/payment-providers", providerHandler.ListAll)
+		adminAPI.GET("/payment-providers/types", providerHandler.ProviderTypes)
+		adminAPI.GET("/payment-providers/:id", providerHandler.GetByID)
+		adminAPI.PUT("/payment-providers/:id", providerHandler.Update)
+		adminAPI.POST("/payment-providers/:id/enable", providerHandler.Enable)
+		adminAPI.POST("/payment-providers/:id/disable", providerHandler.Disable)
+		adminAPI.DELETE("/payment-providers/:id", providerHandler.Delete)
 	}
 
 	// 5. Start gRPC server for agent communication (with node-token auth interceptor)

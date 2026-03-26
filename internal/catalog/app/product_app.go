@@ -4,6 +4,7 @@ import (
 	"backend-core/internal/catalog/domain"
 	"backend-core/pkg/eventbus"
 	"backend-core/pkg/events"
+	"context"
 	"fmt"
 )
 
@@ -46,7 +47,7 @@ func NewProductAppService(
 }
 
 // CreateProduct creates a new VPS product in the catalog.
-func (s *ProductAppService) CreateProduct(name, slug, location, regionID, resourcePoolID string, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle domain.BillingCycle, totalSlots int) (*domain.Product, error) {
+func (s *ProductAppService) CreateProduct(ctx context.Context, name, slug, location, regionID, resourcePoolID string, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle domain.BillingCycle, totalSlots int) (*domain.Product, error) {
 	id := s.ids.NewID()
 	p, err := domain.NewProduct(id, name, slug, location, cpu, memoryMB, diskGB, bandwidthGB, priceAmount, currency, cycle, totalSlots)
 	if err != nil {
@@ -58,7 +59,7 @@ func (s *ProductAppService) CreateProduct(name, slug, location, regionID, resour
 	if resourcePoolID != "" {
 		p.SetResourcePoolID(resourcePoolID)
 	}
-	if err := s.repo.Save(p); err != nil {
+	if err := s.repo.Save(ctx, p); err != nil {
 		return nil, err
 	}
 	return p, nil
@@ -68,9 +69,9 @@ func (s *ProductAppService) CreateProduct(name, slug, location, regionID, resour
 // and publishes a ProductPurchasedEvent for the Node domain to handle
 // physical provisioning independently.
 func (s *ProductAppService) PurchaseProduct(
-	productID, customerID, orderID, hostname, os string,
+	ctx context.Context, productID, customerID, orderID, hostname, os string,
 ) (*domain.Product, error) {
-	p, err := s.repo.GetByID(productID)
+	p, err := s.repo.GetByID(ctx, productID)
 	if err != nil {
 		return nil, err
 	}
@@ -80,15 +81,12 @@ func (s *ProductAppService) PurchaseProduct(
 
 	// Use atomic database-level slot consumption to prevent the
 	// read-modify-write race condition under concurrent purchases.
-	// This replaces the old pattern: p.ConsumeSlot() → repo.Save(p)
-	// which could lose sales when two goroutines read the same sold_slots
-	// value and both increment to the same number.
-	if err := s.repo.ConsumeSlotAtomic(productID); err != nil {
+	if err := s.repo.ConsumeSlotAtomic(ctx, productID); err != nil {
 		return nil, err
 	}
 
 	// Reload the product to get the updated sold_slots count for the response.
-	p, err = s.repo.GetByID(productID)
+	p, err = s.repo.GetByID(ctx, productID)
 	if err != nil {
 		return nil, err
 	}
@@ -113,58 +111,55 @@ func (s *ProductAppService) PurchaseProduct(
 	return p, nil
 }
 
-func (s *ProductAppService) GetProduct(id string) (*domain.Product, error) { return s.repo.GetByID(id) }
-func (s *ProductAppService) GetBySlug(slug string) (*domain.Product, error) {
-	return s.repo.GetBySlug(slug)
+func (s *ProductAppService) GetProduct(ctx context.Context, id string) (*domain.Product, error) {
+	return s.repo.GetByID(ctx, id)
 }
-func (s *ProductAppService) ListAll() ([]*domain.Product, error)     { return s.repo.ListAll() }
-func (s *ProductAppService) ListEnabled() ([]*domain.Product, error) { return s.repo.ListEnabled() }
+func (s *ProductAppService) GetBySlug(ctx context.Context, slug string) (*domain.Product, error) {
+	return s.repo.GetBySlug(ctx, slug)
+}
+func (s *ProductAppService) ListAll(ctx context.Context) ([]*domain.Product, error) {
+	return s.repo.ListAll(ctx)
+}
+func (s *ProductAppService) ListEnabled(ctx context.Context) ([]*domain.Product, error) {
+	return s.repo.ListEnabled(ctx)
+}
 
-func (s *ProductAppService) EnableProduct(id string) error {
-	p, err := s.repo.GetByID(id)
+func (s *ProductAppService) EnableProduct(ctx context.Context, id string) error {
+	p, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return err
 	}
 	p.Enable()
-	return s.repo.Save(p)
+	return s.repo.Save(ctx, p)
 }
 
-func (s *ProductAppService) DisableProduct(id string) error {
-	p, err := s.repo.GetByID(id)
+func (s *ProductAppService) DisableProduct(ctx context.Context, id string) error {
+	p, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return err
 	}
 	p.Disable()
-	return s.repo.Save(p)
+	return s.repo.Save(ctx, p)
 }
 
-func (s *ProductAppService) UpdatePrice(id string, amount int64, currency string) error {
-	p, err := s.repo.GetByID(id)
+func (s *ProductAppService) UpdatePrice(ctx context.Context, id string, amount int64, currency string) error {
+	p, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return err
 	}
 	if err := p.SetPrice(amount, currency); err != nil {
 		return err
 	}
-	return s.repo.Save(p)
+	return s.repo.Save(ctx, p)
 }
 
 // AdjustStock sets the commercial inventory slots for a product (admin restocking).
-//
-// Soft-limit logic:
-//   - If totalSlots <= physical available in the resource pool --?save normally.
-//   - If totalSlots > physical available --?return a warning (do NOT block).
-//     The frontend should show a confirmation modal. If confirmed=true, save proceeds.
-//   - If confirmed=false and warning is triggered, the save is NOT performed --?//     the frontend must re-call with confirmed=true.
-func (s *ProductAppService) AdjustStock(id string, totalSlots int, confirmed bool) (*RestockResult, error) {
-	p, err := s.repo.GetByID(id)
+func (s *ProductAppService) AdjustStock(ctx context.Context, id string, totalSlots int, confirmed bool) (*RestockResult, error) {
+	p, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	// Validate the proposed value without mutating yet.
-	// SetTotalSlots enforces domain rules (e.g. can't go below sold slots).
-	// We do a dry-run: validate, then check physical capacity before committing.
 	if totalSlots < domain.UnlimitedSlots {
 		return nil, fmt.Errorf("domain_error: total slots must be >= -1 (-1 = unlimited)")
 	}
@@ -176,16 +171,14 @@ func (s *ProductAppService) AdjustStock(id string, totalSlots int, confirmed boo
 
 	// Check physical capacity if a capacity checker is available and product has a region
 	if s.capacityChecker != nil && p.RegionID() != "" && totalSlots != domain.UnlimitedSlots {
-		// Use resource pool ID if available, otherwise fall back to region ID
 		checkID := p.ResourcePoolID()
 		if checkID == "" {
 			checkID = p.RegionID()
 		}
-		physAvail, err := s.capacityChecker.AvailablePhysicalSlots(checkID)
+		physAvail, err := s.capacityChecker.AvailablePhysicalSlots(ctx, checkID)
 		if err == nil {
 			result.PhysicalAvailable = physAvail
 
-			// Compare commercial inventory against physical capacity
 			if totalSlots > physAvail+p.SoldSlots() {
 				result.Warning = true
 				result.WarningMessage = fmt.Sprintf(
@@ -197,7 +190,6 @@ func (s *ProductAppService) AdjustStock(id string, totalSlots int, confirmed boo
 				)
 				result.RequiresConfirmation = true
 
-				// If not confirmed, return the warning without saving
 				if !confirmed {
 					return result, nil
 				}
@@ -205,34 +197,33 @@ func (s *ProductAppService) AdjustStock(id string, totalSlots int, confirmed boo
 		}
 	}
 
-	// Now apply the mutation and save
 	if err := p.SetTotalSlots(totalSlots); err != nil {
 		return nil, err
 	}
-	if err := s.repo.Save(p); err != nil {
+	if err := s.repo.Save(ctx, p); err != nil {
 		return nil, err
 	}
 	return result, nil
 }
 
 // SetRegion binds a product to a region (resource pool).
-func (s *ProductAppService) SetRegion(id, regionID string) error {
-	p, err := s.repo.GetByID(id)
+func (s *ProductAppService) SetRegion(ctx context.Context, id, regionID string) error {
+	p, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return err
 	}
 	p.SetRegionID(regionID)
-	return s.repo.Save(p)
+	return s.repo.Save(ctx, p)
 }
 
 // SetResourcePool binds a product to a resource pool.
-func (s *ProductAppService) SetResourcePool(id, poolID string) error {
-	p, err := s.repo.GetByID(id)
+func (s *ProductAppService) SetResourcePool(ctx context.Context, id, poolID string) error {
+	p, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return err
 	}
 	p.SetResourcePoolID(poolID)
-	return s.repo.Save(p)
+	return s.repo.Save(ctx, p)
 }
 
 // publishEvents sends all pending domain events from the aggregate to the bus.

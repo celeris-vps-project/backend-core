@@ -22,6 +22,7 @@ type ProductPurchasedEvent struct {
 	CPU            int
 	MemoryMB       int
 	DiskGB         int
+	NetworkMode    string // "dedicated" or "nat"; empty = dedicated
 }
 
 func (ProductPurchasedEvent) EventName() string { return "product.purchased" }
