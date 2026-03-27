@@ -2,6 +2,7 @@ package main
 
 import (
 	apiConfig "backend-core/internal/api/config"
+	api "backend-core/internal/api/interfaces/http"
 	billingApp "backend-core/internal/billing/app"
 	billingInfra "backend-core/internal/billing/infra"
 	billingHttp "backend-core/internal/billing/interfaces/http"
@@ -50,7 +51,6 @@ import (
 
 	identityHttp "backend-core/internal/identity/interfaces/http"
 
-	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/hertz-contrib/cors"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc"
@@ -391,9 +391,7 @@ func main() {
 	log.Printf("[api]   standard  = global %.0f QPS, per-IP %.0f QPS", rlCfg.Standard.GlobalQPS, rlCfg.Standard.IPMaxQPS)
 	log.Printf("[api]   admin     = global %.0f QPS, per-IP %.0f QPS", rlCfg.Admin.GlobalQPS, rlCfg.Admin.IPMaxQPS)
 
-	// 4. 配置 Hertz 路由
-	h := server.Default()
-
+	h := apiConfig.NewHertzHandler(cfg.Server)
 	// Baseline rate limiter — loose safety-net applied to ALL endpoints.
 	// This is intentionally very permissive; the real protection comes from
 	// the per-tier limiters applied at the route level below.
@@ -465,6 +463,10 @@ func main() {
 		// Custom provider webhook — receives callbacks from third-party gateways
 		// configured as "custom" providers. Route: /api/v1/payments/webhook/custom/:providerId
 		v1.POST("/payments/webhook/custom/:providerId", payHandler.CustomWebhook)
+		// EPay (易支付) webhook — receives callbacks from EPay gateways as GET requests.
+		// Supports both V1 (MD5) and V2 (RSA) signature verification.
+		// Route: /api/v1/payments/webhook/epay/:providerId
+		v1.GET("/payments/webhook/epay/:providerId", payHandler.EPayWebhook)
 	}
 
 	// 傳入真實的 jwtService 給中間件
@@ -618,6 +620,9 @@ func main() {
 		adminAPI.POST("/payment-providers/:id/disable", providerHandler.Disable)
 		adminAPI.DELETE("/payment-providers/:id", providerHandler.Delete)
 	}
+
+	rootHandler := api.NewRootHandler(cfg.Server)
+	h.GET("/", rootHandler.Handle)
 
 	// 5. Start gRPC server for agent communication (with node-token auth interceptor)
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(provisioningGrpc.AuthInterceptor(provSvc)))

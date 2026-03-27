@@ -1,8 +1,10 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -10,12 +12,15 @@ import (
 
 // Config holds the API server's runtime configuration.
 type Config struct {
-	Database  DatabaseConfig       `json:"database" yaml:"database"`
-	JWT       JWTConfig            `json:"jwt" yaml:"jwt"`
-	GRPC      GRPCConfig           `json:"grpc" yaml:"grpc"`
-	RateLimit RateLimitConfig      `json:"rate_limit" yaml:"rate_limit"`
-	Crypto    CryptoPaymentConfig  `json:"crypto" yaml:"crypto"`
+	Database  DatabaseConfig      `json:"database" yaml:"database"`
+	JWT       JWTConfig           `json:"jwt" yaml:"jwt"`
+	GRPC      GRPCConfig          `json:"grpc" yaml:"grpc"`
+	RateLimit RateLimitConfig     `json:"rate_limit" yaml:"rate_limit"`
+	Crypto    CryptoPaymentConfig `json:"crypto" yaml:"crypto"`
+	Server    ServerConfig        `json:"server" yaml:"server"`
 }
+
+type PortConfig string
 
 // DatabaseConfig holds database connection settings.
 type DatabaseConfig struct {
@@ -143,6 +148,51 @@ type CryptoPaymentConfig struct {
 	Wallets map[string]string `json:"wallets" yaml:"wallets"`
 }
 
+type ServerConfig struct {
+	Port   PortConfig `json:"port" yaml:"port"`
+	Domain string     `json:"domain" yaml:"domain"`
+	Listen string     `json:"listen" yaml:"listen"`
+	Name   string     `json:"name" yaml:"name"`
+}
+
+func (p *PortConfig) String() string {
+	return fmt.Sprintf("%s", string(*p))
+}
+
+func (p *PortConfig) UnmarshalJSON(b []byte) error {
+	var v any
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+
+	switch value := v.(type) {
+	case string:
+		port, err := strconv.Atoi(value)
+		if err != nil {
+			return err
+		}
+		if err := validatePort(port); err != nil {
+			return fmt.Errorf("[config] invalid port: %s", err)
+		}
+		*p = PortConfig(value)
+	case int:
+		if err := validatePort(value); err != nil {
+			return fmt.Errorf("[config] invalid port: %s", err)
+		}
+		*p = PortConfig(strconv.Itoa(value))
+	default:
+		return fmt.Errorf("[config] invalid port type: %T", v)
+	}
+	return nil
+}
+
+func validatePort(port int) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("port out of range: %d", port)
+	}
+	return nil
+}
+
 // DefaultConfig returns sensible defaults for development.
 func DefaultConfig() Config {
 	return Config{
@@ -176,6 +226,12 @@ func DefaultConfig() Config {
 				"bsc":      "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD3E",
 				"polygon":  "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD3E",
 			},
+		},
+		Server: ServerConfig{
+			Domain: "www.example.com",
+			Port:   "8080",
+			Listen: "0.0.0.0",
+			Name:   "Celeris-api-server",
 		},
 	}
 }

@@ -1,6 +1,13 @@
 # Celeris API Server Configuration
 # Copy this file to api.yaml and adjust as needed.
 
+# server config
+server:
+  domain: "www.example.com"
+  port: 8080
+  listen: 0.0.0.0
+  name: "Celeris-api-server"
+
 database:
   dsn: "data.db"            # SQLite database file path
 

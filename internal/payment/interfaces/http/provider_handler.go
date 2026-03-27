@@ -51,10 +51,15 @@ func (h *ProviderHandler) Create(ctx context.Context, c *hz_app.RequestContext) 
 		return
 	}
 
-	// For custom providers, auto-fill the notify_url with the standard webhook
-	// callback endpoint so the admin can copy it into the third-party gateway.
-	if p.Type == domain.ProviderTypeCustom {
-		notifyURL := paymentInfra.BuildCustomNotifyURL(p.ID)
+	// For custom / epay providers, auto-fill the notify_url with the standard
+	// webhook callback endpoint so the admin can copy it into the gateway dashboard.
+	if p.Type == domain.ProviderTypeCustom || p.Type == domain.ProviderTypeEPay {
+		var notifyURL string
+		if p.Type == domain.ProviderTypeCustom {
+			notifyURL = paymentInfra.BuildCustomNotifyURL(p.ID)
+		} else {
+			notifyURL = paymentInfra.BuildEPayNotifyURL(p.ID)
+		}
 		if p.Config == nil {
 			p.Config = make(map[string]interface{})
 		}

@@ -58,9 +58,11 @@ func (h *PaymentHandler) SetProviderService(svc *paymentApp.ProviderAppService) 
 
 // PayRequest is the optional JSON body for POST /orders/:id/pay.
 // If network is provided, a crypto (USDT) payment is initiated.
+// If provider_id is provided, the payment is routed to that specific provider.
 type PayRequest struct {
-	Network  string `json:"network,omitempty"`  // e.g. "arbitrum", "solana"
-	Currency string `json:"currency,omitempty"` // default: "USDT"
+	Network    string `json:"network,omitempty"`     // e.g. "arbitrum", "solana"
+	Currency   string `json:"currency,omitempty"`    // default: "USDT"
+	ProviderID string `json:"provider_id,omitempty"` // dynamic provider selection
 }
 
 // PayResponse is the response returned after initiating a payment.
@@ -107,11 +109,60 @@ func (h *PaymentHandler) Pay(ctx context.Context, c *hz_app.RequestContext) {
 		log.Printf("[PaymentHandler] WARNING: invoice creation failed for order %s: %v", orderID, err)
 	}
 
-	// 4. Create charge (crypto or legacy)
+	// 4. Create charge — route based on provider_id or legacy flow
 	var chargeResult *domain.ChargeResult
 
-	if req.Network != "" && h.cryptoProv != nil {
-		// Crypto payment with specific network
+	if req.ProviderID != "" && h.providerSvc != nil {
+		// ── Dynamic provider routing ──
+		providerCfg, provErr := h.providerSvc.GetProvider(req.ProviderID)
+		if provErr != nil {
+			c.JSON(consts.StatusNotFound, apperr.Resp(apperr.CodeProviderNotFound, "payment provider not found"))
+			return
+		}
+		if !providerCfg.Enabled {
+			c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(apperr.CodeInvalidParams, "payment provider is disabled"))
+			return
+		}
+
+		switch providerCfg.Type {
+		case domain.ProviderTypeCryptoUSDT:
+			// Crypto USDT — delegate to crypto provider with optional network
+			if h.cryptoProv != nil {
+				network := domain.CryptoNetwork(req.Network)
+				if req.Network == "" {
+					network = domain.NetworkArbitrum // default
+				} else if !domain.ValidNetwork(req.Network) {
+					c.JSON(consts.StatusBadRequest, utils.H{
+						"code":               apperr.CodeNetworkUnsupported,
+						"error":              "unsupported network: " + req.Network,
+						"supported_networks": []string{"arbitrum", "solana", "trc20", "bsc", "polygon"},
+					})
+					return
+				}
+				chargeResult, err = h.cryptoProv.CreateCryptoCharge(orderID, order.PriceAmount, network)
+			} else {
+				c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(apperr.CodeCryptoNotConfigured, "crypto payments not configured"))
+				return
+			}
+
+		case domain.ProviderTypeCustom:
+			// Custom third-party gateway — create charge and return merchant redirect URL
+			customProv := paymentInfra.NewCustomPaymentProvider(providerCfg, h.HandleWebhookPayload)
+			chargeResult, err = customProv.CreateCharge(orderID, order.Currency, order.PriceAmount)
+
+		case domain.ProviderTypeEPay:
+			// EPay (易支付) gateway — V1 (MD5) or V2 (RSA) based on config
+			epayProv := paymentInfra.NewEPayPaymentProvider(providerCfg, h.HandleWebhookPayload)
+			chargeResult, err = epayProv.CreateCharge(orderID, order.Currency, order.PriceAmount)
+
+		default:
+			// Future provider types (stripe, paypal, alipay, wechat_pay) — placeholder
+			c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(apperr.CodeInternalError,
+				"payment provider type '"+providerCfg.Type+"' is not yet implemented"))
+			return
+		}
+	} else if req.Network != "" && h.cryptoProv != nil {
+		// ── Legacy flow: crypto payment with specific network (no provider_id) ──
 		if !domain.ValidNetwork(req.Network) {
 			c.JSON(consts.StatusBadRequest, utils.H{
 				"code":               apperr.CodeNetworkUnsupported,
@@ -325,6 +376,87 @@ func (h *PaymentHandler) CustomWebhook(ctx context.Context, c *hz_app.RequestCon
 
 	log.Printf("[PaymentHandler.CustomWebhook] flow complete: provider=%s order=%s", providerID, payload.OrderID)
 	c.JSON(consts.StatusOK, utils.H{"message": "payment confirmed, order activated"})
+}
+
+// EPayWebhook handles GET /api/v1/payments/webhook/epay/:providerId
+//
+// This endpoint receives callbacks from EPay (易支付) payment gateways.
+// EPay sends payment notifications as GET requests with query parameters:
+//
+//	GET /api/v1/payments/webhook/epay/{providerId}?pid=1001&trade_no=...
+//	    &out_trade_no=ORDER123&type=alipay&trade_status=TRADE_SUCCESS
+//	    &name=VPS+Service&money=1.00&sign=...&sign_type=MD5|RSA
+//
+// The handler:
+//  1. Looks up the EPay provider config by ID
+//  2. Passes the raw query string to VerifyWebhook for signature verification
+//  3. If trade_status == TRADE_SUCCESS → triggers post-payment flow
+//  4. Returns plain text "success" (as required by EPay protocol)
+func (h *PaymentHandler) EPayWebhook(ctx context.Context, c *hz_app.RequestContext) {
+	providerID := c.Param("providerId")
+	if providerID == "" {
+		c.String(consts.StatusBadRequest, "provider ID is required")
+		return
+	}
+
+	// 1. Look up the provider config
+	if h.providerSvc == nil {
+		c.String(consts.StatusInternalServerError, "provider service not configured")
+		return
+	}
+	providerCfg, err := h.providerSvc.GetProvider(providerID)
+	if err != nil {
+		log.Printf("[PaymentHandler.EPayWebhook] provider not found: id=%s err=%v", providerID, err)
+		c.String(consts.StatusNotFound, "provider not found")
+		return
+	}
+	if providerCfg.Type != domain.ProviderTypeEPay {
+		c.String(consts.StatusBadRequest, "provider is not an EPay type")
+		return
+	}
+	if !providerCfg.Enabled {
+		c.String(consts.StatusUnprocessableEntity, "provider is disabled")
+		return
+	}
+
+	// 2. Extract the raw query string and verify webhook
+	// EPay sends all parameters as GET query params
+	rawQuery := string(c.Request.URI().QueryString())
+	if rawQuery == "" {
+		c.String(consts.StatusBadRequest, "empty query string")
+		return
+	}
+
+	epayProv := paymentInfra.NewEPayPaymentProvider(providerCfg, nil)
+	payload, err := epayProv.VerifyWebhook([]byte(rawQuery), "")
+	if err != nil {
+		log.Printf("[PaymentHandler.EPayWebhook] verification failed: provider=%s err=%v", providerID, err)
+		c.String(consts.StatusBadRequest, "webhook verification failed: "+err.Error())
+		return
+	}
+
+	log.Printf("[PaymentHandler.EPayWebhook] received: provider=%s trade_no=%s order=%s status=%s",
+		providerID, payload.ChargeID, payload.OrderID, payload.Status)
+
+	// 3. Process the payment confirmation
+	if payload.Status != domain.ChargeStatusSuccess {
+		log.Printf("[PaymentHandler.EPayWebhook] payment not successful (status=%s), skipping activation", payload.Status)
+		// EPay requires "success" response even for non-successful statuses
+		// to acknowledge receipt of the notification
+		c.String(consts.StatusOK, "success")
+		return
+	}
+
+	if err := h.orchestrator.HandlePaymentConfirmed(payload.OrderID); err != nil {
+		log.Printf("[PaymentHandler.EPayWebhook] WARNING: post-payment flow failed: %v", err)
+		c.String(consts.StatusInternalServerError, "post-payment flow failed")
+		return
+	}
+
+	log.Printf("[PaymentHandler.EPayWebhook] flow complete: provider=%s order=%s", providerID, payload.OrderID)
+
+	// 4. Return "success" as required by EPay protocol
+	c.String(consts.StatusOK, "success")
 }
 
 // SimulateWebhook handles POST /api/v1/payments/webhook/simulate

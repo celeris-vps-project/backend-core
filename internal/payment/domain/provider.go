@@ -24,6 +24,7 @@ const (
 	ProviderTypeAlipay     = "alipay"
 	ProviderTypeWechatPay  = "wechat_pay"
 	ProviderTypeCustom     = "custom"
+	ProviderTypeEPay       = "epay"
 )
 
 // ProviderTypeInfo describes a supported provider type and its expected config fields.
@@ -106,6 +107,24 @@ func SupportedProviderTypes() []ProviderTypeInfo {
 				{Key: "notify_url", Label: "Webhook Notify URL", Type: "string", Required: false, Placeholder: "Auto-generated after creation", HelpText: "Callback URL for the payment gateway to notify payment results. Auto-filled: /api/v1/payments/webhook/custom/{id}"},
 				{Key: "return_url", Label: "Return URL", Type: "string", Required: false, Placeholder: "https://your-site.com/orders/{order_id}/checkout", HelpText: "URL to redirect user after successful payment (browser redirect)"},
 				{Key: "cancel_url", Label: "Cancel URL", Type: "string", Required: false, Placeholder: "https://your-site.com/orders/{order_id}/checkout", HelpText: "URL to redirect user if payment is cancelled"},
+				{Key: "mock_mode", Label: "Mock Mode", Type: "bool", Required: false, HelpText: "Auto-confirm payments after a short delay (for testing)"},
+				{Key: "mock_confirm_delay", Label: "Mock Confirm Delay", Type: "string", Required: false, Placeholder: "3s", HelpText: "Delay before auto-confirming in mock mode"},
+			},
+		},
+		{
+			Type:        ProviderTypeEPay,
+			DisplayName: "EPay (易支付)",
+			Fields: []ProviderFieldInfo{
+				{Key: "api_url", Label: "Gateway URL", Type: "string", Required: true, Placeholder: "https://pay.example.com", HelpText: "EPay gateway base URL (without trailing slash). e.g. https://pay.myzfw.com"},
+				{Key: "pid", Label: "Merchant ID (pid)", Type: "string", Required: true, Placeholder: "1001", HelpText: "Your merchant ID (pid) at the EPay gateway"},
+				{Key: "api_version", Label: "API Version", Type: "string", Required: false, Placeholder: "v2", HelpText: "EPay API version: v1 (MD5, submit.php/mapi.php) or v2 (RSA, /api/pay/*). Default: v2"},
+				{Key: "merchant_key", Label: "Merchant Key (V1 MD5)", Type: "string", Required: false, HelpText: "MD5 secret key for V1 API signing. Required if api_version=v1"},
+				{Key: "merchant_private_key", Label: "Merchant Private Key (V2 RSA)", Type: "string", Required: false, HelpText: "RSA private key (PEM) for V2 API signing. Required if api_version=v2"},
+				{Key: "platform_public_key", Label: "Platform Public Key (V2 RSA)", Type: "string", Required: false, HelpText: "EPay platform RSA public key (PEM) for verifying V2 responses & webhooks. Required if api_version=v2"},
+				{Key: "pay_type", Label: "Default Payment Type", Type: "string", Required: false, Placeholder: "alipay", HelpText: "Default payment channel: alipay, wxpay, qqpay, etc. Leave empty for cashier page"},
+				{Key: "notify_url", Label: "Notify URL", Type: "string", Required: false, Placeholder: "Auto-generated after creation", HelpText: "Async callback URL for EPay gateway. Auto-filled: /api/v1/payments/webhook/epay/{id}"},
+				{Key: "return_url", Label: "Return URL", Type: "string", Required: false, Placeholder: "https://your-site.com/orders/{order_id}/checkout", HelpText: "Browser redirect URL after payment success"},
+				{Key: "product_name", Label: "Product Name Template", Type: "string", Required: false, Placeholder: "VPS Service", HelpText: "Product name sent to EPay. Default: 'VPS Service'"},
 				{Key: "mock_mode", Label: "Mock Mode", Type: "bool", Required: false, HelpText: "Auto-confirm payments after a short delay (for testing)"},
 				{Key: "mock_confirm_delay", Label: "Mock Confirm Delay", Type: "string", Required: false, Placeholder: "3s", HelpText: "Delay before auto-confirming in mock mode"},
 			},

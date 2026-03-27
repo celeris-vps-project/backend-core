@@ -2,13 +2,17 @@ package infra
 
 import (
 	"backend-core/internal/payment/domain"
+	"bytes"
 	"crypto/hmac"
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -125,8 +129,18 @@ func (p *CustomPaymentProvider) SetCallback(cb func(payload *domain.WebhookPaylo
 
 // CreateCharge creates a pending payment charge.
 //
-// In a real integration this would POST to the upstream gateway's API.
-// For now it creates a local charge record and (in mock mode) auto-confirms.
+// For custom providers with an api_url configured, this performs a server-side
+// HTTP POST to the third-party gateway's API to create an order, then returns
+// the gateway's payment page URL for the frontend to redirect the user to.
+//
+// Flow:
+//  1. Build a signed JSON request body
+//  2. POST to api_url (server-to-server, silent)
+//  3. Parse the gateway response: { charge_id, pay_url }
+//  4. Construct the full payment page URL (gateway base + pay_url)
+//  5. Return ChargeResult with PaymentURL for frontend redirect
+//
+// In mock mode, the charge auto-confirms after a delay for testing.
 func (p *CustomPaymentProvider) CreateCharge(orderID string, currency string, amountMinor int64) (*domain.ChargeResult, error) {
 	chargeID := fmt.Sprintf("custom_%s_%d", p.providerID[:8], p.seq.Add(1))
 
@@ -142,10 +156,32 @@ func (p *CustomPaymentProvider) CreateCharge(orderID string, currency string, am
 	log.Printf("[CustomPaymentProvider:%s] charge created: id=%s order=%s %s %d",
 		p.providerID[:8], chargeID, orderID, currency, amountMinor)
 
+	var paymentURL string
+
+	// If api_url is configured and not in mock mode, call the gateway API
+	if p.config.APIURL != "" && !p.config.MockMode {
+		gatewayResp, err := p.callGatewayAPI(chargeID, orderID, currency, amountMinor)
+		if err != nil {
+			return nil, fmt.Errorf("gateway API call failed: %w", err)
+		}
+		// Use gateway's charge_id if provided, otherwise keep ours
+		if gatewayResp.chargeID != "" {
+			chargeID = gatewayResp.chargeID
+			rec.ChargeID = chargeID
+		}
+		paymentURL = gatewayResp.payURL
+
+		log.Printf("[CustomPaymentProvider:%s] gateway order created: charge=%s pay_url=%s",
+			p.providerID[:8], chargeID, paymentURL)
+	} else {
+		// Mock mode or no api_url → local checkout page
+		paymentURL = fmt.Sprintf("/orders/%s/checkout", orderID)
+	}
+
 	result := &domain.ChargeResult{
 		ChargeID:   chargeID,
 		Status:     domain.ChargeStatusPending,
-		PaymentURL: fmt.Sprintf("/orders/%s/checkout", orderID),
+		PaymentURL: paymentURL,
 	}
 
 	// Mock mode: auto-confirm after delay
@@ -169,6 +205,134 @@ func (p *CustomPaymentProvider) CreateCharge(orderID string, currency string, am
 	}
 
 	return result, nil
+}
+
+// gatewayResponse holds the parsed response from the third-party gateway.
+type gatewayResponse struct {
+	chargeID string
+	payURL   string
+}
+
+// callGatewayAPI performs a server-side HTTP POST to the third-party gateway
+// to create a payment order. The gateway returns a charge_id and a pay_url
+// that the user should be redirected to.
+//
+// Request (POST api_url):
+//
+//	{
+//	  "order_id":    "...",
+//	  "amount":      12345,
+//	  "currency":    "USD",
+//	  "merchant_id": "...",
+//	  "notify_url":  "...",
+//	  "return_url":  "...",
+//	  "sign":        "..."
+//	}
+//
+// Expected response:
+//
+//	{
+//	  "code":      "SUCCESS",
+//	  "charge_id": "fake_xxx",
+//	  "pay_url":   "/pay/fake_xxx"
+//	}
+func (p *CustomPaymentProvider) callGatewayAPI(chargeID, orderID, currency string, amountMinor int64) (*gatewayResponse, error) {
+	// Build the request body
+	returnURL := strings.ReplaceAll(p.config.ReturnURL, "{order_id}", orderID)
+
+	reqBody := map[string]interface{}{
+		"order_id":    orderID,
+		"amount":      amountMinor,
+		"currency":    currency,
+		"merchant_id": p.config.MerchantID,
+	}
+	if p.config.NotifyURL != "" {
+		reqBody["notify_url"] = p.config.NotifyURL
+	}
+	if returnURL != "" {
+		reqBody["return_url"] = returnURL
+	}
+
+	// Compute signature
+	sign := p.computeSign(reqBody)
+	reqBody["sign"] = sign
+
+	// Marshal to JSON
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	log.Printf("[CustomPaymentProvider:%s] POST %s order=%s amount=%d",
+		p.providerID[:8], p.config.APIURL, orderID, amountMinor)
+
+	// HTTP POST to the gateway
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Post(p.config.APIURL, "application/json", bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("HTTP POST failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	log.Printf("[CustomPaymentProvider:%s] gateway response: status=%d body=%s",
+		p.providerID[:8], resp.StatusCode, string(respBody))
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("gateway returned HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	// Parse response
+	var respData struct {
+		Code     string `json:"code"`
+		ChargeID string `json:"charge_id"`
+		PayURL   string `json:"pay_url"`
+		Error    string `json:"error"`
+	}
+	if err := json.Unmarshal(respBody, &respData); err != nil {
+		return nil, fmt.Errorf("failed to parse gateway response: %w", err)
+	}
+
+	if respData.Code != "SUCCESS" {
+		return nil, fmt.Errorf("gateway error: code=%s error=%s", respData.Code, respData.Error)
+	}
+
+	// Build the full payment URL by combining the gateway base URL with the pay_url
+	fullPayURL := p.buildFullPayURL(respData.PayURL)
+
+	return &gatewayResponse{
+		chargeID: respData.ChargeID,
+		payURL:   fullPayURL,
+	}, nil
+}
+
+// buildFullPayURL constructs the full payment page URL from the gateway's
+// relative pay_url and the api_url base.
+//
+// Example:
+//
+//	api_url  = "http://localhost:9090/api/v1/gateway/create"
+//	pay_url  = "/pay/fake_abc123"
+//	result   = "http://localhost:9090/pay/fake_abc123"
+func (p *CustomPaymentProvider) buildFullPayURL(payURL string) string {
+	// If pay_url is already a full URL, return as-is
+	if strings.HasPrefix(payURL, "http://") || strings.HasPrefix(payURL, "https://") {
+		return payURL
+	}
+
+	// Extract base URL (scheme + host) from api_url
+	parsed, err := url.Parse(p.config.APIURL)
+	if err != nil {
+		// Fallback: return relative URL as-is
+		return payURL
+	}
+
+	baseURL := fmt.Sprintf("%s://%s", parsed.Scheme, parsed.Host)
+	return baseURL + payURL
 }
 
 // VerifyWebhook validates the authenticity of an incoming webhook from the
