@@ -23,7 +23,6 @@ const (
 	ProviderTypePayPal     = "paypal"
 	ProviderTypeAlipay     = "alipay"
 	ProviderTypeWechatPay  = "wechat_pay"
-	ProviderTypeCustom     = "custom"
 	ProviderTypeEPay       = "epay"
 )
 
@@ -94,21 +93,6 @@ func SupportedProviderTypes() []ProviderTypeInfo {
 				{Key: "mch_id", Label: "Merchant ID", Type: "string", Required: true, HelpText: "WeChat Pay merchant ID"},
 				{Key: "api_key", Label: "API Key", Type: "string", Required: true, HelpText: "WeChat Pay API v3 key"},
 				{Key: "cert_path", Label: "Certificate Path", Type: "string", Required: false, HelpText: "Path to merchant certificate"},
-			},
-		},
-		{
-			Type:        ProviderTypeCustom,
-			DisplayName: "Custom (Webhook)",
-			Fields: []ProviderFieldInfo{
-				{Key: "api_url", Label: "API Endpoint", Type: "string", Required: true, Placeholder: "https://pay.example.com/api/create", HelpText: "Third-party payment gateway API URL for creating charges"},
-				{Key: "merchant_id", Label: "Merchant ID", Type: "string", Required: true, Placeholder: "100001", HelpText: "Your merchant ID / app ID at the payment gateway"},
-				{Key: "merchant_key", Label: "Merchant Secret Key", Type: "string", Required: true, HelpText: "Secret key for signing requests and verifying webhook callbacks"},
-				{Key: "sign_type", Label: "Signature Algorithm", Type: "string", Required: false, Placeholder: "md5", HelpText: "Signature algorithm: md5 (default), hmac-sha256"},
-				{Key: "notify_url", Label: "Webhook Notify URL", Type: "string", Required: false, Placeholder: "Auto-generated after creation", HelpText: "Callback URL for the payment gateway to notify payment results. Auto-filled: /api/v1/payments/webhook/custom/{id}"},
-				{Key: "return_url", Label: "Return URL", Type: "string", Required: false, Placeholder: "https://your-site.com/orders/{order_id}/checkout", HelpText: "URL to redirect user after successful payment (browser redirect)"},
-				{Key: "cancel_url", Label: "Cancel URL", Type: "string", Required: false, Placeholder: "https://your-site.com/orders/{order_id}/checkout", HelpText: "URL to redirect user if payment is cancelled"},
-				{Key: "mock_mode", Label: "Mock Mode", Type: "bool", Required: false, HelpText: "Auto-confirm payments after a short delay (for testing)"},
-				{Key: "mock_confirm_delay", Label: "Mock Confirm Delay", Type: "string", Required: false, Placeholder: "3s", HelpText: "Delay before auto-confirming in mock mode"},
 			},
 		},
 		{

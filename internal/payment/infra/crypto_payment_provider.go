@@ -50,7 +50,7 @@ func DefaultCryptoConfig() CryptoPaymentConfig {
 // blockchain confirmations). In production mode it waits for external
 // webhook callbacks from a blockchain monitoring service.
 type CryptoPaymentProvider struct {
-	config   CryptoPaymentConfig
+	config   *CryptoPaymentConfig
 	networks []domain.NetworkInfo
 	charges  sync.Map // chargeID → *chargeRecord
 	seq      atomic.Int64
@@ -69,7 +69,7 @@ type chargeRecord struct {
 }
 
 // NewCryptoPaymentProvider creates a new USDT payment provider.
-func NewCryptoPaymentProvider(cfg CryptoPaymentConfig, onWebhook func(payload *domain.WebhookPayload)) *CryptoPaymentProvider {
+func NewCryptoPaymentProvider(cfg *CryptoPaymentConfig, onWebhook func(payload *domain.WebhookPayload)) *CryptoPaymentProvider {
 	return &CryptoPaymentProvider{
 		config:   cfg,
 		networks: domain.DefaultNetworkInfos(),

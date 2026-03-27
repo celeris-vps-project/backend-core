@@ -141,9 +141,6 @@ func main() {
 		cryptoCfg.MockMode = true
 	}
 
-	cryptoProvider := paymentInfra.NewCryptoPaymentProvider(cryptoCfg, nil) // callback set below
-	paySvc := paymentApp.NewPaymentAppService(cryptoProvider)
-
 	// Event Bus — in-process synchronous bus for domain event integration
 	bus := eventbus.New()
 
@@ -289,11 +286,17 @@ func main() {
 		circuitbreaker.New("pay-billing", 3, 2, 20*time.Second))
 
 	postPayOrch := paymentApp.NewPostPaymentOrchestrator(orderAdapter, catalogAdapter, instanceAdapter, billingAdapter, delayedPublisher)
-	payHandler := paymentHttp.NewPaymentHandler(paySvc, postPayOrch, cryptoProvider)
 
 	// Payment Provider management — dynamic provider configuration via admin UI
 	providerRepo := paymentInfra.NewGormPaymentProviderRepo(db)
 	providerSvc := paymentApp.NewProviderAppService(providerRepo, idGen)
+	// Register provider factories — keeps payment/app free of payment/infra imports.
+	providerSvc.RegisterFactory(paymentDomain.ProviderTypeEPay, func(cfg *paymentDomain.PaymentProviderConfig, cb func(*paymentDomain.WebhookPayload)) paymentDomain.PaymentProvider {
+		return paymentInfra.NewEPayPaymentProvider(cfg, cb)
+	})
+	cryptoProvider := paymentInfra.NewCryptoPaymentProvider(&cryptoCfg, nil) // callback set below
+	paySvc := paymentApp.NewPaymentAppService(providerSvc)
+	payHandler := paymentHttp.NewPaymentHandler(paySvc, postPayOrch, cryptoProvider)
 	providerHandler := paymentHttp.NewProviderHandler(providerSvc)
 	payHandler.SetProviderService(providerSvc)
 	log.Printf("[api] payment provider management enabled (dynamic admin configuration)")
@@ -460,9 +463,6 @@ func main() {
 		// Dropping a payment callback could leave orders in limbo.
 		v1.POST("/payments/webhook", payHandler.Webhook)
 		v1.POST("/payments/webhook/simulate", payHandler.SimulateWebhook)
-		// Custom provider webhook — receives callbacks from third-party gateways
-		// configured as "custom" providers. Route: /api/v1/payments/webhook/custom/:providerId
-		v1.POST("/payments/webhook/custom/:providerId", payHandler.CustomWebhook)
 		// EPay (易支付) webhook — receives callbacks from EPay gateways as GET requests.
 		// Supports both V1 (MD5) and V2 (RSA) signature verification.
 		// Route: /api/v1/payments/webhook/epay/:providerId

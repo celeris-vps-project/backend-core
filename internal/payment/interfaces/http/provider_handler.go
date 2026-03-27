@@ -51,15 +51,10 @@ func (h *ProviderHandler) Create(ctx context.Context, c *hz_app.RequestContext) 
 		return
 	}
 
-	// For custom / epay providers, auto-fill the notify_url with the standard
+	// For EPay providers, auto-fill the notify_url with the standard
 	// webhook callback endpoint so the admin can copy it into the gateway dashboard.
-	if p.Type == domain.ProviderTypeCustom || p.Type == domain.ProviderTypeEPay {
-		var notifyURL string
-		if p.Type == domain.ProviderTypeCustom {
-			notifyURL = paymentInfra.BuildCustomNotifyURL(p.ID)
-		} else {
-			notifyURL = paymentInfra.BuildEPayNotifyURL(p.ID)
-		}
+	if p.Type == domain.ProviderTypeEPay {
+		notifyURL := paymentInfra.BuildEPayNotifyURL(p.ID)
 		if p.Config == nil {
 			p.Config = make(map[string]interface{})
 		}
@@ -86,7 +81,7 @@ func (h *ProviderHandler) ListAll(ctx context.Context, c *hz_app.RequestContext)
 // GetByID handles GET /api/v1/admin/payment-providers/:id
 func (h *ProviderHandler) GetByID(ctx context.Context, c *hz_app.RequestContext) {
 	id := c.Param("id")
-	p, err := h.svc.GetProvider(id)
+	p, err := h.svc.GetProviderConfig(id)
 	if err != nil {
 		c.JSON(consts.StatusNotFound, apperr.Resp(apperr.CodeProviderNotFound, "provider not found"))
 		return

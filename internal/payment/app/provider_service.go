@@ -4,8 +4,13 @@ import (
 	"backend-core/internal/payment/domain"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 )
+
+// ProviderFactory is a constructor function for a PaymentProvider.
+// Infra packages register their factories at startup to avoid import cycles.
+type ProviderFactory func(cfg *domain.PaymentProviderConfig, callback func(*domain.WebhookPayload)) domain.PaymentProvider
 
 // IDGen generates unique IDs. Reuses the same interface used by other contexts.
 type IDGen interface {
@@ -15,12 +20,26 @@ type IDGen interface {
 // ProviderAppService provides CRUD operations for payment provider configurations.
 // Admins use this to add/configure payment providers; users query enabled providers.
 type ProviderAppService struct {
-	repo  domain.PaymentProviderRepo
-	idGen IDGen
+	repo      domain.PaymentProviderRepo
+	idGen     IDGen
+	cache     sync.Map
+	callback  func(*domain.WebhookPayload)
+	factories map[string]ProviderFactory
 }
 
 func NewProviderAppService(repo domain.PaymentProviderRepo, idGen IDGen) *ProviderAppService {
-	return &ProviderAppService{repo: repo, idGen: idGen}
+	return &ProviderAppService{
+		repo:      repo,
+		idGen:     idGen,
+		cache:     sync.Map{},
+		factories: make(map[string]ProviderFactory),
+	}
+}
+
+// RegisterFactory registers a ProviderFactory for a given provider type.
+// Called at startup (e.g. in main) by infra packages to avoid import cycles.
+func (s *ProviderAppService) RegisterFactory(providerType string, factory ProviderFactory) {
+	s.factories[providerType] = factory
 }
 
 // CreateProvider creates a new payment provider configuration.
@@ -52,8 +71,8 @@ func (s *ProviderAppService) CreateProvider(providerType, name string, sortOrder
 	return p, nil
 }
 
-// GetProvider returns a single provider by ID.
-func (s *ProviderAppService) GetProvider(id string) (*domain.PaymentProviderConfig, error) {
+// GetProviderConfig returns a single provider by ID.
+func (s *ProviderAppService) GetProviderConfig(id string) (*domain.PaymentProviderConfig, error) {
 	return s.repo.GetByID(id)
 }
 
@@ -120,4 +139,32 @@ func (s *ProviderAppService) DeleteProvider(id string) error {
 	}
 	log.Printf("[ProviderAppService] provider deleted: id=%s", id)
 	return nil
+}
+
+func (s *ProviderAppService) SetCallback(cb func(*domain.WebhookPayload)) {
+	s.callback = cb
+}
+
+// GetProvider returns a live PaymentProvider instance for the given ID.
+// Providers are cached after first construction. Factories must be registered
+// via RegisterFactory before GetProvider is called for that type.
+func (s *ProviderAppService) GetProvider(id string) (domain.PaymentProvider, error) {
+	// Return cached instance if available
+	if cached, ok := s.cache.Load(id); ok {
+		return cached.(domain.PaymentProvider), nil
+	}
+
+	cfg, err := s.repo.GetByID(id)
+	if err != nil {
+		return nil, fmt.Errorf("provider not found: %w", err)
+	}
+
+	factory, ok := s.factories[cfg.Type]
+	if !ok {
+		return nil, fmt.Errorf("no factory registered for provider type %q", cfg.Type)
+	}
+
+	prov := factory(cfg, s.callback)
+	s.cache.LoadOrStore(id, prov)
+	return prov, nil
 }
