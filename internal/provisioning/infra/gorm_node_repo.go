@@ -3,6 +3,7 @@ package infra
 import (
 	"backend-core/internal/provisioning/domain"
 	"backend-core/pkg/contracts"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -54,7 +55,7 @@ type TaskPO struct {
 	NodeID     string `gorm:"index;column:node_id"`
 	Type       string `gorm:"column:type"`
 	Status     string `gorm:"column:status"`
-	SpecJSON   string `gorm:"column:spec_json;type:text"`
+	SpecJSON   string `gorm:"column:spec;type:text"`
 	Error      string `gorm:"column:error"`
 	CreatedAt  string `gorm:"column:created_at"`
 	FinishedAt string `gorm:"column:finished_at"`
@@ -298,7 +299,10 @@ func (r *GormTaskRepo) GetByID(id string) (*contracts.Task, error) {
 		}
 		return nil, err
 	}
-	t := taskToDomain(po)
+	t, err := taskToDomain(po)
+	if err != nil {
+		return nil, err
+	}
 	return &t, nil
 }
 
@@ -307,15 +311,23 @@ func (r *GormTaskRepo) ListPendingByNodeID(nodeID string) ([]contracts.Task, err
 	if err := r.db.Where("node_id = ? AND status = ?", nodeID, string(contracts.TaskStatusQueued)).Find(&pos).Error; err != nil {
 		return nil, err
 	}
+	var err error
 	out := make([]contracts.Task, len(pos))
 	for i, po := range pos {
-		out[i] = taskToDomain(po)
+		var task contracts.Task
+		if task, err = taskToDomain(po); err != nil {
+			return nil, err
+		}
+		out[i] = task
 	}
 	return out, nil
 }
 
 func (r *GormTaskRepo) Save(t *contracts.Task) error {
-	po := taskFromDomain(*t)
+	po, err := taskFromDomain(*t)
+	if err != nil {
+		return err
+	}
 	return r.db.Save(&po).Error
 }
 
@@ -343,9 +355,9 @@ func hostFromDomain(n *domain.HostNode) HostNodePO {
 	return HostNodePO{
 		ID: n.ID(), Code: n.Code(), Location: n.Location(), RegionID: n.RegionID(),
 		ResourcePoolID: poolID, Name: n.Name(), Secret: n.Secret(),
-		NodeToken:    n.NodeToken(),
-		CreatedAt:    n.CreatedAt(),
-		TotalSlots:   n.TotalSlots(), UsedSlots: n.UsedSlots(), Enabled: n.Enabled(),
+		NodeToken:  n.NodeToken(),
+		CreatedAt:  n.CreatedAt(),
+		TotalSlots: n.TotalSlots(), UsedSlots: n.UsedSlots(), Enabled: n.Enabled(),
 		NATPortStart: n.NATPortStart(), NATPortEnd: n.NATPortEnd(),
 	}
 }
@@ -361,18 +373,33 @@ func ipFromDomain(ip *domain.IPAddress) IPAddressPO {
 	}
 }
 
-func taskToDomain(po TaskPO) contracts.Task {
+func taskToDomain(po TaskPO) (contracts.Task, error) {
+	var spec contracts.ProvisionSpec
+	err := json.Unmarshal([]byte(po.SpecJSON), &spec)
+	if err != nil {
+		return contracts.Task{}, err
+	}
 	return contracts.Task{
 		ID: po.ID, NodeID: po.NodeID,
 		Type: contracts.TaskType(po.Type), Status: contracts.TaskStatus(po.Status),
+		Spec:  spec,
 		Error: po.Error, CreatedAt: po.CreatedAt, FinishedAt: po.FinishedAt,
-	}
+	}, nil
 }
 
-func taskFromDomain(t contracts.Task) TaskPO {
-	return TaskPO{
-		ID: t.ID, NodeID: t.NodeID,
-		Type: string(t.Type), Status: string(t.Status),
-		Error: t.Error, CreatedAt: t.CreatedAt, FinishedAt: t.FinishedAt,
+func taskFromDomain(t contracts.Task) (TaskPO, error) {
+	b, err := json.Marshal(t.Spec)
+	if err != nil {
+		return TaskPO{}, err
 	}
+	return TaskPO{
+		ID:         t.ID,
+		NodeID:     t.NodeID,
+		Type:       string(t.Type),
+		Status:     string(t.Status),
+		SpecJSON:   string(b),
+		Error:      t.Error,
+		CreatedAt:  t.CreatedAt,
+		FinishedAt: t.FinishedAt,
+	}, nil
 }
