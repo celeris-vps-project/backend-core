@@ -49,7 +49,7 @@ func (h *PaymentHandler) Pay(ctx context.Context, c *hz_app.RequestContext) {
 	var req PayRequest
 	_ = c.BindJSON(&req) // ignore errors — all fields are optional
 
-	resp, err := h.paymentSvc.InitiatePayment(&paymentApp.InitiatePaymentRequest{
+	resp, err := h.paymentSvc.InitiatePayment(ctx, &paymentApp.InitiatePaymentRequest{
 		OrderID:    orderID,
 		ProviderID: req.ProviderID,
 		Network:    req.Network,

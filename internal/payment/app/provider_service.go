@@ -88,17 +88,23 @@ func (s *ProviderAppService) CreateProvider(providerType, name string, sortOrder
 }
 
 // autoFillConfig fills in computed config fields for specific provider types.
-// For EPay: auto-generates the notify_url if not manually provided.
+// For EPay: auto-generates the notify_url and defaults pay_type to "alipay".
 func (s *ProviderAppService) autoFillConfig(p *domain.PaymentProviderConfig) {
-	if p.Type != domain.ProviderTypeEPay || s.notifyURLBuilder == nil {
+	if p.Type != domain.ProviderTypeEPay {
 		return
 	}
 	if p.Config == nil {
 		p.Config = make(map[string]interface{})
 	}
-	// Only set notify_url if not manually provided
-	if existing, _ := p.Config["notify_url"].(string); existing == "" {
-		p.Config["notify_url"] = s.notifyURLBuilder(p.ID)
+	// Only set notify_url if not manually provided (requires notifyURLBuilder)
+	if s.notifyURLBuilder != nil {
+		if existing, _ := p.Config["notify_url"].(string); existing == "" {
+			p.Config["notify_url"] = s.notifyURLBuilder(p.ID)
+		}
+	}
+	// Default pay_type to "alipay" if not provided
+	if existing, _ := p.Config["pay_type"].(string); existing == "" {
+		p.Config["pay_type"] = "alipay"
 	}
 }
 

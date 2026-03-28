@@ -1,5 +1,7 @@
 package domain
 
+import "context"
+
 // ChargeResult represents the outcome of a payment charge request.
 type ChargeResult struct {
 	ChargeID   string              // unique identifier from the payment gateway
@@ -28,7 +30,9 @@ type WebhookPayload struct {
 // is the only implementation.
 type PaymentProvider interface {
 	// CreateCharge asks the gateway to create a payment for the given order.
-	CreateCharge(orderID string, currency string, amountMinor int64) (*ChargeResult, error)
+	// The context should be used for cancellation and deadline propagation
+	// to downstream HTTP calls (e.g. EPay gateway API).
+	CreateCharge(ctx context.Context, orderID string, currency string, amountMinor int64) (*ChargeResult, error)
 
 	// VerifyWebhook validates the authenticity of an incoming webhook callback
 	// and returns the normalised payload. Returns an error if the signature is
@@ -42,7 +46,7 @@ type CryptoPaymentProvider interface {
 	PaymentProvider
 
 	// CreateCryptoCharge creates a payment charge on a specific blockchain network.
-	CreateCryptoCharge(orderID string, amountMinor int64, network CryptoNetwork) (*ChargeResult, error)
+	CreateCryptoCharge(ctx context.Context, orderID string, amountMinor int64, network CryptoNetwork) (*ChargeResult, error)
 
 	// GetNetworks returns all supported blockchain networks and their info.
 	GetNetworks() []NetworkInfo

@@ -3,6 +3,7 @@ package app
 import (
 	"backend-core/internal/payment/domain"
 	"backend-core/pkg/apperr"
+	"context"
 	"fmt"
 	"log"
 	"time"
@@ -62,7 +63,7 @@ func NewPaymentAppService(
 //
 // Returns *AppError for all known business errors so the handler can
 // call apperr.HandleErr() without any business logic.
-func (s *PaymentAppService) InitiatePayment(req *InitiatePaymentRequest) (*InitiatePaymentResponse, error) {
+func (s *PaymentAppService) InitiatePayment(ctx context.Context, req *InitiatePaymentRequest) (*InitiatePaymentResponse, error) {
 	if req.OrderID == "" {
 		return nil, apperr.ErrBadRequest(apperr.CodeInvalidParams, "order_id is required")
 	}
@@ -85,7 +86,7 @@ func (s *PaymentAppService) InitiatePayment(req *InitiatePaymentRequest) (*Initi
 	}
 
 	// 3. Create charge — route based on provider_id or legacy flow
-	chargeResult, err := s.createCharge(req, order)
+	chargeResult, err := s.createCharge(ctx, req, order)
 	if err != nil {
 		// Void orphan invoice on charge failure
 		s.orchestrator.VoidInvoiceOnFailure(invoiceID, "payment charge creation failed: "+err.Error())
@@ -112,15 +113,15 @@ func (s *PaymentAppService) InitiatePayment(req *InitiatePaymentRequest) (*Initi
 
 // createCharge routes the charge creation to the correct provider.
 // Returns *AppError for all known business errors.
-func (s *PaymentAppService) createCharge(req *InitiatePaymentRequest, order PayableOrder) (*domain.ChargeResult, error) {
+func (s *PaymentAppService) createCharge(ctx context.Context, req *InitiatePaymentRequest, order PayableOrder) (*domain.ChargeResult, error) {
 	// ── Dynamic provider routing (provider_id specified) ──
 	if req.ProviderID != "" {
-		return s.chargeViaDynamicProvider(req, order)
+		return s.chargeViaDynamicProvider(ctx, req, order)
 	}
 
 	// ── Legacy flow: crypto provider with optional network ──
 	if s.cryptoProv != nil {
-		return s.chargeViaCrypto(req, order)
+		return s.chargeViaCrypto(ctx, req, order)
 	}
 
 	// No provider available
@@ -128,7 +129,7 @@ func (s *PaymentAppService) createCharge(req *InitiatePaymentRequest, order Paya
 }
 
 // chargeViaDynamicProvider routes to a dynamically configured provider.
-func (s *PaymentAppService) chargeViaDynamicProvider(req *InitiatePaymentRequest, order PayableOrder) (*domain.ChargeResult, error) {
+func (s *PaymentAppService) chargeViaDynamicProvider(ctx context.Context, req *InitiatePaymentRequest, order PayableOrder) (*domain.ChargeResult, error) {
 	if s.providerSvc == nil {
 		return nil, apperr.ErrInternal("provider service not configured")
 	}
@@ -154,12 +155,21 @@ func (s *PaymentAppService) chargeViaDynamicProvider(req *InitiatePaymentRequest
 			return nil, apperr.ErrBadRequest(apperr.CodeNetworkUnsupported,
 				fmt.Sprintf("unsupported network: %s (supported: arbitrum, solana, trc20, bsc, polygon)", req.Network))
 		}
-		result, err := s.cryptoProv.CreateCryptoCharge(order.ID, order.PriceAmount, network)
+		result, err := s.cryptoProv.CreateCryptoCharge(ctx, order.ID, order.PriceAmount, network)
 		if err != nil {
 			return nil, apperr.ErrUnprocessable(apperr.CodePaymentFailed, "crypto payment failed: "+err.Error())
 		}
 		return result, nil
-
+	case domain.ProviderTypeEPay:
+		prov, err := s.providerSvc.GetProvider(providerCfg.ID)
+		if err != nil {
+			return nil, apperr.ErrNotFound(apperr.CodeProviderNotFound, "unexpected payment provider failed: "+err.Error())
+		}
+		res, err := prov.CreateCharge(ctx, order.ID, order.Currency, order.PriceAmount)
+		if err != nil {
+			return nil, err
+		}
+		return res, nil
 	default:
 		// All other types — use the factory-based provider resolution
 		provider, err := s.providerSvc.GetProvider(req.ProviderID)
@@ -167,7 +177,7 @@ func (s *PaymentAppService) chargeViaDynamicProvider(req *InitiatePaymentRequest
 			return nil, apperr.ErrUnprocessable(apperr.CodeInternalError,
 				fmt.Sprintf("provider type %q: %v", providerCfg.Type, err))
 		}
-		result, err := provider.CreateCharge(order.ID, order.Currency, order.PriceAmount)
+		result, err := provider.CreateCharge(ctx, order.ID, order.Currency, order.PriceAmount)
 		if err != nil {
 			return nil, apperr.ErrUnprocessable(apperr.CodePaymentFailed, "payment failed: "+err.Error())
 		}
@@ -176,7 +186,7 @@ func (s *PaymentAppService) chargeViaDynamicProvider(req *InitiatePaymentRequest
 }
 
 // chargeViaCrypto handles the legacy crypto payment flow (no provider_id).
-func (s *PaymentAppService) chargeViaCrypto(req *InitiatePaymentRequest, order PayableOrder) (*domain.ChargeResult, error) {
+func (s *PaymentAppService) chargeViaCrypto(ctx context.Context, req *InitiatePaymentRequest, order PayableOrder) (*domain.ChargeResult, error) {
 	network := domain.NetworkArbitrum // default
 	if req.Network != "" {
 		if !domain.ValidNetwork(req.Network) {
@@ -186,7 +196,7 @@ func (s *PaymentAppService) chargeViaCrypto(req *InitiatePaymentRequest, order P
 		network = domain.CryptoNetwork(req.Network)
 	}
 
-	result, err := s.cryptoProv.CreateCryptoCharge(order.ID, order.PriceAmount, network)
+	result, err := s.cryptoProv.CreateCryptoCharge(ctx, order.ID, order.PriceAmount, network)
 	if err != nil {
 		return nil, apperr.ErrUnprocessable(apperr.CodePaymentFailed, "crypto payment failed: "+err.Error())
 	}

@@ -4,8 +4,9 @@ import (
 	apiConfig "backend-core/internal/api/config"
 	"context"
 	"fmt"
-	"github.com/cloudwego/hertz/pkg/app"
 	"log"
+
+	"github.com/cloudwego/hertz/pkg/app"
 )
 
 type RootHandler struct {
@@ -19,6 +20,9 @@ func NewRootHandler(config apiConfig.ServerConfig) *RootHandler {
 }
 
 func (h RootHandler) Handle(ctx context.Context, c *app.RequestContext) {
+	if h.UseEmbed {
+
+	}
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	_html := fmt.Sprintf(`
 	<html>

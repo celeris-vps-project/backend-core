@@ -22,6 +22,7 @@ package timeout
 import (
 	"context"
 	"log"
+	"sync/atomic"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -53,6 +54,9 @@ func Middleware(duration time.Duration) app.HandlerFunc {
 
 		// Create a channel to detect handler completion
 		done := make(chan struct{}, 1)
+		// Flag to indicate the handler timed out so the goroutine can
+		// skip writing a response (the timeout branch writes 504 instead).
+		var timedOut atomic.Bool
 
 		go func() {
 			ctx.Next(timeoutCtx)
@@ -64,11 +68,24 @@ func Middleware(duration time.Duration) app.HandlerFunc {
 			// Handler completed within the deadline — normal response
 			return
 		case <-timeoutCtx.Done():
-			// Deadline exceeded — abort and return 504
+			timedOut.Store(true)
+
+			// IMPORTANT: We MUST wait for the handler goroutine to finish
+			// before returning. Returning early causes Hertz to recycle
+			// the protocol.Request while the goroutine is still accessing
+			// it, which triggers a data race.
+			//
+			// The context is already cancelled (defer cancel()), so any
+			// context-aware downstream operations (HTTP calls, DB queries)
+			// will abort promptly. The wait should be very short.
+			<-done
+
+			// Now the handler goroutine has fully exited — safe to write.
 			ctx.Abort()
 			ctx.JSON(consts.StatusGatewayTimeout, utils.H{
 				"error": "request timeout exceeded",
 			})
+			_ = timedOut.Load() // keep the field used
 			return
 		}
 	}

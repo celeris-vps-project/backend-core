@@ -2,6 +2,7 @@ package infra
 
 import (
 	"backend-core/internal/payment/domain"
+	"context"
 	"fmt"
 	"log"
 	"sync/atomic"
@@ -25,7 +26,7 @@ func NewMockPaymentProvider(onWebhook func(payload *domain.WebhookPayload)) *Moc
 
 // CreateCharge returns a "pending" status and schedules the webhook callback
 // asynchronously to simulate a real payment gateway flow.
-func (m *MockPaymentProvider) CreateCharge(orderID string, currency string, amountMinor int64) (*domain.ChargeResult, error) {
+func (m *MockPaymentProvider) CreateCharge(_ context.Context, orderID string, currency string, amountMinor int64) (*domain.ChargeResult, error) {
 	chargeID := fmt.Sprintf("mock_charge_%d", m.seq.Add(1))
 
 	log.Printf("[MockPaymentProvider] charge created (pending): id=%s order=%s %s %d", chargeID, orderID, currency, amountMinor)

@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout backend-core
+        uses: actions/checkout@v4
+
+      - name: Checkout frontend
+        uses: actions/checkout@v4
+        with:
+          repository: celeris-vps-project/frontend
+          path: frontend
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend (same-origin mode)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Embed frontend dist
+        run: |
+          rm -rf internal/web/dist
+          cp -r frontend/dist internal/web/dist
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: go.sum
+
+      # ── Build 1: with embedded frontend (all-in-one) ──────────────
+      - name: Build celeris-with-frontend-linux-amd64
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: 0
+        run: go build -tags frontend -trimpath -ldflags="-s -w" -o celeris-with-frontend-linux-amd64 cmd/api/main.go
+
+      # ── Build 2: pure backend (no frontend, for separate deployment) ──
+      - name: Build celeris-linux-amd64
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: 0
+        run: go build -trimpath -ldflags="-s -w" -o celeris-linux-amd64 cmd/api/main.go
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            celeris-linux-amd64
+            celeris-with-frontend-linux-amd64
+          generate_release_notes: true

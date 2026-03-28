@@ -53,13 +53,13 @@ type mockCryptoProvider struct {
 	chargeErr    error
 }
 
-func (m *mockCryptoProvider) CreateCharge(orderID, currency string, amountMinor int64) (*domain.ChargeResult, error) {
+func (m *mockCryptoProvider) CreateCharge(_ context.Context, orderID, currency string, amountMinor int64) (*domain.ChargeResult, error) {
 	return m.chargeResult, m.chargeErr
 }
 func (m *mockCryptoProvider) VerifyWebhook(rawBody []byte, signature string) (*domain.WebhookPayload, error) {
 	return nil, nil
 }
-func (m *mockCryptoProvider) CreateCryptoCharge(orderID string, amountMinor int64, network domain.CryptoNetwork) (*domain.ChargeResult, error) {
+func (m *mockCryptoProvider) CreateCryptoCharge(_ context.Context, orderID string, amountMinor int64, network domain.CryptoNetwork) (*domain.ChargeResult, error) {
 	return m.chargeResult, m.chargeErr
 }
 func (m *mockCryptoProvider) GetNetworks() []domain.NetworkInfo {
@@ -82,7 +82,7 @@ func TestInitiatePayment_ValidationErrors(t *testing.T) {
 	svc := app.NewPaymentAppService(nil, orch, nil)
 
 	// Empty order ID
-	_, err := svc.InitiatePayment(&app.InitiatePaymentRequest{})
+	_, err := svc.InitiatePayment(context.Background(), &app.InitiatePaymentRequest{})
 	if err == nil {
 		t.Fatal("expected error for empty order_id")
 	}
@@ -103,7 +103,7 @@ func TestInitiatePayment_OrderNotFound(t *testing.T) {
 	)
 	svc := app.NewPaymentAppService(nil, orch, nil)
 
-	_, err := svc.InitiatePayment(&app.InitiatePaymentRequest{OrderID: "order-999"})
+	_, err := svc.InitiatePayment(context.Background(), &app.InitiatePaymentRequest{OrderID: "order-999"})
 	if err == nil {
 		t.Fatal("expected error for missing order")
 	}
@@ -124,7 +124,7 @@ func TestInitiatePayment_OrderNotPending(t *testing.T) {
 	)
 	svc := app.NewPaymentAppService(nil, orch, nil)
 
-	_, err := svc.InitiatePayment(&app.InitiatePaymentRequest{OrderID: "order-1"})
+	_, err := svc.InitiatePayment(context.Background(), &app.InitiatePaymentRequest{OrderID: "order-1"})
 	if err == nil {
 		t.Fatal("expected error for non-pending order")
 	}
@@ -155,7 +155,7 @@ func TestInitiatePayment_CryptoSuccess(t *testing.T) {
 	}
 	svc := app.NewPaymentAppService(nil, orch, crypto)
 
-	resp, err := svc.InitiatePayment(&app.InitiatePaymentRequest{
+	resp, err := svc.InitiatePayment(context.Background(), &app.InitiatePaymentRequest{
 		OrderID: "order-1",
 		Network: "arbitrum",
 	})
@@ -181,7 +181,7 @@ func TestInitiatePayment_UnsupportedNetwork(t *testing.T) {
 	crypto := &mockCryptoProvider{}
 	svc := app.NewPaymentAppService(nil, orch, crypto)
 
-	_, err := svc.InitiatePayment(&app.InitiatePaymentRequest{
+	_, err := svc.InitiatePayment(context.Background(), &app.InitiatePaymentRequest{
 		OrderID: "order-1",
 		Network: "invalid_network",
 	})

@@ -2,6 +2,7 @@ package infra
 
 import (
 	"backend-core/internal/payment/domain"
+	"context"
 	"crypto"
 	"crypto/md5"
 	"crypto/rand"
@@ -12,9 +13,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -44,6 +47,20 @@ import (
 //   - Notify: GET with query parameters, return "success"
 //
 // Mock mode auto-confirms payments after a delay for development/testing.
+
+var (
+	// httpClient is shared across all EPay providers. Individual requests
+	// use context-based deadlines, so the client timeout is set generously
+	// as a safety net only.
+	httpClient = &http.Client{Timeout: 30 * time.Second}
+)
+
+const (
+	epayMaxRetries     = 2             // up to 2 retries (3 attempts total)
+	epayPerAttemptTime = 8 * time.Second // per-attempt timeout
+	epayBaseBackoff    = 1 * time.Second // initial backoff between retries
+)
+
 type EPayPaymentProvider struct {
 	providerID string
 	config     EPayProviderConfig
@@ -54,20 +71,20 @@ type EPayPaymentProvider struct {
 
 // EPayProviderConfig holds the parsed configuration for an EPay provider.
 type EPayProviderConfig struct {
-	APIURL             string        // EPay gateway base URL (e.g. https://pay.myzfw.com)
-	PID                string        // Merchant ID
-	APIVersion         string        // "v1" or "v2" (default "v2")
-	MerchantKey        string        // V1: MD5 secret key
-	MerchantPrivateKey *rsa.PrivateKey // V2: RSA private key for signing
-	PlatformPublicKey  *rsa.PublicKey  // V2: RSA public key for verification
-	MerchantPrivateKeyPEM string     // raw PEM (for error messages)
-	PlatformPublicKeyPEM  string     // raw PEM (for error messages)
-	PayType            string        // Default payment type (alipay, wxpay, etc.)
-	NotifyURL          string        // Async callback URL
-	ReturnURL          string        // Browser redirect URL
-	ProductName        string        // Product name template (default: "VPS Service")
-	MockMode           bool          // Auto-confirm for testing
-	MockConfirmDelay   time.Duration // Delay before auto-confirm (default 3s)
+	APIURL                string          // EPay gateway base URL (e.g. https://pay.myzfw.com)
+	PID                   string          // Merchant ID
+	APIVersion            string          // "v1" or "v2" (default "v2")
+	MerchantKey           string          // V1: MD5 secret key
+	MerchantPrivateKey    *rsa.PrivateKey // V2: RSA private key for signing
+	PlatformPublicKey     *rsa.PublicKey  // V2: RSA public key for verification
+	MerchantPrivateKeyPEM string          // raw PEM (for error messages)
+	PlatformPublicKeyPEM  string          // raw PEM (for error messages)
+	PayType               string          // Default payment type (alipay, wxpay, etc.)
+	NotifyURL             string          // Async callback URL
+	ReturnURL             string          // Browser redirect URL
+	ProductName           string          // Product name template (default: "VPS Service")
+	MockMode              bool            // Auto-confirm for testing
+	MockConfirmDelay      time.Duration   // Delay before auto-confirm (default 3s)
 }
 
 // epayChargeRecord tracks a pending EPay charge.
@@ -167,7 +184,7 @@ func (p *EPayPaymentProvider) SetCallback(cb func(payload *domain.WebhookPayload
 // For V2: calls {api_url}/api/pay/create with RSA-signed form params, returns pay_info.
 //
 // In mock mode, the charge auto-confirms after a delay for testing.
-func (p *EPayPaymentProvider) CreateCharge(orderID string, currency string, amountMinor int64) (*domain.ChargeResult, error) {
+func (p *EPayPaymentProvider) CreateCharge(ctx context.Context, orderID string, currency string, amountMinor int64) (*domain.ChargeResult, error) {
 	chargeID := fmt.Sprintf("epay_%s_%d", p.providerID[:8], p.seq.Add(1))
 
 	rec := &epayChargeRecord{
@@ -194,7 +211,7 @@ func (p *EPayPaymentProvider) CreateCharge(orderID string, currency string, amou
 	} else if p.config.APIVersion == "v1" {
 		paymentURL, err = p.createChargeV1(chargeID, orderID, money)
 	} else {
-		paymentURL, err = p.createChargeV2(chargeID, orderID, money)
+		paymentURL, err = p.createChargeV2(ctx, chargeID, orderID, money)
 	}
 
 	if err != nil {
@@ -279,8 +296,11 @@ func (p *EPayPaymentProvider) createChargeV1(chargeID, orderID, money string) (s
 // ── V2 Implementation ──────────────────────────────────────────────────
 
 // createChargeV2 calls the V2 /api/pay/create endpoint to create a payment.
+// Uses context-aware HTTP requests with retry and exponential backoff for
+// transient failures (timeouts, 5xx errors).
+//
 // Returns the payment URL from the gateway response.
-func (p *EPayPaymentProvider) createChargeV2(chargeID, orderID, money string) (string, error) {
+func (p *EPayPaymentProvider) createChargeV2(ctx context.Context, chargeID, orderID, money string) (string, error) {
 	if p.config.MerchantPrivateKey == nil {
 		return "", fmt.Errorf("V2 requires merchant_private_key (RSA PEM)")
 	}
@@ -298,6 +318,8 @@ func (p *EPayPaymentProvider) createChargeV2(chargeID, orderID, money string) (s
 		"name":         p.config.ProductName,
 		"money":        money,
 		"timestamp":    timestamp,
+		"clientip":     "127.0.0.1",
+		"device":       "pc",
 	}
 	if p.config.PayType != "" {
 		params["type"] = p.config.PayType
@@ -313,16 +335,64 @@ func (p *EPayPaymentProvider) createChargeV2(chargeID, orderID, money string) (s
 
 	// POST to /api/pay/create as form-encoded
 	createURL := p.config.APIURL + "/api/pay/create"
+
 	formData := url.Values{}
 	for k, v := range params {
 		formData.Set(k, v)
 	}
+	encodedForm := formData.Encode()
 
 	log.Printf("[EPayProvider:%s] V2 POST %s order=%s money=%s",
 		p.providerID[:8], createURL, orderID, money)
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.PostForm(createURL, formData)
+	// ── Retry loop with exponential backoff ────────────────────────────
+	var lastErr error
+	for attempt := 0; attempt <= epayMaxRetries; attempt++ {
+		if attempt > 0 {
+			// Check if parent context is already cancelled before retrying
+			if ctx.Err() != nil {
+				return "", fmt.Errorf("context cancelled before retry %d: %w", attempt, ctx.Err())
+			}
+			backoff := time.Duration(float64(epayBaseBackoff) * math.Pow(2, float64(attempt-1)))
+			log.Printf("[EPayProvider:%s] V2 retry %d/%d after %v (order=%s): %v",
+				p.providerID[:8], attempt, epayMaxRetries, backoff, orderID, lastErr)
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return "", fmt.Errorf("context cancelled during backoff: %w", ctx.Err())
+			}
+		}
+
+		paymentURL, err := p.doV2Post(ctx, createURL, encodedForm, orderID)
+		if err == nil {
+			return paymentURL, nil
+		}
+		lastErr = err
+
+		// Only retry on transient errors (timeouts, network errors, 5xx)
+		if !isTransientError(err) {
+			return "", lastErr
+		}
+	}
+
+	return "", fmt.Errorf("all %d attempts failed: %w", epayMaxRetries+1, lastErr)
+}
+
+// doV2Post executes a single HTTP POST to the EPay V2 create endpoint.
+// Uses a per-attempt context timeout derived from the parent context.
+func (p *EPayPaymentProvider) doV2Post(ctx context.Context, createURL, encodedForm, orderID string) (string, error) {
+	// Create a per-attempt timeout (shorter than the overall request timeout)
+	attemptCtx, cancel := context.WithTimeout(ctx, epayPerAttemptTime)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, createURL,
+		strings.NewReader(encodedForm))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("HTTP POST failed: %w", err)
 	}
@@ -336,8 +406,12 @@ func (p *EPayPaymentProvider) createChargeV2(chargeID, orderID, money string) (s
 	log.Printf("[EPayProvider:%s] V2 gateway response: status=%d body=%s",
 		p.providerID[:8], resp.StatusCode, string(respBody))
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode >= 500 {
 		return "", fmt.Errorf("gateway returned HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+	if resp.StatusCode != http.StatusOK {
+		// 4xx errors are not transient — don't retry
+		return "", &permanentError{msg: fmt.Sprintf("gateway returned HTTP %d: %s", resp.StatusCode, string(respBody))}
 	}
 
 	// Parse response JSON
@@ -356,7 +430,7 @@ func (p *EPayPaymentProvider) createChargeV2(chargeID, orderID, money string) (s
 	}
 
 	if respData.Code != 0 {
-		return "", fmt.Errorf("gateway error: code=%d msg=%s", respData.Code, respData.Msg)
+		return "", &permanentError{msg: fmt.Sprintf("gateway error: code=%d msg=%s", respData.Code, respData.Msg)}
 	}
 
 	// Verify response signature if platform public key is configured
@@ -377,20 +451,38 @@ func (p *EPayPaymentProvider) createChargeV2(chargeID, orderID, money string) (s
 	// Determine payment URL based on pay_type
 	paymentURL := respData.PayInfo
 	if respData.PayType == "jump" || respData.PayType == "html" {
-		// pay_info is a redirect URL or HTML; for "jump" it's a URL
 		if !strings.HasPrefix(paymentURL, "http") {
-			// Relative URL — prepend gateway base
 			paymentURL = p.config.APIURL + paymentURL
 		}
-	} else if respData.PayType == "qrcode" {
-		// pay_info is a QR code URL; frontend should render it
-		// We still return it as PaymentURL for the frontend to handle
 	}
 
 	log.Printf("[EPayProvider:%s] V2 charge created: trade_no=%s pay_type=%s pay_info=%s",
 		p.providerID[:8], respData.TradeNo, respData.PayType, paymentURL)
 
 	return paymentURL, nil
+}
+
+// permanentError marks an error as non-retryable (e.g. 4xx, business logic error).
+type permanentError struct{ msg string }
+
+func (e *permanentError) Error() string { return e.msg }
+
+// isTransientError returns true for errors that are worth retrying:
+// timeouts, connection resets, 5xx responses. Returns false for
+// permanent errors (4xx, business logic errors).
+func isTransientError(err error) bool {
+	// permanentError is explicitly non-retryable
+	var pe *permanentError
+	if errors.As(err, &pe) {
+		return false
+	}
+	// context.Canceled means the caller gave up — don't retry
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	// context.DeadlineExceeded from the per-attempt timeout is transient
+	// (the parent context might still have budget)
+	return true
 }
 
 // ── Webhook Verification ───────────────────────────────────────────────
@@ -485,8 +577,8 @@ func (p *EPayPaymentProvider) VerifyWebhook(rawBody []byte, signature string) (*
 		p.providerID[:8], tradeNo, outTradeNo, status, tradeStatus)
 
 	return &domain.WebhookPayload{
-		ChargeID:  tradeNo,     // EPay's trade_no
-		OrderID:   outTradeNo,  // our order ID
+		ChargeID:  tradeNo,    // EPay's trade_no
+		OrderID:   outTradeNo, // our order ID
 		Status:    status,
 		RawBody:   rawBody,
 		Signature: actualSign,

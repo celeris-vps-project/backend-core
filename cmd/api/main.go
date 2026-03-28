@@ -2,7 +2,6 @@ package main
 
 import (
 	apiConfig "backend-core/internal/api/config"
-	api "backend-core/internal/api/interfaces/http"
 	billingApp "backend-core/internal/billing/app"
 	billingInfra "backend-core/internal/billing/infra"
 	billingHttp "backend-core/internal/billing/interfaces/http"
@@ -31,6 +30,7 @@ import (
 	provisioningGrpc "backend-core/internal/provisioning/interfaces/grpc"
 	provisioningHttp "backend-core/internal/provisioning/interfaces/http"
 	provisioningWs "backend-core/internal/provisioning/interfaces/ws"
+	"backend-core/internal/web"
 	"backend-core/pkg/adaptive"
 	"backend-core/pkg/agentpb"
 	"backend-core/pkg/circuitbreaker"
@@ -44,6 +44,7 @@ import (
 	"flag"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -51,6 +52,7 @@ import (
 
 	identityHttp "backend-core/internal/identity/interfaces/http"
 
+	"github.com/cloudwego/hertz/pkg/common/adaptor"
 	"github.com/hertz-contrib/cors"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc"
@@ -296,9 +298,21 @@ func main() {
 	providerSvc.RegisterFactory(paymentDomain.ProviderTypeEPay, func(cfg *paymentDomain.PaymentProviderConfig, cb func(*paymentDomain.WebhookPayload)) paymentDomain.PaymentProvider {
 		return paymentInfra.NewEPayPaymentProvider(cfg, cb)
 	})
-	// Register notify URL builder — used by ProviderAppService to auto-fill EPay config
+	// Register notify URL builder — used by ProviderAppService to auto-fill EPay config.
+	// Builds an absolute URL using the configured server domain so that external
+	// payment gateways (EPay) can call back to this server.
 	providerSvc.RegisterNotifyURLBuilder(func(providerID string) string {
-		return "/api/v1/payments/webhook/epay/" + providerID
+		domain := cfg.Server.Domain
+		port := cfg.Server.Port.String()
+		scheme := "https"
+		if domain == "localhost" || domain == "127.0.0.1" {
+			scheme = "http"
+		}
+		host := domain
+		if port != "443" && port != "80" && port != "" {
+			host = host + ":" + port
+		}
+		return scheme + "://" + host + "/api/v1/payments/webhook/epay/" + providerID
 	})
 	cryptoProvider := paymentInfra.NewCryptoPaymentProvider(&cryptoCfg, nil) // callback set below
 
@@ -632,9 +646,13 @@ func main() {
 		adminAPI.DELETE("/payment-providers/:id", providerHandler.Delete)
 	}
 
-	rootHandler := api.NewRootHandler(cfg.Server)
-	h.GET("/", rootHandler.Handle)
-
+	//rootHandler := api.NewRootHandler(cfg.Server)
+	//h.GET("/", http.FileServer(http.FS(content)))
+	//h.StaticFS("/", hertzApp.FS)
+	// Serve embedded frontend only when built with -tags frontend
+	if fs := web.StaticFs(); fs != nil {
+		h.GET("/*filepath", adaptor.HertzHandler(http.FileServer(fs)))
+	}
 	// 5. Start gRPC server for agent communication (with node-token auth interceptor)
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(provisioningGrpc.AuthInterceptor(provSvc)))
 	agentpb.RegisterAgentServiceServer(grpcServer, provisioningGrpc.NewAgentGRPCServer(provSvc))

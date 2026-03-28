@@ -2,6 +2,7 @@ package infra
 
 import (
 	"backend-core/internal/payment/domain"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -86,8 +87,8 @@ func (p *CryptoPaymentProvider) SetCallback(cb func(payload *domain.WebhookPaylo
 
 // CreateCharge implements domain.PaymentProvider.
 // Uses Arbitrum as the default network when called through the generic interface.
-func (p *CryptoPaymentProvider) CreateCharge(orderID string, currency string, amountMinor int64) (*domain.ChargeResult, error) {
-	return p.CreateCryptoCharge(orderID, amountMinor, domain.NetworkArbitrum)
+func (p *CryptoPaymentProvider) CreateCharge(ctx context.Context, orderID string, currency string, amountMinor int64) (*domain.ChargeResult, error) {
+	return p.CreateCryptoCharge(ctx, orderID, amountMinor, domain.NetworkArbitrum)
 }
 
 // VerifyWebhook implements domain.PaymentProvider.
@@ -123,7 +124,7 @@ func (p *CryptoPaymentProvider) VerifyWebhook(rawBody []byte, signature string) 
 // ── CryptoPaymentProvider interface ────────────────────────────────────
 
 // CreateCryptoCharge creates a USDT payment charge on a specific blockchain network.
-func (p *CryptoPaymentProvider) CreateCryptoCharge(orderID string, amountMinor int64, network domain.CryptoNetwork) (*domain.ChargeResult, error) {
+func (p *CryptoPaymentProvider) CreateCryptoCharge(_ context.Context, orderID string, amountMinor int64, network domain.CryptoNetwork) (*domain.ChargeResult, error) {
 	if !domain.ValidNetwork(string(network)) {
 		return nil, fmt.Errorf("unsupported network: %s", network)
 	}
