@@ -12,6 +12,11 @@ import (
 // Infra packages register their factories at startup to avoid import cycles.
 type ProviderFactory func(cfg *domain.PaymentProviderConfig, callback func(*domain.WebhookPayload)) domain.PaymentProvider
 
+// NotifyURLBuilder builds the webhook callback URL for a given provider.
+// Infra registers an implementation at startup so the app layer can
+// auto-fill the notify_url without importing infra.
+type NotifyURLBuilder func(providerID string) string
+
 // IDGen generates unique IDs. Reuses the same interface used by other contexts.
 type IDGen interface {
 	NewID() string
@@ -20,11 +25,12 @@ type IDGen interface {
 // ProviderAppService provides CRUD operations for payment provider configurations.
 // Admins use this to add/configure payment providers; users query enabled providers.
 type ProviderAppService struct {
-	repo      domain.PaymentProviderRepo
-	idGen     IDGen
-	cache     sync.Map
-	callback  func(*domain.WebhookPayload)
-	factories map[string]ProviderFactory
+	repo             domain.PaymentProviderRepo
+	idGen            IDGen
+	cache            sync.Map
+	callback         func(*domain.WebhookPayload)
+	factories        map[string]ProviderFactory
+	notifyURLBuilder NotifyURLBuilder // optional — registered at startup
 }
 
 func NewProviderAppService(repo domain.PaymentProviderRepo, idGen IDGen) *ProviderAppService {
@@ -40,6 +46,13 @@ func NewProviderAppService(repo domain.PaymentProviderRepo, idGen IDGen) *Provid
 // Called at startup (e.g. in main) by infra packages to avoid import cycles.
 func (s *ProviderAppService) RegisterFactory(providerType string, factory ProviderFactory) {
 	s.factories[providerType] = factory
+}
+
+// RegisterNotifyURLBuilder registers a function that builds webhook callback
+// URLs. Called at startup so the app layer can auto-fill provider configs
+// without importing infra.
+func (s *ProviderAppService) RegisterNotifyURLBuilder(builder NotifyURLBuilder) {
+	s.notifyURLBuilder = builder
 }
 
 // CreateProvider creates a new payment provider configuration.
@@ -63,12 +76,30 @@ func (s *ProviderAppService) CreateProvider(providerType, name string, sortOrder
 		UpdatedAt: now,
 	}
 
+	// Auto-fill provider-specific config fields (e.g. EPay notify_url)
+	s.autoFillConfig(p)
+
 	if err := s.repo.Create(p); err != nil {
 		return nil, fmt.Errorf("create provider: %w", err)
 	}
 
 	log.Printf("[ProviderAppService] provider created: id=%s type=%s name=%s", p.ID, p.Type, p.Name)
 	return p, nil
+}
+
+// autoFillConfig fills in computed config fields for specific provider types.
+// For EPay: auto-generates the notify_url if not manually provided.
+func (s *ProviderAppService) autoFillConfig(p *domain.PaymentProviderConfig) {
+	if p.Type != domain.ProviderTypeEPay || s.notifyURLBuilder == nil {
+		return
+	}
+	if p.Config == nil {
+		p.Config = make(map[string]interface{})
+	}
+	// Only set notify_url if not manually provided
+	if existing, _ := p.Config["notify_url"].(string); existing == "" {
+		p.Config["notify_url"] = s.notifyURLBuilder(p.ID)
+	}
 }
 
 // GetProviderConfig returns a single provider by ID.

@@ -46,6 +46,14 @@ func (a *OrderingAdapterWithCB) LinkInvoiceToOrder(orderID, invoiceID string) er
 	})
 }
 
+// CancelOrder delegates to the inner adapter with circuit breaker protection.
+// On circuit open: returns a fast-fail error.
+func (a *OrderingAdapterWithCB) CancelOrder(orderID, reason string) error {
+	return circuitbreaker.ExecuteNoResult(a.cb, func() error {
+		return a.inner.CancelOrder(orderID, reason)
+	})
+}
+
 // GetOrderForPayment delegates to the inner adapter with circuit breaker protection.
 // On circuit open: returns a fast-fail error.
 func (a *OrderingAdapterWithCB) GetOrderForPayment(orderID string) (paymentApp.PayableOrder, error) {

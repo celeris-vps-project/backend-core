@@ -51,6 +51,13 @@ func (a *BillingAdapterWithCB) VoidInvoice(invoiceID, reason string) error {
 	})
 }
 
+// GetInvoiceStatus delegates to the inner adapter with circuit breaker protection.
+func (a *BillingAdapterWithCB) GetInvoiceStatus(invoiceID string) (string, error) {
+	return circuitbreaker.Execute(a.cb, func() (string, error) {
+		return a.inner.GetInvoiceStatus(invoiceID)
+	})
+}
+
 // Stats returns the circuit breaker's current statistics.
 func (a *BillingAdapterWithCB) Stats() circuitbreaker.Stats {
 	return a.cb.Stats()

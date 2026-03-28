@@ -188,18 +188,15 @@ func main() {
 	// VPSProvisioner so we can inject the publisher for async boot
 	// confirmation scheduling.
 
-	// Invoice timeout worker — handles delayed "invoice.check_timeout" events.
-	// Idempotent: if invoice is already paid, it's a no-op.
-	invoiceTimeoutWorker := paymentInfra.NewInvoiceTimeoutWorker(invoiceApp, orderApp)
-
 	// Boot confirmation worker — handles delayed "provision.confirm_boot" events.
 	// Checks whether a provisioning task has completed after a timeout period.
 	bootConfirmWorker := provisioningInfra.NewBootConfirmationWorker(taskRepo)
 
 	// Delayed event router — topic-based dispatcher shared across bounded contexts.
 	// Each context registers its own handler; the router dispatches by topic.
+	// NOTE: invoice.check_timeout handler is registered below after the
+	// PostPaymentOrchestrator is created (resolves dependency order).
 	delayedRouter := delayed.NewRouter()
-	delayedRouter.Handle("invoice.check_timeout", invoiceTimeoutWorker.HandlerFunc())
 	delayedRouter.Handle("provision.confirm_boot", bootConfirmWorker.HandlerFunc())
 
 	// Delayed event publisher — in-memory timer-based implementation.
@@ -287,6 +284,11 @@ func main() {
 
 	postPayOrch := paymentApp.NewPostPaymentOrchestrator(orderAdapter, catalogAdapter, instanceAdapter, billingAdapter, delayedPublisher)
 
+	// Invoice timeout worker — handles delayed "invoice.check_timeout" events.
+	// Now delegates to the orchestrator (via ports) instead of direct cross-context imports.
+	invoiceTimeoutWorker := paymentInfra.NewInvoiceTimeoutWorker(postPayOrch)
+	delayedRouter.Handle("invoice.check_timeout", invoiceTimeoutWorker.HandlerFunc())
+
 	// Payment Provider management — dynamic provider configuration via admin UI
 	providerRepo := paymentInfra.NewGormPaymentProviderRepo(db)
 	providerSvc := paymentApp.NewProviderAppService(providerRepo, idGen)
@@ -294,11 +296,18 @@ func main() {
 	providerSvc.RegisterFactory(paymentDomain.ProviderTypeEPay, func(cfg *paymentDomain.PaymentProviderConfig, cb func(*paymentDomain.WebhookPayload)) paymentDomain.PaymentProvider {
 		return paymentInfra.NewEPayPaymentProvider(cfg, cb)
 	})
+	// Register notify URL builder — used by ProviderAppService to auto-fill EPay config
+	providerSvc.RegisterNotifyURLBuilder(func(providerID string) string {
+		return "/api/v1/payments/webhook/epay/" + providerID
+	})
 	cryptoProvider := paymentInfra.NewCryptoPaymentProvider(&cryptoCfg, nil) // callback set below
-	paySvc := paymentApp.NewPaymentAppService(providerSvc)
-	payHandler := paymentHttp.NewPaymentHandler(paySvc, postPayOrch, cryptoProvider)
+
+	// PaymentAppService now owns all business logic: provider routing, invoice
+	// creation, timeout scheduling, and webhook handling.
+	paySvc := paymentApp.NewPaymentAppService(providerSvc, postPayOrch, cryptoProvider)
+	// PaymentHandler is now a thin HTTP adapter — only parses/serialises.
+	payHandler := paymentHttp.NewPaymentHandler(paySvc)
 	providerHandler := paymentHttp.NewProviderHandler(providerSvc)
-	payHandler.SetProviderService(providerSvc)
 	log.Printf("[api] payment provider management enabled (dynamic admin configuration)")
 	log.Printf("[api] payment orchestrator circuit breakers enabled (ordering=5/30s, catalog=5/30s, instance=3/20s)")
 	if cryptoCfg.MockMode {
@@ -308,10 +317,12 @@ func main() {
 	}
 	log.Printf("[api]   payment timeout: %v, wallets configured: %d networks", cryptoCfg.PaymentTimeout, len(cryptoCfg.Wallets))
 
-	// Wire the crypto provider's async webhook callback to the payHandler.
+	// Wire the crypto provider's async webhook callback to the app service.
 	// When payment is confirmed (mock auto-confirm or real blockchain callback),
-	// it calls payHandler.HandleWebhookPayload to activate the order and trigger provisioning.
-	cryptoProvider.SetCallback(payHandler.HandleWebhookPayload)
+	// it calls paySvc.HandleWebhookPayload to activate the order and trigger provisioning.
+	cryptoProvider.SetCallback(paySvc.HandleWebhookPayload)
+	// Also set the callback on providerSvc so factory-built providers can use it.
+	providerSvc.SetCallback(paySvc.HandleWebhookPayload)
 
 	// Region handler (using ProvisioningAppService)
 	rHandler := provisioningHttp.NewRegionHandler(provSvc)

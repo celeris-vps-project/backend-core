@@ -5,7 +5,6 @@ import (
 
 	paymentApp "backend-core/internal/payment/app"
 	"backend-core/internal/payment/domain"
-	paymentInfra "backend-core/internal/payment/infra"
 	"backend-core/pkg/apperr"
 
 	hz_app "github.com/cloudwego/hertz/pkg/app"
@@ -51,19 +50,8 @@ func (h *ProviderHandler) Create(ctx context.Context, c *hz_app.RequestContext) 
 		return
 	}
 
-	// For EPay providers, auto-fill the notify_url with the standard
-	// webhook callback endpoint so the admin can copy it into the gateway dashboard.
-	if p.Type == domain.ProviderTypeEPay {
-		notifyURL := paymentInfra.BuildEPayNotifyURL(p.ID)
-		if p.Config == nil {
-			p.Config = make(map[string]interface{})
-		}
-		// Only set if not manually provided
-		if existing, _ := p.Config["notify_url"].(string); existing == "" {
-			p.Config["notify_url"] = notifyURL
-			_, _ = h.svc.UpdateProvider(p.ID, p.Name, p.SortOrder, p.Config)
-		}
-	}
+	// EPay notify_url is now auto-filled by ProviderAppService.CreateProvider()
+	// via the registered NotifyURLBuilder — no infra import needed here.
 
 	c.JSON(consts.StatusCreated, utils.H{"data": p})
 }

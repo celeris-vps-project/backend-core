@@ -28,6 +28,11 @@ func (a *OrderingAdapter) LinkInvoiceToOrder(orderID, invoiceID string) error {
 	return a.svc.LinkInvoiceToOrder(orderID, invoiceID)
 }
 
+// CancelOrder delegates to the ordering app service.
+func (a *OrderingAdapter) CancelOrder(orderID, reason string) error {
+	return a.svc.CancelOrder(orderID, reason)
+}
+
 // GetOrderForPayment retrieves an order and maps it to a PayableOrder DTO.
 // This prevents the payment context from importing ordering/domain types.
 func (a *OrderingAdapter) GetOrderForPayment(orderID string) (paymentApp.PayableOrder, error) {

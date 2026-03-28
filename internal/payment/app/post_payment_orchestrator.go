@@ -24,6 +24,7 @@ type OrderActivator interface {
 	ActivateOrder(orderID string) error
 	GetOrderForPayment(orderID string) (PayableOrder, error)
 	LinkInvoiceToOrder(orderID, invoiceID string) error
+	CancelOrder(orderID, reason string) error
 }
 
 // PayableOrder is the minimal read-model the payment context needs.
@@ -79,6 +80,10 @@ type InvoiceCreator interface {
 
 	// VoidInvoice marks an invoice as void (e.g. payment failed or timed out).
 	VoidInvoice(invoiceID, reason string) error
+
+	// GetInvoiceStatus returns the current status of an invoice
+	// (e.g. "draft", "issued", "paid", "void").
+	GetInvoiceStatus(invoiceID string) (string, error)
 }
 
 // PostPaymentOrchestrator wires together the ordering, catalog, instance,
@@ -263,6 +268,55 @@ func (s *PostPaymentOrchestrator) VoidInvoiceOnFailure(invoiceID, reason string)
 type InvoiceTimeoutPayload struct {
 	InvoiceID string `json:"invoice_id"`
 	OrderID   string `json:"order_id"`
+}
+
+// HandleInvoiceTimeout checks whether an invoice has been paid after the
+// timeout period. If still unpaid ("issued"), it voids the invoice and
+// cancels the associated order.
+//
+// Idempotent by design:
+//   - If invoice is already "paid" → no-op
+//   - If invoice is already "void" → no-op
+//   - If invoice is "issued" (still unpaid) → void invoice + cancel order
+func (s *PostPaymentOrchestrator) HandleInvoiceTimeout(invoiceID, orderID string) {
+	if s.invoices == nil {
+		return
+	}
+
+	log.Printf("[PostPaymentOrchestrator] checking timeout: invoice=%s order=%s", invoiceID, orderID)
+
+	status, err := s.invoices.GetInvoiceStatus(invoiceID)
+	if err != nil {
+		log.Printf("[PostPaymentOrchestrator] ERROR: invoice not found %s: %v", invoiceID, err)
+		return
+	}
+
+	// Idempotent: if already paid or void, nothing to do
+	switch status {
+	case "paid":
+		log.Printf("[PostPaymentOrchestrator] invoice %s already paid, skipping", invoiceID)
+		return
+	case "void":
+		log.Printf("[PostPaymentOrchestrator] invoice %s already void, skipping", invoiceID)
+		return
+	}
+
+	// Invoice is still issued (unpaid) — void it
+	if err := s.invoices.VoidInvoice(invoiceID, "payment timeout — auto-voided after deadline"); err != nil {
+		log.Printf("[PostPaymentOrchestrator] ERROR: failed to void invoice %s: %v", invoiceID, err)
+		return
+	}
+	log.Printf("[PostPaymentOrchestrator] invoice voided: %s (payment timeout)", invoiceID)
+
+	// Cancel the associated order
+	if orderID != "" {
+		if err := s.orders.CancelOrder(orderID, "payment timeout — invoice auto-voided"); err != nil {
+			// Order might already be activated (race with webhook) — that's fine
+			log.Printf("[PostPaymentOrchestrator] WARNING: failed to cancel order %s (may already be active): %v", orderID, err)
+		} else {
+			log.Printf("[PostPaymentOrchestrator] order cancelled: %s (payment timeout)", orderID)
+		}
+	}
 }
 
 // ScheduleInvoiceTimeout publishes a delayed event that will check whether

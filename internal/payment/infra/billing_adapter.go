@@ -101,5 +101,14 @@ func (a *BillingAdapter) VoidInvoice(invoiceID, reason string) error {
 	return a.svc.VoidInvoice(invoiceID, reason)
 }
 
+// GetInvoiceStatus returns the current status of an invoice.
+func (a *BillingAdapter) GetInvoiceStatus(invoiceID string) (string, error) {
+	invoice, err := a.svc.GetInvoice(invoiceID)
+	if err != nil {
+		return "", err
+	}
+	return invoice.Status(), nil
+}
+
 // Compile-time interface check
 var _ paymentApp.InvoiceCreator = (*BillingAdapter)(nil)
