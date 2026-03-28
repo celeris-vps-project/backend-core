@@ -1,0 +1,53 @@
+# ── Frontend ───────────────────────────────────────────────────────────
+FROM node:22-alpine AS frontend
+
+WORKDIR /app
+# Clone the frontend repo (or use build context if monorepo)
+RUN apk add --no-cache git
+ARG FRONTEND_REPO=https://github.com/celeris-vps-project/frontend.git
+ARG FRONTEND_REF=main
+RUN git clone --depth 1 --branch ${FRONTEND_REF} ${FRONTEND_REPO} .
+
+# Empty VITE_API_BASE_URL = same-origin mode
+ENV VITE_API_BASE_URL=
+RUN npm ci && npm run build
+
+# ── Builder ────────────────────────────────────────────────────────────
+FROM golang:1.25-alpine AS builder
+
+ARG VERSION=dev
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+
+RUN apk add --no-cache git
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+
+# Embed frontend dist into the Go binary
+COPY --from=frontend /app/dist ./internal/web/dist/
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -tags frontend -trimpath \
+    -ldflags="-s -w -X main.version=${VERSION}" \
+    -o /out/celeris-api ./cmd/api
+
+# ── Runtime ────────────────────────────────────────────────────────────
+FROM alpine:3.21
+
+RUN apk add --no-cache ca-certificates tzdata \
+    && addgroup -S celeris && adduser -S celeris -G celeris
+
+COPY --from=builder /out/celeris-api /usr/local/bin/celeris-api
+COPY api.example.yaml /etc/celeris/api.yaml
+
+USER celeris
+EXPOSE 80 50051
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget -qO- http://localhost:80/healthz || exit 1
+
+ENTRYPOINT ["celeris-api"]
+CMD ["-config", "/etc/celeris/api.yaml"]

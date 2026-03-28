@@ -1,0 +1,19 @@
+[Unit]
+Description=Celeris Agent
+Documentation=https://github.com/celeris-vps-project/backend-core
+After=network-online.target libvirtd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/celeris-agent -config /etc/celeris/agent.yaml
+Restart=on-failure
+RestartSec=5
+
+EnvironmentFile=-/etc/celeris/agent.env
+
+WorkingDirectory=/var/lib/celeris
+
+[Install]
+WantedBy=multi-user.target

@@ -302,7 +302,50 @@ func (s *ProvisioningAppService) ReportTaskResult(result contracts.TaskResult) e
 	task.Status = result.Status
 	task.Error = result.Error
 	task.FinishedAt = result.FinishedAt
-	return s.taskRepo.Save(task)
+	if err := s.taskRepo.Save(task); err != nil {
+		return err
+	}
+
+	// Emit provisioning events based on task outcome.
+	// The Instance domain subscribes to these events to update instance state.
+	if s.bus != nil && task.Type == contracts.TaskProvision {
+		switch result.Status {
+		case contracts.TaskStatusCompleted:
+			// Resolve NAT info from the task spec
+			networkMode := string(task.Spec.NetworkMode)
+			natPort := task.Spec.NATPort
+			hostIP := ""
+			if networkMode == "nat" {
+				hostIP = s.resolveHostIP(task.NodeID)
+			}
+
+			s.bus.Publish(events.ProvisioningCompletedEvent{
+				InstanceID:  task.Spec.InstanceID,
+				NodeID:      task.NodeID,
+				TaskID:      task.ID,
+				IPv4:        result.IPv4,
+				IPv6:        result.IPv6,
+				VMState:     result.VMState,
+				NetworkMode: networkMode,
+				NATPort:     natPort,
+				HostIP:      hostIP,
+			})
+			log.Printf("[provisioning] task %s completed: instance=%s ipv4=%s vm_state=%s nat_port=%d",
+				task.ID, task.Spec.InstanceID, result.IPv4, result.VMState, natPort)
+
+		case contracts.TaskStatusFailed:
+			s.bus.Publish(events.ProvisioningFailedEvent{
+				InstanceID: task.Spec.InstanceID,
+				NodeID:     task.NodeID,
+				TaskID:     task.ID,
+				Error:      result.Error,
+			})
+			log.Printf("[provisioning] task %s failed: instance=%s error=%s",
+				task.ID, task.Spec.InstanceID, result.Error)
+		}
+	}
+
+	return nil
 }
 
 func (s *ProvisioningAppService) EnqueueTask(nodeID string, taskType contracts.TaskType, spec contracts.ProvisionSpec) (*contracts.Task, error) {

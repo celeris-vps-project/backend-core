@@ -1,4 +1,4 @@
-﻿package client
+package client
 
 import (
 	"backend-core/pkg/agentpb"
@@ -116,6 +116,7 @@ func (c *AgentClient) ReportTaskResult(ctx context.Context, result contracts.Tas
 		Ipv4:       result.IPv4,
 		Ipv6:       result.IPv6,
 		FinishedAt: result.FinishedAt,
+		VmState:    result.VMState,
 	})
 	return err
 }

@@ -48,6 +48,8 @@ type InstanceResponse struct {
 	IPv4         string  `json:"ipv4,omitempty"`
 	IPv6         string  `json:"ipv6,omitempty"`
 	Status       string  `json:"status"`
+	NetworkMode  string  `json:"network_mode,omitempty"` // "dedicated" or "nat"
+	NATPort      int     `json:"nat_port,omitempty"`     // NAT mode: SSH port on host
 	CreatedAt    string  `json:"created_at"`
 	StartedAt    *string `json:"started_at,omitempty"`
 	StoppedAt    *string `json:"stopped_at,omitempty"`
@@ -193,6 +195,7 @@ func toInstResp(i *domain.Instance) InstanceResponse {
 		Hostname: i.Hostname(), Plan: i.Plan(), OS: i.OS(),
 		CPU: i.CPU(), MemoryMB: i.MemoryMB(), DiskGB: i.DiskGB(),
 		IPv4: i.IPv4(), IPv6: i.IPv6(), Status: i.Status(),
+		NetworkMode: i.NetworkMode(), NATPort: i.NATPort(),
 		CreatedAt: i.CreatedAt().Format(time.RFC3339),
 	}
 	if t := i.StartedAt(); t != nil {

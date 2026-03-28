@@ -41,12 +41,18 @@ func (ProductSlotReleasedEvent) EventName() string { return "product.slot_releas
 // ─── Node Domain Events ──────────────────────────────────────────────────
 
 // ProvisioningCompletedEvent is emitted by the Node domain after an agent
-// successfully provisions a VM/container.
+// successfully provisions a VM/container. The Instance domain subscribes
+// to this event to update instance status, assign IP, and record NAT port.
 type ProvisioningCompletedEvent struct {
-	InstanceID string
-	NodeID     string
-	IPv4       string
-	IPv6       string
+	InstanceID  string
+	NodeID      string
+	TaskID      string
+	IPv4        string
+	IPv6        string
+	VMState     string // "running", "boot_timeout", etc.
+	NetworkMode string // "dedicated" or "nat"
+	NATPort     int    // NAT mode: the high port on the host mapped to VM SSH
+	HostIP      string // NAT mode: the host's public IP for external access
 }
 
 func (ProvisioningCompletedEvent) EventName() string { return "node.provisioning_completed" }
@@ -55,6 +61,7 @@ func (ProvisioningCompletedEvent) EventName() string { return "node.provisioning
 type ProvisioningFailedEvent struct {
 	InstanceID string
 	NodeID     string
+	TaskID     string
 	Error      string
 }
 

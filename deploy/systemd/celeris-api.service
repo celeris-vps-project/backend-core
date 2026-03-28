@@ -1,0 +1,28 @@
+[Unit]
+Description=Celeris API Server
+Documentation=https://github.com/celeris-vps-project/backend-core
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=celeris
+Group=celeris
+ExecStart=/usr/local/bin/celeris-api -config /etc/celeris/api.yaml
+Restart=on-failure
+RestartSec=5
+
+EnvironmentFile=-/etc/celeris/api.env
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/celeris
+PrivateTmp=true
+
+# Working directory for SQLite DB (if using file-based DSN)
+WorkingDirectory=/var/lib/celeris
+
+[Install]
+WantedBy=multi-user.target

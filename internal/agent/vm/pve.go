@@ -356,6 +356,81 @@ func (d *PVEDriver) List() ([]*VMInfo, error) {
 	return list, nil
 }
 
+// ── BootWaiter implementation ──────────────────────────────────────────
+
+// WaitForBoot polls the PVE API until the VM is running and the QEMU guest
+// agent reports a valid (non-loopback) IPv4 address, or until the timeout
+// expires. This is typically called after Create() or Start() to wait for
+// the OS to fully boot and the network to come up.
+//
+// Poll interval: 10 seconds (matching the user's desired frequency).
+// Default timeout: 5 minutes if timeout <= 0.
+func (d *PVEDriver) WaitForBoot(instanceID string, timeout time.Duration) (*VMInfo, error) {
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
+	}
+	name := pveName(instanceID)
+	vmid, err := d.findVMID(instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("pve wait-for-boot %s: %w", name, err)
+	}
+
+	const pollInterval = 10 * time.Second
+	deadline := time.Now().Add(timeout)
+
+	log.Printf("[pve-driver] WAIT-FOR-BOOT %s (vmid=%d): polling every %v, timeout %v",
+		name, vmid, pollInterval, timeout)
+
+	attempt := 0
+	for time.Now().Before(deadline) {
+		attempt++
+
+		// 1. Check VM status
+		status, err := d.client.GetQEMUStatus(d.node, vmid)
+		if err != nil {
+			log.Printf("[pve-driver] WAIT-FOR-BOOT %s attempt %d: status query failed: %v", name, attempt, err)
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		if status.Status != "running" {
+			log.Printf("[pve-driver] WAIT-FOR-BOOT %s attempt %d: VM not running yet (status=%s)",
+				name, attempt, status.Status)
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		// 2. VM is running — try to get IP from guest agent
+		ipv4, ipv6 := d.getVMIPs(vmid)
+		if ipv4 != "" {
+			info := &VMInfo{
+				InstanceID: instanceID,
+				State:      "running",
+				CPU:        status.CPUs,
+				MemoryMB:   int(status.MaxMem / (1024 * 1024)),
+				DiskGB:     int(status.MaxDisk / (1024 * 1024 * 1024)),
+				IPv4:       ipv4,
+				IPv6:       ipv6,
+			}
+			log.Printf("[pve-driver] WAIT-FOR-BOOT %s: READY after %d attempts (ipv4=%s ipv6=%s)",
+				name, attempt, ipv4, ipv6)
+			return info, nil
+		}
+
+		log.Printf("[pve-driver] WAIT-FOR-BOOT %s attempt %d: running but no IP yet (guest agent not ready)",
+			name, attempt)
+		time.Sleep(pollInterval)
+	}
+
+	// Timeout — return best-effort info without IP
+	log.Printf("[pve-driver] WAIT-FOR-BOOT %s: TIMEOUT after %v (%d attempts) — guest agent never reported IP",
+		name, timeout, attempt)
+	return nil, fmt.Errorf("pve wait-for-boot %s: timeout after %v — guest agent did not report IP", name, timeout)
+}
+
+// Compile-time check: PVEDriver implements BootWaiter.
+var _ BootWaiter = (*PVEDriver)(nil)
+
 // ── Internal helpers ───────────────────────────────────────────────────
 
 // findVMID resolves a Celeris instanceID to a PVE integer VMID by

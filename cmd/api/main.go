@@ -37,6 +37,7 @@ import (
 	"backend-core/pkg/database"
 	"backend-core/pkg/delayed"
 	"backend-core/pkg/eventbus"
+	"backend-core/pkg/events"
 	"backend-core/pkg/perf"
 	"backend-core/pkg/ratelimit"
 	"backend-core/pkg/timeout"
@@ -52,13 +53,17 @@ import (
 
 	identityHttp "backend-core/internal/identity/interfaces/http"
 
+	hertzApp "github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/adaptor"
 	"github.com/hertz-contrib/cors"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc"
 )
 
+var version = "dev"
+
 func main() {
+	log.Printf("[api] Celeris API %s", version)
 	cfgPath := flag.String("config", "api.yaml", "path to API YAML config file")
 	flag.Parse()
 
@@ -199,16 +204,11 @@ func main() {
 	// VPSProvisioner so we can inject the publisher for async boot
 	// confirmation scheduling.
 
-	// Boot confirmation worker — handles delayed "provision.confirm_boot" events.
-	// Checks whether a provisioning task has completed after a timeout period.
-	bootConfirmWorker := provisioningInfra.NewBootConfirmationWorker(taskRepo)
-
 	// Delayed event router — topic-based dispatcher shared across bounded contexts.
 	// Each context registers its own handler; the router dispatches by topic.
-	// NOTE: invoice.check_timeout handler is registered below after the
-	// PostPaymentOrchestrator is created (resolves dependency order).
+	// NOTE: boot confirmation and invoice.check_timeout handlers are registered
+	// below after their dependencies are created (resolves dependency order).
 	delayedRouter := delayed.NewRouter()
-	delayedRouter.Handle("provision.confirm_boot", bootConfirmWorker.HandlerFunc())
 
 	// Delayed event publisher — in-memory timer-based implementation.
 	// Suitable for single-instance; replace with Asynq (Redis) for production.
@@ -218,6 +218,12 @@ func main() {
 	//   delayedConsumer  := delayed.NewAsynqConsumer(asynq.RedisClientOpt{Addr: redisAddr}, delayedRouter)
 	//   go delayedConsumer.Start(context.Background())
 	delayedPublisher := delayed.NewInMemoryPublisher(delayedRouter.Dispatch)
+
+	// Boot confirmation worker — handles delayed "provision.confirm_boot" events.
+	// Now upgraded: emits events, retries with exponential backoff, and marks
+	// stuck tasks as failed. Receives the delayedPublisher for re-scheduling retries.
+	bootConfirmWorker := provisioningInfra.NewBootConfirmationWorker(taskRepo, nodeStateCache, bus, delayedPublisher)
+	delayedRouter.Handle("provision.confirm_boot", bootConfirmWorker.HandlerFunc())
 
 	// Provision Dispatcher - routes provisioning commands by product type
 	// VPSProvisioner receives the delayed publisher for async boot confirmation.
@@ -266,6 +272,43 @@ func main() {
 
 	instApp := instanceApp.NewInstanceAppService(nodeAllocatorRepo, instRepo, idGen, provisioningBus)
 	instHandler := instanceHttp.NewInstanceHandler(instApp)
+
+	// ── Provisioning → Instance Event Bridge ───────────────────────────────
+	// Subscribe to provisioning domain events and update instance state.
+	// When a VM is successfully provisioned (agent reports back with IP),
+	// the instance is automatically transitioned from "pending" to "running"
+	// with the assigned internal IP and NAT port.
+	bus.Subscribe("node.provisioning_completed", func(evt eventbus.Event) {
+		e, ok := evt.(events.ProvisioningCompletedEvent)
+		if !ok {
+			return
+		}
+		log.Printf("[event-bridge] provisioning completed: instance=%s ipv4=%s nat_port=%d",
+			e.InstanceID, e.IPv4, e.NATPort)
+		if err := instApp.ConfirmProvisioning(e.InstanceID, e.IPv4, e.IPv6, e.NetworkMode, e.NATPort); err != nil {
+			log.Printf("[event-bridge] ERROR: failed to confirm provisioning for instance %s: %v", e.InstanceID, err)
+		}
+	})
+	bus.Subscribe("node.provisioning_failed", func(evt eventbus.Event) {
+		e, ok := evt.(events.ProvisioningFailedEvent)
+		if !ok {
+			return
+		}
+		log.Printf("[event-bridge] provisioning failed: instance=%s error=%s", e.InstanceID, e.Error)
+		// Instance stays in "pending" state — admin can investigate and retry
+	})
+	log.Printf("[api] provisioning → instance event bridge enabled")
+
+	// ── Provision Poller (background worker) ───────────────────────────────
+	// Periodically checks pending/running tasks and marks stale ones as failed.
+	// Acts as a safety net in case agent callbacks are lost.
+	provPollerCtx, provPollerCancel := context.WithCancel(context.Background())
+	provPoller := provisioningInfra.NewProvisionPoller(taskRepo, nodeStateCache, bus, provisioningInfra.ProvisionPollerConfig{
+		PollInterval:   10 * time.Second,
+		StaleThreshold: 10 * time.Minute,
+	})
+	provPoller.Start(provPollerCtx)
+	log.Printf("[api] provision poller started (10s interval, 10min stale threshold)")
 
 	// Payment handler — thin HTTP layer that delegates cross-domain work to the orchestrator.
 	// Build adapters that implement the orchestrator's ports without importing other contexts' domain types.
@@ -429,6 +472,12 @@ func main() {
 	log.Printf("[api]   admin     = global %.0f QPS, per-IP %.0f QPS", rlCfg.Admin.GlobalQPS, rlCfg.Admin.IPMaxQPS)
 
 	h := apiConfig.NewHertzHandler(cfg.Server)
+
+	// Health check endpoint — used by Docker healthcheck and systemd
+	h.GET("/healthz", func(c context.Context, ctx *hertzApp.RequestContext) {
+		ctx.JSON(200, map[string]string{"status": "ok", "version": version})
+	})
+
 	// Baseline rate limiter — loose safety-net applied to ALL endpoints.
 	// This is intentionally very permissive; the real protection comes from
 	// the per-tier limiters applied at the route level below.
@@ -659,9 +708,11 @@ func main() {
 	//rootHandler := api.NewRootHandler(cfg.Server)
 	//h.GET("/", http.FileServer(http.FS(content)))
 	//h.StaticFS("/", hertzApp.FS)
-	// Serve embedded frontend only when built with -tags frontend
-	if fs := web.StaticFs(); fs != nil {
-		h.GET("/*filepath", adaptor.HertzHandler(http.FileServer(fs)))
+	// Serve embedded frontend only when built with -tags frontend.
+	// SPAHandler falls back to index.html for paths that don't match a real
+	// static file, enabling Vue Router HTML5 History mode (direct URL access).
+	if spaHandler := web.SPAHandler(); spaHandler != nil {
+		h.GET("/*filepath", adaptor.HertzHandler(spaHandler))
 	}
 	// 5. Start gRPC server for agent communication (with node-token auth interceptor)
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(provisioningGrpc.AuthInterceptor(provSvc)))
@@ -707,6 +758,9 @@ func main() {
 	log.Printf("[api] gRPC server stopped")
 
 	// 2. Stop background workers
+	provPollerCancel() // stop provision poller goroutine
+	log.Printf("[api] provision poller stopped")
+
 	provisioningBus.Stop()
 	log.Printf("[api] provisioning bus stopped")
 

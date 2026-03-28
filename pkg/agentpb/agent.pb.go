@@ -24,11 +24,9 @@ const (
 type RegisterRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	BootstrapToken string                 `protobuf:"bytes,2,opt,name=bootstrap_token,json=bootstrapToken,proto3" json:"bootstrap_token,omitempty"` // one-time bootstrap token
-	Hostname       string                 `protobuf:"bytes,3,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	Hostname       string                 `protobuf:"bytes,3,opt,name=hostname,proto3" json:"hostname,omitempty"`                                   // informational; stored in runtime state
 	Ip             string                 `protobuf:"bytes,4,opt,name=ip,proto3" json:"ip,omitempty"`
 	Version        string                 `protobuf:"bytes,5,opt,name=version,proto3" json:"version,omitempty"`
-	Location       string                 `protobuf:"bytes,6,opt,name=location,proto3" json:"location,omitempty"`
-	TotalSlots     int32                  `protobuf:"varint,7,opt,name=total_slots,json=totalSlots,proto3" json:"total_slots,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -89,20 +87,6 @@ func (x *RegisterRequest) GetVersion() string {
 		return x.Version
 	}
 	return ""
-}
-
-func (x *RegisterRequest) GetLocation() string {
-	if x != nil {
-		return x.Location
-	}
-	return ""
-}
-
-func (x *RegisterRequest) GetTotalSlots() int32 {
-	if x != nil {
-		return x.TotalSlots
-	}
-	return 0
 }
 
 type RegisterResponse struct {
@@ -549,6 +533,7 @@ type TaskResultRequest struct {
 	Ipv4          string                 `protobuf:"bytes,4,opt,name=ipv4,proto3" json:"ipv4,omitempty"`
 	Ipv6          string                 `protobuf:"bytes,5,opt,name=ipv6,proto3" json:"ipv6,omitempty"`
 	FinishedAt    string                 `protobuf:"bytes,6,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
+	VmState       string                 `protobuf:"bytes,7,opt,name=vm_state,json=vmState,proto3" json:"vm_state,omitempty"` // current VM state: "running", "stopped", "boot_timeout"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -625,6 +610,13 @@ func (x *TaskResultRequest) GetFinishedAt() string {
 	return ""
 }
 
+func (x *TaskResultRequest) GetVmState() string {
+	if x != nil {
+		return x.VmState
+	}
+	return ""
+}
+
 type TaskResultResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
@@ -673,15 +665,12 @@ var File_agent_v1_agent_proto protoreflect.FileDescriptor
 
 const file_agent_v1_agent_proto_rawDesc = "" +
 	"\n" +
-	"\x14agent/v1/agent.proto\x12\bagent.v1\"\xc3\x01\n" +
+	"\x14agent/v1/agent.proto\x12\bagent.v1\"\x92\x01\n" +
 	"\x0fRegisterRequest\x12'\n" +
 	"\x0fbootstrap_token\x18\x02 \x01(\tR\x0ebootstrapToken\x12\x1a\n" +
 	"\bhostname\x18\x03 \x01(\tR\bhostname\x12\x0e\n" +
 	"\x02ip\x18\x04 \x01(\tR\x02ip\x12\x18\n" +
-	"\aversion\x18\x05 \x01(\tR\aversion\x12\x1a\n" +
-	"\blocation\x18\x06 \x01(\tR\blocation\x12\x1f\n" +
-	"\vtotal_slots\x18\a \x01(\x05R\n" +
-	"totalSlotsJ\x04\b\x01\x10\x02\"Z\n" +
+	"\aversion\x18\x05 \x01(\tR\aversionJ\x04\b\x01\x10\x02J\x04\b\x06\x10\aJ\x04\b\a\x10\b\"Z\n" +
 	"\x10RegisterResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x1d\n" +
 	"\n" +
@@ -725,7 +714,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\fstorage_pool\x18\n" +
 	" \x01(\tR\vstoragePool\x12!\n" +
 	"\fnetwork_name\x18\v \x01(\tR\vnetworkName\x12\x19\n" +
-	"\bssh_keys\x18\f \x03(\tR\asshKeys\"\xa3\x01\n" +
+	"\bssh_keys\x18\f \x03(\tR\asshKeys\"\xbe\x01\n" +
 	"\x11TaskResultRequest\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x14\n" +
@@ -733,7 +722,8 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x04ipv4\x18\x04 \x01(\tR\x04ipv4\x12\x12\n" +
 	"\x04ipv6\x18\x05 \x01(\tR\x04ipv6\x12\x1f\n" +
 	"\vfinished_at\x18\x06 \x01(\tR\n" +
-	"finishedAt\"$\n" +
+	"finishedAt\x12\x19\n" +
+	"\bvm_state\x18\a \x01(\tR\avmState\"$\n" +
 	"\x12TaskResultResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok2\xe6\x01\n" +
 	"\fAgentService\x12A\n" +

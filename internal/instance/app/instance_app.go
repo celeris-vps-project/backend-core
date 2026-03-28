@@ -253,3 +253,49 @@ func (s *InstanceAppService) AssignIP(instanceID, ipv4, ipv6 string) error {
 	}
 	return s.instanceRepo.Save(inst)
 }
+
+// ConfirmProvisioning is called when the provisioning layer confirms that
+// a VM has been successfully created and booted. It updates the instance
+// status to "running", assigns the internal IP, and records NAT port info.
+//
+// This method is designed to be called from an event handler subscribing
+// to ProvisioningCompletedEvent.
+func (s *InstanceAppService) ConfirmProvisioning(instanceID, ipv4, ipv6, networkMode string, natPort int) error {
+	inst, err := s.instanceRepo.GetByID(instanceID)
+	if err != nil {
+		// Instance may not exist yet if the provisioning was triggered
+		// via a different flow (e.g. direct VPS provisioner without
+		// creating an instance record first). Log and skip.
+		fmt.Printf("[InstanceAppService] WARNING: instance %s not found for provisioning confirmation: %v\n", instanceID, err)
+		return nil
+	}
+
+	// Assign IP addresses (if provided)
+	if ipv4 != "" || ipv6 != "" {
+		if assignErr := inst.AssignIP(ipv4, ipv6); assignErr != nil {
+			fmt.Printf("[InstanceAppService] WARNING: failed to assign IP to instance %s: %v\n", instanceID, assignErr)
+		}
+	}
+
+	// Set NAT mode info
+	if networkMode == "nat" && natPort > 0 {
+		if natErr := inst.AssignNAT(natPort); natErr != nil {
+			fmt.Printf("[InstanceAppService] WARNING: failed to assign NAT port to instance %s: %v\n", instanceID, natErr)
+		}
+	}
+
+	// Transition to running state
+	if inst.Status() == domain.InstanceStatusPending {
+		if startErr := inst.Start(time.Now()); startErr != nil {
+			fmt.Printf("[InstanceAppService] WARNING: failed to start instance %s: %v\n", instanceID, startErr)
+		}
+	}
+
+	if err := s.instanceRepo.Save(inst); err != nil {
+		return fmt.Errorf("confirm_provisioning: save instance %s failed: %w", instanceID, err)
+	}
+
+	fmt.Printf("[InstanceAppService] provisioning confirmed: instance=%s status=%s ipv4=%s nat=%s:%d\n",
+		instanceID, inst.Status(), ipv4, networkMode, natPort)
+	return nil
+}

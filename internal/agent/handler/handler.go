@@ -7,9 +7,15 @@ import (
 	"time"
 )
 
+// DefaultBootTimeout is the maximum time to wait for a VM to boot and
+// report a valid IP via the guest agent. 5 minutes is generous enough
+// to cover slow cloud-init + DHCP scenarios.
+const DefaultBootTimeout = 5 * time.Minute
+
 // ProcessTasks executes any tasks received from the controller heartbeat ack,
-// then reports results back. For provision tasks, it also queries the newly
-// created instance's IP addresses and includes them in the result.
+// then reports results back. For provision/start tasks, if the driver supports
+// BootWaiter, it polls the hypervisor until the VM is fully booted and has
+// a valid internal IP, then includes the IP in the task result.
 func ProcessTasks(tasks []contracts.Task, driver vm.Hypervisor, reportFn func(contracts.TaskResult)) {
 	for _, task := range tasks {
 		log.Printf("[agent] executing task %s type=%s instance=%s", task.ID, task.Type, task.Spec.InstanceID)
@@ -25,24 +31,57 @@ func ProcessTasks(tasks []contracts.Task, driver vm.Hypervisor, reportFn func(co
 			result.Status = contracts.TaskStatusFailed
 			result.Error = err.Error()
 			log.Printf("[agent] task %s FAILED: %v", task.ID, err)
-		} else {
-			log.Printf("[agent] task %s COMPLETED", task.ID)
+			reportFn(result)
+			continue
+		}
 
-			// For provision tasks, try to retrieve the instance's IP addresses
-			// so the controller can record them. The instance may not have an
-			// IP yet (DHCP not complete), which is fine — the controller can
-			// update it later via subsequent heartbeats or info queries.
-			if task.Type == contracts.TaskProvision {
+		log.Printf("[agent] task %s COMPLETED (execution phase)", task.ID)
+
+		// For provision/start tasks, wait for the VM to fully boot and
+		// retrieve the internal IP via the guest agent. This replaces the
+		// old single-shot Info() call which almost always returned empty
+		// because the guest agent wasn't ready yet.
+		if needsBootWait(task.Type) {
+			if bw, ok := driver.(vm.BootWaiter); ok {
+				log.Printf("[agent] task %s: waiting for boot (polling guest agent)...", task.ID)
+				info, waitErr := bw.WaitForBoot(task.Spec.InstanceID, DefaultBootTimeout)
+				if waitErr != nil {
+					// Boot wait timed out — task itself succeeded (VM is created/started),
+					// but we couldn't get the IP. Report as completed with a warning.
+					log.Printf("[agent] task %s: boot wait failed: %v (reporting completed without IP)", task.ID, waitErr)
+					result.VMState = "boot_timeout"
+				} else {
+					result.IPv4 = info.IPv4
+					result.IPv6 = info.IPv6
+					result.VMState = info.State
+					log.Printf("[agent] task %s: boot confirmed ipv4=%s ipv6=%s state=%s",
+						task.ID, info.IPv4, info.IPv6, info.State)
+				}
+			} else {
+				// Driver doesn't support BootWaiter — fall back to single Info() call
 				if info, infoErr := driver.Info(task.Spec.InstanceID); infoErr == nil {
 					result.IPv4 = info.IPv4
 					result.IPv6 = info.IPv6
+					result.VMState = info.State
 					if info.IPv4 != "" || info.IPv6 != "" {
-						log.Printf("[agent] task %s instance IP: v4=%s v6=%s", task.ID, info.IPv4, info.IPv6)
+						log.Printf("[agent] task %s instance IP (single query): v4=%s v6=%s",
+							task.ID, info.IPv4, info.IPv6)
 					}
 				}
 			}
 		}
 
 		reportFn(result)
+	}
+}
+
+// needsBootWait returns true for task types that result in a VM being
+// started (and thus need boot confirmation polling).
+func needsBootWait(tt contracts.TaskType) bool {
+	switch tt {
+	case contracts.TaskProvision, contracts.TaskStart, contracts.TaskReboot, contracts.TaskUnsuspend:
+		return true
+	default:
+		return false
 	}
 }

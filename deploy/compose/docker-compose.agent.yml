@@ -1,0 +1,20 @@
+# Celeris Agent — runs on host nodes to manage VMs
+# Usage: docker compose -f docker-compose.agent.yml up --build
+
+services:
+  agent:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.agent
+      args:
+        VERSION: ${CELERIS_VERSION:-latest}
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      AGENT_BOOTSTRAP_TOKEN: ${AGENT_BOOTSTRAP_TOKEN:?Set AGENT_BOOTSTRAP_TOKEN in .env}
+      AGENT_GRPC_ADDRESS: ${AGENT_GRPC_ADDRESS:-api:50051}
+    volumes:
+      - agent-data:/var/lib/celeris
+      # Mount host virtualization sockets if needed
+      # - /var/run/libvirt/libvirt-sock:/var/run/libvirt/libvirt-sock
+      # - /var/lib/incus/unix.socket:/var/lib/incus/unix.socket

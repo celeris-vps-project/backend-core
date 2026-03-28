@@ -17,6 +17,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var version = "dev"
+
 // nodeCredential is the structure persisted in the credential file.
 type nodeCredential struct {
 	NodeID    string `yaml:"node_id"`
@@ -24,6 +26,8 @@ type nodeCredential struct {
 }
 
 func main() {
+	log.Printf("[agent] Celeris Agent %s", version)
+
 	cfgPath := flag.String("config", "agent.yaml", "path to agent YAML config file")
 	flag.Parse()
 
@@ -121,7 +125,7 @@ func main() {
 			BootstrapToken: cfg.BootstrapToken,
 			Hostname:       hostname,
 			IP:             "127.0.0.1",
-			Version:        "v0.1.0",
+			Version:        version,
 		}
 		result, err := grpcClient.Register(ctx, reg)
 		if err != nil {

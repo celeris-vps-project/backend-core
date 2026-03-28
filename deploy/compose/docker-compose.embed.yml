@@ -1,0 +1,42 @@
+# Celeris — Embed mode (all-in-one binary + optional Postgres)
+# Usage: docker compose -f docker-compose.embed.yml up --build
+
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.embed
+      args:
+        VERSION: ${CELERIS_VERSION:-latest}
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "50051:50051"
+    environment:
+      API_JWT_SECRET: ${API_JWT_SECRET:?Set API_JWT_SECRET in .env}
+      API_DATABASE_DSN: ${API_DATABASE_DSN:-data.db}
+    volumes:
+      - api-data:/var/lib/celeris
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/healthz"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+
+  # Uncomment to use PostgreSQL instead of SQLite
+  # db:
+  #   image: postgres:17-alpine
+  #   restart: unless-stopped
+  #   ports:
+  #     - "5432:5432"
+  #   environment:
+  #     POSTGRES_DB: ${POSTGRES_DB:-celeris}
+  #     POSTGRES_USER: ${POSTGRES_USER:-celeris}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+  #   volumes:
+  #     - db-data:/var/lib/postgresql/data
+
+volumes:
+  api-data:
+  # db-data:

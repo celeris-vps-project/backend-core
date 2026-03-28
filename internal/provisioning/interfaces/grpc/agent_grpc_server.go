@@ -74,6 +74,7 @@ func (s *AgentGRPCServer) ReportTaskResult(ctx context.Context, req *agentpb.Tas
 		Error:      req.GetError(),
 		IPv4:       req.GetIpv4(),
 		IPv6:       req.GetIpv6(),
+		VMState:    req.GetVmState(),
 		FinishedAt: req.GetFinishedAt(),
 	}
 	if err := s.svc.ReportTaskResult(result); err != nil {

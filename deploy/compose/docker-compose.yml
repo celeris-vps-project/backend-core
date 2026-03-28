@@ -1,0 +1,55 @@
+# Celeris — Separate mode (frontend + API + optional Postgres)
+# Usage: docker compose up --build
+
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.api
+      args:
+        VERSION: ${CELERIS_VERSION:-latest}
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "50051:50051"
+    environment:
+      API_JWT_SECRET: ${API_JWT_SECRET:?Set API_JWT_SECRET in .env}
+      API_DATABASE_DSN: ${API_DATABASE_DSN:-data.db}
+    volumes:
+      - api-data:/var/lib/celeris
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - ../docker/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
+  # Uncomment to use PostgreSQL instead of SQLite
+  # db:
+  #   image: postgres:17-alpine
+  #   restart: unless-stopped
+  #   ports:
+  #     - "5432:5432"
+  #   environment:
+  #     POSTGRES_DB: ${POSTGRES_DB:-celeris}
+  #     POSTGRES_USER: ${POSTGRES_USER:-celeris}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+  #   volumes:
+  #     - db-data:/var/lib/postgresql/data
+
+volumes:
+  api-data:
+  # db-data:

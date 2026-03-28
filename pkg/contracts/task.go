@@ -1,4 +1,4 @@
-﻿package contracts
+package contracts
 
 // TaskType enumerates the provisioning commands the controller can send.
 type TaskType string
@@ -78,5 +78,6 @@ type TaskResult struct {
 	Error      string     `json:"error,omitempty"`
 	IPv4       string     `json:"ipv4,omitempty"`
 	IPv6       string     `json:"ipv6,omitempty"`
+	VMState    string     `json:"vm_state,omitempty"`    // current VM state: "running", "stopped", "boot_timeout"
 	FinishedAt string     `json:"finished_at"`
 }

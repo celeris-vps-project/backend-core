@@ -7,10 +7,19 @@ on:
 
 permissions:
   contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/celeris-vps-project
 
 jobs:
-  release:
+  # ── Build binaries (matrix: amd64 + arm64) ───────────────────────────
+  build-binaries:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
     steps:
       - name: Checkout backend-core
         uses: actions/checkout@v4
@@ -31,7 +40,7 @@ jobs:
       - name: Build frontend (same-origin mode)
         working-directory: frontend
         run: |
-          echo "VITE_API_BASE_URL=" >> .env 
+          echo "VITE_API_BASE_URL=" >> .env
           npm ci
           npm run build
 
@@ -46,35 +55,174 @@ jobs:
           go-version: '1.25'
           cache-dependency-path: go.sum
 
-      # ── Build 1: with embedded frontend (all-in-one) ──────────────
-      - name: Build celeris-with-frontend-linux-amd64
+      # Build 1: Pure backend API
+      - name: Build celeris-api
         env:
           GOOS: linux
-          GOARCH: amd64
-          CGO_ENABLED: 0
-        run: go build -tags frontend -trimpath -ldflags="-s -w" -o celeris-with-frontend-linux-amd64 cmd/api/main.go
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: '0'
+        run: |
+          go build -trimpath \
+            -ldflags="-s -w -X main.version=${{ github.ref_name }}" \
+            -o celeris-api-linux-${{ matrix.arch }} \
+            ./cmd/api
 
-      # ── Build 2: pure backend (no frontend, for separate deployment) ──
-      - name: Build celeris-linux-amd64
+      # Build 2: Embedded frontend (all-in-one)
+      - name: Build celeris-api-embed
         env:
           GOOS: linux
-          GOARCH: amd64
-          CGO_ENABLED: 0
-        run: go build -trimpath -ldflags="-s -w" -o celeris-linux-amd64 cmd/api/main.go
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: '0'
+        run: |
+          go build -tags frontend -trimpath \
+            -ldflags="-s -w -X main.version=${{ github.ref_name }}" \
+            -o celeris-api-embed-linux-${{ matrix.arch }} \
+            ./cmd/api
 
-      # ── Build 3: agent ────────────────────────────────────────────
-      - name: Build celeris-agent-linux-amd64
+      # Build 3: Agent
+      - name: Build celeris-agent
         env:
           GOOS: linux
-          GOARCH: amd64
-          CGO_ENABLED: 0
-        run: go build -trimpath -ldflags="-s -w" -o celeris-agent-linux-amd64 cmd/agent/main.go
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: '0'
+        run: |
+          go build -trimpath \
+            -ldflags="-s -w -X main.version=${{ github.ref_name }}" \
+            -o celeris-agent-linux-${{ matrix.arch }} \
+            ./cmd/agent
+
+      - name: Upload binary artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.arch }}
+          path: |
+            celeris-api-linux-${{ matrix.arch }}
+            celeris-api-embed-linux-${{ matrix.arch }}
+            celeris-agent-linux-${{ matrix.arch }}
+
+  # ── Build & push Docker images (multi-platform) ──────────────────────
+  build-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta (api)
+        id: meta-api
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/celeris-api
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build & push celeris-api
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.api
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta-api.outputs.tags }}
+          labels: ${{ steps.meta-api.outputs.labels }}
+          build-args: VERSION=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Docker meta (api-embed)
+        id: meta-embed
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/celeris-api-embed
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build & push celeris-api-embed
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.embed
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta-embed.outputs.tags }}
+          labels: ${{ steps.meta-embed.outputs.labels }}
+          build-args: VERSION=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Docker meta (agent)
+        id: meta-agent
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/celeris-agent
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build & push celeris-agent
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.agent
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta-agent.outputs.tags }}
+          labels: ${{ steps.meta-agent.outputs.labels }}
+          build-args: VERSION=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Create GitHub Release ─────────────────────────────────────────────
+  release:
+    runs-on: ubuntu-latest
+    needs: build-binaries
+    steps:
+      - name: Checkout (for deploy files)
+        uses: actions/checkout@v4
+
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: artifacts
+        run: |
+          sha256sum celeris-* > checksums.txt
+          cat checksums.txt
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            celeris-linux-amd64
-            celeris-with-frontend-linux-amd64
-            celeris-agent-linux-amd64
           generate_release_notes: true
+          files: |
+            artifacts/celeris-api-linux-amd64
+            artifacts/celeris-api-linux-arm64
+            artifacts/celeris-api-embed-linux-amd64
+            artifacts/celeris-api-embed-linux-arm64
+            artifacts/celeris-agent-linux-amd64
+            artifacts/celeris-agent-linux-arm64
+            artifacts/checksums.txt
+            deploy/install.sh
+            deploy/compose/docker-compose.yml
+            deploy/compose/docker-compose.embed.yml
+            deploy/compose/docker-compose.agent.yml
+            deploy/compose/.env.example

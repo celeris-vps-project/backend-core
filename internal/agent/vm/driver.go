@@ -3,6 +3,7 @@ package vm
 import (
 	"backend-core/pkg/contracts"
 	"fmt"
+	"time"
 )
 
 // VMInfo is the runtime state returned after querying a guest.
@@ -44,6 +45,20 @@ type Hypervisor interface {
 
 	// List returns the runtime state of all guests on the host.
 	List() ([]*VMInfo, error)
+}
+
+// BootWaiter is an optional interface that a Hypervisor can implement to
+// provide polling-based boot confirmation. After a VM is created or started,
+// the caller can use WaitForBoot to poll the hypervisor until the guest is
+// fully booted (running + guest agent reports a valid IP).
+//
+// Drivers that do not support guest-agent-based IP retrieval (e.g. StubDriver)
+// do not need to implement this interface.
+type BootWaiter interface {
+	// WaitForBoot polls the hypervisor until the VM is running and has a
+	// valid internal IP reported by the guest agent, or until the timeout
+	// expires. Returns the final VMInfo on success.
+	WaitForBoot(instanceID string, timeout time.Duration) (*VMInfo, error)
 }
 
 // Execute dispatches a task to the appropriate Hypervisor method.
