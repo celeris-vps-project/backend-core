@@ -15,6 +15,14 @@ jwt:
   secret: "my-super-secret-key"    # JWT signing secret (change in production!)
   issuer: "celeris-api"
 
+# ── Admin Account ───────────────────────────────────────────────────────
+# On first run, if no admin user exists with this email, one is created
+# automatically with a random 12-character password that is printed to
+# the server log exactly once. Change the password via the web UI after
+# first login.
+admin:
+  email: "admin@celeris.local"     # Admin account email (default)
+
 grpc:
   listen: ":50051"           # gRPC listen address for agent communication
 

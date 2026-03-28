@@ -90,6 +90,51 @@ func (h *AuthHandler) Me(ctx context.Context, c *hz_app.RequestContext) {
 	})
 }
 
+// ChangePasswordRequest defines the request body for password change.
+type ChangePasswordRequest struct {
+	OldPassword string `json:"old_password" vd:"len($)>0"`
+	NewPassword string `json:"new_password" vd:"len($)>5"`
+}
+
+// ChangePassword handles PUT /api/v1/me/password — allows authenticated users
+// to change their own password by providing the current and new password.
+func (h *AuthHandler) ChangePassword(ctx context.Context, c *hz_app.RequestContext) {
+	var req ChangePasswordRequest
+	if err := c.BindAndValidate(&req); err != nil {
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
+		return
+	}
+
+	uid, ok := authn.UserID(c)
+	if !ok {
+		c.JSON(consts.StatusUnauthorized, apperr.Resp(apperr.CodeUnauthorized, "not authenticated"))
+		return
+	}
+
+	if err := h.authApp.ChangePassword(ctx, uid.String(), req.OldPassword, req.NewPassword); err != nil {
+		code := classifyChangePasswordError(err)
+		c.JSON(consts.StatusBadRequest, apperr.Resp(code, err.Error()))
+		return
+	}
+
+	c.JSON(consts.StatusOK, utils.H{
+		"message": "密码修改成功",
+	})
+}
+
+// classifyChangePasswordError maps password-change errors to an error code.
+func classifyChangePasswordError(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "旧密码不正确"):
+		return apperr.CodeWrongPassword
+	case strings.Contains(msg, "user not found"):
+		return apperr.CodeUserNotFound
+	default:
+		return apperr.CodeInternalError
+	}
+}
+
 // classifyAuthError maps login domain/infra errors to an error code.
 func classifyAuthError(err error) string {
 	msg := err.Error()

@@ -63,3 +63,30 @@ func (r *GormUserRepo) FindByEmail(ctx context.Context, email string) (*domain.U
 
 	return domain.ReconstituteUserWithRole(po.ID, po.Email, po.PasswordHash, po.Status, po.Role), nil
 }
+
+// FindByID looks up a user by primary key.
+func (r *GormUserRepo) FindByID(ctx context.Context, id string) (*domain.User, error) {
+	var po UserPO
+
+	err := r.db.WithContext(ctx).Where("id = ?", id).First(&po).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("user not found")
+		}
+		return nil, err
+	}
+
+	return domain.ReconstituteUserWithRole(po.ID, po.Email, po.PasswordHash, po.Status, po.Role), nil
+}
+
+// UpdatePasswordHash updates only the password_hash column for the given user.
+func (r *GormUserRepo) UpdatePasswordHash(ctx context.Context, id string, newHash string) error {
+	result := r.db.WithContext(ctx).Model(&UserPO{}).Where("id = ?", id).Update("password_hash", newHash)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("user not found")
+	}
+	return nil
+}

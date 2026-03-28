@@ -18,6 +18,15 @@ type Config struct {
 	RateLimit RateLimitConfig     `json:"rate_limit" yaml:"rate_limit"`
 	Crypto    CryptoPaymentConfig `json:"crypto" yaml:"crypto"`
 	Server    ServerConfig        `json:"server" yaml:"server"`
+	Admin     AdminConfig         `json:"admin" yaml:"admin"`
+}
+
+// AdminConfig holds the initial admin account settings.
+// On first run, if no admin user exists with this email, one is created
+// automatically with a random 12-character password that is printed to
+// the log exactly once.
+type AdminConfig struct {
+	Email string `json:"email" yaml:"email"` // default: "admin@celeris.local"
 }
 
 type PortConfig string
@@ -232,6 +241,9 @@ func DefaultConfig() Config {
 			Port:   "8080",
 			Listen: "0.0.0.0",
 			Name:   "Celeris-api-server",
+		},
+		Admin: AdminConfig{
+			Email: "admin@celeris.local",
 		},
 	}
 }

@@ -104,6 +104,15 @@ func main() {
 	authApp := app.NewAuthAppService(userRepo, jwtService, pwdHasher)
 	authHandler := identityHttp.NewAuthHandler(authApp)
 
+	// ── Admin Account Seeding ──────────────────────────────────────────────
+	// On first run, creates an admin account with a random 12-char password
+	// that is printed to the log exactly once. Subsequent starts skip this.
+	adminEmail := cfg.Admin.Email
+	if adminEmail == "" {
+		adminEmail = "admin@celeris.local"
+	}
+	authApp.EnsureAdmin(context.Background(), adminEmail)
+
 	// Billing
 	invoiceRepo := billingInfra.NewGormInvoiceRepo(db)
 	idGen := billingInfra.NewUUIDGenerator()
@@ -501,6 +510,7 @@ func main() {
 		// ── Standard tier (general authenticated business endpoints) ────
 		// User profile
 		privateAPI.GET("/me", standardRL, authHandler.Me)
+		privateAPI.PUT("/me/password", standardRL, authHandler.ChangePassword)
 
 		// Billing - Invoice routes
 		privateAPI.POST("/invoices", standardRL, invoiceHandler.Create)
