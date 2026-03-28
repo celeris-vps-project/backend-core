@@ -61,10 +61,19 @@ jobs:
           CGO_ENABLED: 0
         run: go build -trimpath -ldflags="-s -w" -o celeris-linux-amd64 cmd/api/main.go
 
+      # ── Build 3: agent ────────────────────────────────────────────
+      - name: Build celeris-agent-linux-amd64
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: 0
+        run: go build -trimpath -ldflags="-s -w" -o celeris-agent-linux-amd64 cmd/agent/main.go
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             celeris-linux-amd64
             celeris-with-frontend-linux-amd64
+            celeris-agent-linux-amd64
           generate_release_notes: true
