@@ -161,6 +161,19 @@ func (s *ProductAppService) UpdatePrice(ctx context.Context, id string, amount i
 	return s.repo.Save(ctx, p)
 }
 
+func (s *ProductAppService) UpdateNetworkMode(ctx context.Context, id, mode string) error {
+	p, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	normalized, err := normalizeNetworkMode(mode)
+	if err != nil {
+		return err
+	}
+	p.SetNetworkMode(normalized)
+	return s.repo.Save(ctx, p)
+}
+
 // AdjustStock sets the commercial inventory slots for a product (admin restocking).
 func (s *ProductAppService) AdjustStock(ctx context.Context, id string, totalSlots int, confirmed bool) (*RestockResult, error) {
 	p, err := s.repo.GetByID(ctx, id)

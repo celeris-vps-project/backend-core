@@ -271,6 +271,28 @@ func TestProductApp_SetRegion(t *testing.T) {
 	}
 }
 
+func TestProductApp_UpdateNetworkMode(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemProductRepo()
+	bus := eventbus.New()
+	svc := NewProductAppService(repo, staticIDGen{id: "prod-8"}, bus, nil)
+
+	p, _ := svc.CreateProduct(ctx, "VPS Network", "vps-network", "DE-fra", "", "", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 10)
+
+	if err := svc.UpdateNetworkMode(ctx, p.ID(), "nat"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	stored, _ := repo.GetByID(ctx, p.ID())
+	if stored.NetworkMode() != "nat" {
+		t.Fatalf("expected nat, got %s", stored.NetworkMode())
+	}
+
+	if err := svc.UpdateNetworkMode(ctx, p.ID(), "bridge"); err == nil {
+		t.Fatal("expected error for invalid network mode")
+	}
+}
+
 func TestProductApp_CreateProductRejectsInvalidNetworkMode(t *testing.T) {
 	ctx := context.Background()
 	repo := newMemProductRepo()

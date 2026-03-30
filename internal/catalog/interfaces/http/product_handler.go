@@ -42,6 +42,10 @@ type UpdatePriceRequest struct {
 	Currency string `json:"currency" vd:"len($)>0"`
 }
 
+type UpdateNetworkModeRequest struct {
+	NetworkMode string `json:"network_mode" vd:"len($)>0"`
+}
+
 type AdjustStockRequest struct {
 	TotalSlots int  `json:"total_slots" vd:"$>=-1"`
 	Confirmed  bool `json:"confirmed"`
@@ -189,6 +193,20 @@ func (h *ProductHandler) UpdatePrice(ctx context.Context, c *hz_app.RequestConte
 	c.JSON(consts.StatusOK, utils.H{"data": toProductResp(p)})
 }
 
+func (h *ProductHandler) UpdateNetworkMode(ctx context.Context, c *hz_app.RequestContext) {
+	var req UpdateNetworkModeRequest
+	if err := c.BindAndValidate(&req); err != nil {
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
+		return
+	}
+	if err := h.svc.UpdateNetworkMode(ctx, c.Param("id"), req.NetworkMode); err != nil {
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyProductError(err), err.Error()))
+		return
+	}
+	p, _ := h.svc.GetProduct(ctx, c.Param("id"))
+	c.JSON(consts.StatusOK, utils.H{"data": toProductResp(p)})
+}
+
 func (h *ProductHandler) AdjustStock(ctx context.Context, c *hz_app.RequestContext) {
 	var req AdjustStockRequest
 	if err := c.BindAndValidate(&req); err != nil {
@@ -244,6 +262,8 @@ func classifyProductError(err error) string {
 	switch {
 	case strings.Contains(msg, "not found"):
 		return apperr.CodeProductNotFound
+	case strings.Contains(msg, "invalid network mode"):
+		return apperr.CodeInvalidParams
 	case strings.Contains(msg, "no available slots"):
 		return apperr.CodeNoAvailableSlots
 	case strings.Contains(msg, "total slots"):

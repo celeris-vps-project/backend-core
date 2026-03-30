@@ -724,6 +724,7 @@ func main() {
 		privateAPI.POST("/products/:id/enable", standardRL, prodHandler.Enable)
 		privateAPI.POST("/products/:id/disable", standardRL, prodHandler.Disable)
 		privateAPI.PUT("/products/:id/price", standardRL, prodHandler.UpdatePrice)
+		privateAPI.PUT("/products/:id/network", standardRL, prodHandler.UpdateNetworkMode)
 		privateAPI.PUT("/products/:id/stock", standardRL, prodHandler.AdjustStock)
 		privateAPI.PUT("/products/:id/region", standardRL, prodHandler.SetRegion)
 
@@ -761,6 +762,7 @@ func main() {
 		adminAPI.POST("/products/:id/enable", prodHandler.Enable)
 		adminAPI.POST("/products/:id/disable", prodHandler.Disable)
 		adminAPI.PUT("/products/:id/price", prodHandler.UpdatePrice)
+		adminAPI.PUT("/products/:id/network", prodHandler.UpdateNetworkMode)
 		adminAPI.PUT("/products/:id/stock", prodHandler.AdjustStock)
 		adminAPI.PUT("/products/:id/region", prodHandler.SetRegion)
 
