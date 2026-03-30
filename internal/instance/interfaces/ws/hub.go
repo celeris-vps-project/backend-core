@@ -8,6 +8,7 @@ import (
 	"backend-core/pkg/events"
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"sync"
 	"time"
@@ -19,14 +20,66 @@ import (
 )
 
 type client struct {
-	conn   *websocket.Conn
-	send   chan []byte
-	userID string
+	conn      *websocket.Conn
+	send      chan []byte
+	done      chan struct{}
+	closeOnce sync.Once
+	writeMu   sync.Mutex
+	closed    bool
+	userID    string
 }
 
 type outboundMessage struct {
 	userID string
 	data   []byte
+}
+
+var errClientClosed = errors.New("websocket client closed")
+
+func (c *client) enqueue(msg []byte) bool {
+	select {
+	case <-c.done:
+		return false
+	default:
+	}
+
+	select {
+	case <-c.done:
+		return false
+	case c.send <- msg:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *client) write(messageType int, payload []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	if c.closed {
+		return errClientClosed
+	}
+
+	c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if err := c.conn.WriteMessage(messageType, payload); err != nil {
+		c.closed = true
+		_ = c.conn.Close()
+		return err
+	}
+
+	return nil
+}
+
+func (c *client) close() {
+	c.closeOnce.Do(func() {
+		close(c.done)
+
+		c.writeMu.Lock()
+		c.closed = true
+		_ = c.conn.Close()
+		c.writeMu.Unlock()
+	})
 }
 
 // Hub manages user-scoped instance status streams.
@@ -51,6 +104,13 @@ func NewHub(repo domain.InstanceRepository) *Hub {
 	}
 	go h.run()
 	return h
+}
+
+func (h *Hub) requestUnregister(c *client) {
+	c.close()
+	go func() {
+		h.unregister <- c
+	}()
 }
 
 func (h *Hub) IssueTicket(_ context.Context, c *app.RequestContext) {
@@ -102,10 +162,10 @@ func (h *Hub) run() {
 			h.mu.Lock()
 			if _, ok := h.clients[c]; ok {
 				delete(h.clients, c)
-				close(c.send)
 			}
 			count := len(h.clients)
 			h.mu.Unlock()
+			c.close()
 			log.Printf("[instance-ws] client disconnected (total: %d)", count)
 
 		case msg := <-h.broadcast:
@@ -114,10 +174,8 @@ func (h *Hub) run() {
 				if c.userID != msg.userID {
 					continue
 				}
-				select {
-				case c.send <- msg.data:
-				default:
-					go func(cl *client) { h.unregister <- cl }(c)
+				if !c.enqueue(msg.data) {
+					h.requestUnregister(c)
 				}
 			}
 			h.mu.RUnlock()
@@ -145,6 +203,7 @@ func (h *Hub) ServeWS(_ context.Context, c *app.RequestContext) {
 		cl := &client{
 			conn:   conn,
 			send:   make(chan []byte, 64),
+			done:   make(chan struct{}),
 			userID: userID,
 		}
 		h.register <- cl
@@ -153,22 +212,18 @@ func (h *Hub) ServeWS(_ context.Context, c *app.RequestContext) {
 			ticker := time.NewTicker(30 * time.Second)
 			defer func() {
 				ticker.Stop()
-				conn.Close()
+				h.requestUnregister(cl)
 			}()
 			for {
 				select {
-				case msg, ok := <-cl.send:
-					conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-					if !ok {
-						conn.WriteMessage(websocket.CloseMessage, nil)
-						return
-					}
-					if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+				case <-cl.done:
+					return
+				case msg := <-cl.send:
+					if err := cl.write(websocket.TextMessage, msg); err != nil {
 						return
 					}
 				case <-ticker.C:
-					conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-					if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					if err := cl.write(websocket.PingMessage, nil); err != nil {
 						return
 					}
 				}
@@ -187,7 +242,7 @@ func (h *Hub) ServeWS(_ context.Context, c *app.RequestContext) {
 				break
 			}
 		}
-		h.unregister <- cl
+		h.requestUnregister(cl)
 	})
 	if err != nil {
 		log.Printf("[instance-ws] upgrade error: %v", err)
@@ -209,9 +264,7 @@ func (h *Hub) sendInitialSnapshots(cl *client) {
 			log.Printf("[instance-ws] failed to marshal initial snapshot for instance %s: %v", inst.ID(), err)
 			continue
 		}
-		select {
-		case cl.send <- data:
-		default:
+		if !cl.enqueue(data) {
 			log.Printf("[instance-ws] initial snapshot queue full for user %s", cl.userID)
 			return
 		}

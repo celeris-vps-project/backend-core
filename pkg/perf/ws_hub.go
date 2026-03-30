@@ -4,6 +4,7 @@ import (
 	"backend-core/pkg/authn"
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -21,8 +22,60 @@ import (
 
 // perfClient represents a single WebSocket connection to the performance hub.
 type perfClient struct {
-	conn *websocket.Conn
-	send chan []byte
+	conn      *websocket.Conn
+	send      chan []byte
+	done      chan struct{}
+	closeOnce sync.Once
+	writeMu   sync.Mutex
+	closed    bool
+}
+
+var errPerfClientClosed = errors.New("websocket client closed")
+
+func (c *perfClient) enqueue(msg []byte) bool {
+	select {
+	case <-c.done:
+		return false
+	default:
+	}
+
+	select {
+	case <-c.done:
+		return false
+	case c.send <- msg:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *perfClient) write(messageType int, payload []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	if c.closed {
+		return errPerfClientClosed
+	}
+
+	c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if err := c.conn.WriteMessage(messageType, payload); err != nil {
+		c.closed = true
+		_ = c.conn.Close()
+		return err
+	}
+
+	return nil
+}
+
+func (c *perfClient) close() {
+	c.closeOnce.Do(func() {
+		close(c.done)
+
+		c.writeMu.Lock()
+		c.closed = true
+		_ = c.conn.Close()
+		c.writeMu.Unlock()
+	})
 }
 
 // PerformanceHub manages WebSocket connections and periodically broadcasts
@@ -67,6 +120,13 @@ func NewPerformanceHub(tracker *EndpointTracker, intervalSec int, topN int) *Per
 	return h
 }
 
+func (h *PerformanceHub) requestUnregister(c *perfClient) {
+	c.close()
+	go func() {
+		h.unregister <- c
+	}()
+}
+
 // SetInterval changes the broadcast interval (seconds). Admin-adjustable.
 func (h *PerformanceHub) SetInterval(sec int) {
 	if sec < 1 {
@@ -91,18 +151,16 @@ func (h *PerformanceHub) run() {
 		case c := <-h.register:
 			h.mu.Lock()
 			h.clients[c] = struct{}{}
+			count := len(h.clients)
 			h.mu.Unlock()
-			log.Printf("[perf-hub] client connected (total: %d)", len(h.clients))
+			log.Printf("[perf-hub] client connected (total: %d)", count)
 
 			// Send an immediate snapshot on connect
 			go func() {
 				snap := h.tracker.Snapshot(h.topN)
 				data, err := json.Marshal(snap)
 				if err == nil {
-					select {
-					case c.send <- data:
-					default:
-					}
+					_ = c.enqueue(data)
 				}
 			}()
 
@@ -110,18 +168,17 @@ func (h *PerformanceHub) run() {
 			h.mu.Lock()
 			if _, ok := h.clients[c]; ok {
 				delete(h.clients, c)
-				close(c.send)
 			}
+			count := len(h.clients)
 			h.mu.Unlock()
-			log.Printf("[perf-hub] client disconnected (total: %d)", len(h.clients))
+			c.close()
+			log.Printf("[perf-hub] client disconnected (total: %d)", count)
 
 		case msg := <-h.broadcast:
 			h.mu.RLock()
 			for c := range h.clients {
-				select {
-				case c.send <- msg:
-				default:
-					go func(cl *perfClient) { h.unregister <- cl }(c)
+				if !c.enqueue(msg) {
+					h.requestUnregister(c)
 				}
 			}
 			h.mu.RUnlock()
@@ -207,6 +264,7 @@ func (h *PerformanceHub) ServeWS(_ context.Context, c *app.RequestContext) {
 		cl := &perfClient{
 			conn: conn,
 			send: make(chan []byte, 64),
+			done: make(chan struct{}),
 		}
 		h.register <- cl
 
@@ -215,22 +273,18 @@ func (h *PerformanceHub) ServeWS(_ context.Context, c *app.RequestContext) {
 			ticker := time.NewTicker(30 * time.Second)
 			defer func() {
 				ticker.Stop()
-				conn.Close()
+				h.requestUnregister(cl)
 			}()
 			for {
 				select {
-				case msg, ok := <-cl.send:
-					conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-					if !ok {
-						conn.WriteMessage(websocket.CloseMessage, nil)
-						return
-					}
-					if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+				case <-cl.done:
+					return
+				case msg := <-cl.send:
+					if err := cl.write(websocket.TextMessage, msg); err != nil {
 						return
 					}
 				case <-ticker.C:
-					conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-					if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					if err := cl.write(websocket.PingMessage, nil); err != nil {
 						return
 					}
 				}
@@ -258,7 +312,7 @@ func (h *PerformanceHub) ServeWS(_ context.Context, c *app.RequestContext) {
 				}
 			}
 		}
-		h.unregister <- cl
+		h.requestUnregister(cl)
 	})
 	if err != nil {
 		log.Printf("[perf-hub] upgrade error: %v", err)
