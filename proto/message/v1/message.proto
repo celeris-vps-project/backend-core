@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package celeris.message;
+
+option go_package = "backend-core/pkg/messagepb;messagepb";
+
+service MessageService {
+  rpc Send(SendRequest) returns (SendResponse);
+  rpc BatchSend(BatchSendRequest) returns (BatchSendResponse);
+  rpc GetStatus(StatusRequest) returns (StatusResponse);
+}
+
+message SendRequest {
+  string template_code = 1;
+  string channel = 2;
+  string recipient = 3;
+  string subject = 4;
+  string content = 5;
+  map<string, string> vars = 6;
+  string biz_id = 7;
+}
+
+message SendResponse {
+  bool success = 1;
+  string message_id = 2;
+  string error_msg = 3;
+}
+
+message BatchSendRequest {
+  repeated SendRequest requests = 1;
+}
+
+message BatchSendResponse {
+  repeated SendResponse results = 1;
+  int32 success_count = 2;
+  int32 fail_count = 3;
+}
+
+message StatusRequest {
+  string biz_id = 1;
+}
+
+message StatusResponse {
+  string biz_id = 1;
+  string status = 2;
+  string channel = 3;
+  string recipient = 4;
+  int32 retry_count = 5;
+  string error_msg = 6;
+  string created_at = 7;
+  string sent_at = 8;
+}
