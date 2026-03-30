@@ -4,6 +4,7 @@ import (
 	"backend-core/internal/identity/domain"
 	"backend-core/internal/identity/infra"
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -35,6 +36,20 @@ func (m *mockPasswordHasher) Hash(plain string) (string, error) {
 	return "hash:" + plain, nil
 }
 
+type mockRegistrationNotifier struct {
+	calls  int
+	userID string
+	email  string
+	err    error
+}
+
+func (m *mockRegistrationNotifier) NotifyUserRegistered(ctx context.Context, userID, email string) error {
+	m.calls++
+	m.userID = userID
+	m.email = email
+	return m.err
+}
+
 func newTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
@@ -51,15 +66,16 @@ func newTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func newTestApp(t *testing.T) (*AuthAppService, *infra.GormUserRepo, *mockTokenGenerator) {
+func newTestApp(t *testing.T) (*AuthAppService, *infra.GormUserRepo, *mockTokenGenerator, *mockRegistrationNotifier) {
 	t.Helper()
 
 	db := newTestDB(t)
 	repo := infra.NewGormUserRepo(db)
 	token := &mockTokenGenerator{token: "test-token"}
 	hasher := &mockPasswordHasher{}
+	notifier := &mockRegistrationNotifier{}
 
-	return NewAuthAppService(repo, token, hasher), repo, token
+	return NewAuthAppService(repo, token, hasher, notifier), repo, token, notifier
 }
 
 func newTestAppWithJWT(t *testing.T, secret string) (*AuthAppService, *infra.GormUserRepo, *infra.JWTService) {
@@ -70,11 +86,11 @@ func newTestAppWithJWT(t *testing.T, secret string) (*AuthAppService, *infra.Gor
 	jwtSvc := infra.NewJWTService(secret, "test-issuer")
 	hasher := &mockPasswordHasher{}
 
-	return NewAuthAppService(repo, jwtSvc, hasher), repo, jwtSvc
+	return NewAuthAppService(repo, jwtSvc, hasher, nil), repo, jwtSvc
 }
 
 func TestRegisterUser_Success(t *testing.T) {
-	app, repo, _ := newTestApp(t)
+	app, repo, _, notifier := newTestApp(t)
 	ctx := context.Background()
 
 	token, err := app.RegisterUser(ctx, "u@example.com", "pass123")
@@ -95,10 +111,19 @@ func TestRegisterUser_Success(t *testing.T) {
 	if user.Status() != "active" {
 		t.Fatalf("status mismatch: %s", user.Status())
 	}
+	if notifier.calls != 1 {
+		t.Fatalf("expected notifier to be called once, got %d", notifier.calls)
+	}
+	if notifier.userID != user.ID() {
+		t.Fatalf("notifier userID mismatch: %s", notifier.userID)
+	}
+	if notifier.email != "u@example.com" {
+		t.Fatalf("notifier email mismatch: %s", notifier.email)
+	}
 }
 
 func TestLogin_Success(t *testing.T) {
-	app, repo, _ := newTestApp(t)
+	app, repo, _, _ := newTestApp(t)
 	ctx := context.Background()
 
 	existing := domain.ReconstituteUser("id-1", "login@example.com", "hash:secret", "active")
@@ -116,24 +141,48 @@ func TestLogin_Success(t *testing.T) {
 }
 
 func TestRegisterUser_JWTSignatureValidation(t *testing.T) {
-	app, _, jwtSvc := newTestAppWithJWT(t, "secret-1")
+	app, repo, jwtSvc := newTestAppWithJWT(t, "secret-1")
 	ctx := context.Background()
 
 	token, err := app.RegisterUser(ctx, "jwt@example.com", "pass123")
 	if err != nil {
 		t.Fatalf("RegisterUser error: %v", err)
 	}
+	user, err := repo.FindByEmail(ctx, "jwt@example.com")
+	if err != nil {
+		t.Fatalf("FindByEmail error: %v", err)
+	}
 
 	userID, err := jwtSvc.ParseToken(token)
 	if err != nil {
 		t.Fatalf("ParseToken error: %v", err)
 	}
-	if userID != "generated-id" {
+	if userID != user.ID() {
 		t.Fatalf("userID mismatch: %s", userID)
 	}
 
 	otherSvc := infra.NewJWTService("secret-2", "test-issuer")
 	if _, err := otherSvc.ParseToken(token); err == nil {
 		t.Fatalf("expected signature validation error")
+	}
+}
+
+func TestRegisterUser_NotificationFailureIsBestEffort(t *testing.T) {
+	app, repo, _, notifier := newTestApp(t)
+	ctx := context.Background()
+	notifier.err = errors.New("message service unavailable")
+
+	token, err := app.RegisterUser(ctx, "best-effort@example.com", "pass123")
+	if err != nil {
+		t.Fatalf("RegisterUser error: %v", err)
+	}
+	if token != "test-token" {
+		t.Fatalf("token mismatch: %s", token)
+	}
+	if notifier.calls != 1 {
+		t.Fatalf("expected notifier to be called once, got %d", notifier.calls)
+	}
+	if _, err := repo.FindByEmail(ctx, "best-effort@example.com"); err != nil {
+		t.Fatalf("FindByEmail error: %v", err)
 	}
 }

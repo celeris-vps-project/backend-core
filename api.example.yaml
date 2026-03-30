@@ -26,6 +26,17 @@ admin:
 grpc:
   listen: ":50051"           # gRPC listen address for agent communication
 
+message:
+  address: "127.0.0.1:9090"                  # celeris-message gRPC address; leave blank to disable integration
+  service_token: "change-me-message-service-token"
+  timeout: "2s"
+  user_registered:
+    enabled: true
+    channel: "IN_APP"                        # IN_APP or EMAIL
+    subject: "Welcome to Celeris"
+    content: "Your account has been created successfully."
+    template_code: ""                        # Optional template code; when set, raw content is ignored
+
 # Agent authentication is now handled via bootstrap tokens (created via
 # the admin API: POST /admin/bootstrap-tokens) and permanent node tokens
 # issued during registration. The old static agent.secret is no longer used.

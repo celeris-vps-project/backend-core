@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -15,6 +16,7 @@ type Config struct {
 	Database  DatabaseConfig      `json:"database" yaml:"database"`
 	JWT       JWTConfig           `json:"jwt" yaml:"jwt"`
 	GRPC      GRPCConfig          `json:"grpc" yaml:"grpc"`
+	Message   MessageConfig       `json:"message" yaml:"message"`
 	RateLimit RateLimitConfig     `json:"rate_limit" yaml:"rate_limit"`
 	Crypto    CryptoPaymentConfig `json:"crypto" yaml:"crypto"`
 	Server    ServerConfig        `json:"server" yaml:"server"`
@@ -61,6 +63,25 @@ type JWTConfig struct {
 // GRPCConfig holds gRPC server settings.
 type GRPCConfig struct {
 	Listen string `json:"listen" yaml:"listen"` // e.g. ":50051"
+}
+
+type MessageConfig struct {
+	Address        string                      `json:"address" yaml:"address"`
+	ServiceToken   string                      `json:"service_token" yaml:"service_token"`
+	Timeout        time.Duration               `json:"timeout" yaml:"timeout"`
+	UserRegistered UserRegisteredMessageConfig `json:"user_registered" yaml:"user_registered"`
+}
+
+type UserRegisteredMessageConfig struct {
+	Enabled      bool   `json:"enabled" yaml:"enabled"`
+	Channel      string `json:"channel" yaml:"channel"`
+	Subject      string `json:"subject" yaml:"subject"`
+	Content      string `json:"content" yaml:"content"`
+	TemplateCode string `json:"template_code" yaml:"template_code"`
+}
+
+func (c MessageConfig) Enabled() bool {
+	return strings.TrimSpace(c.Address) != "" && strings.TrimSpace(c.ServiceToken) != ""
 }
 
 // RateLimitTier holds rate limit settings for a specific tier of endpoints.
@@ -215,6 +236,15 @@ func DefaultConfig() Config {
 		},
 		GRPC: GRPCConfig{
 			Listen: ":50051",
+		},
+		Message: MessageConfig{
+			Timeout: 2 * time.Second,
+			UserRegistered: UserRegisteredMessageConfig{
+				Enabled: true,
+				Channel: "IN_APP",
+				Subject: "Welcome to Celeris",
+				Content: "Your account has been created successfully.",
+			},
 		},
 		RateLimit: RateLimitConfig{
 			Baseline: RateLimitTier{GlobalQPS: 5000, IPMaxQPS: 50},

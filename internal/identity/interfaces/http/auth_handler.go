@@ -12,10 +12,9 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 )
 
-// LoginRequest 定义 Hertz 的数据绑定和校验规则
 type LoginRequest struct {
-	Email    string `json:"email" vd:"email"`       // vd 是 Hertz 内置的 validator 标签
-	Password string `json:"password" vd:"len($)>5"` // 密码长度必须大于 5
+	Email    string `json:"email" vd:"email"`
+	Password string `json:"password" vd:"len($)>5"`
 }
 
 type RegisterRequest struct {
@@ -31,7 +30,6 @@ func NewAuthHandler(app *app.AuthAppService) *AuthHandler {
 	return &AuthHandler{authApp: app}
 }
 
-// Login 处理登录 HTTP 请求
 func (h *AuthHandler) Login(ctx context.Context, c *hz_app.RequestContext) {
 	var req LoginRequest
 
@@ -48,13 +46,12 @@ func (h *AuthHandler) Login(ctx context.Context, c *hz_app.RequestContext) {
 	}
 
 	c.JSON(consts.StatusOK, utils.H{
-		"message": "登录成功",
+		"message": "login successful",
 		"token":   token,
 		"role":    role,
 	})
 }
 
-// Register 处理注册 HTTP 请求
 func (h *AuthHandler) Register(ctx context.Context, c *hz_app.RequestContext) {
 	var req RegisterRequest
 
@@ -71,13 +68,12 @@ func (h *AuthHandler) Register(ctx context.Context, c *hz_app.RequestContext) {
 	}
 
 	c.JSON(consts.StatusOK, utils.H{
-		"message": "注册成功",
+		"message": "register successful",
 		"token":   token,
 		"role":    "user",
 	})
 }
 
-// Me returns the current user's profile (extracted from JWT via middleware).
 func (h *AuthHandler) Me(ctx context.Context, c *hz_app.RequestContext) {
 	uid, _ := authn.UserID(c)
 	role, ok := authn.UserRole(c)
@@ -90,14 +86,11 @@ func (h *AuthHandler) Me(ctx context.Context, c *hz_app.RequestContext) {
 	})
 }
 
-// ChangePasswordRequest defines the request body for password change.
 type ChangePasswordRequest struct {
 	OldPassword string `json:"old_password" vd:"len($)>0"`
 	NewPassword string `json:"new_password" vd:"len($)>5"`
 }
 
-// ChangePassword handles PUT /api/v1/me/password — allows authenticated users
-// to change their own password by providing the current and new password.
 func (h *AuthHandler) ChangePassword(ctx context.Context, c *hz_app.RequestContext) {
 	var req ChangePasswordRequest
 	if err := c.BindAndValidate(&req); err != nil {
@@ -118,15 +111,14 @@ func (h *AuthHandler) ChangePassword(ctx context.Context, c *hz_app.RequestConte
 	}
 
 	c.JSON(consts.StatusOK, utils.H{
-		"message": "密码修改成功",
+		"message": "password changed successfully",
 	})
 }
 
-// classifyChangePasswordError maps password-change errors to an error code.
 func classifyChangePasswordError(err error) string {
 	msg := err.Error()
 	switch {
-	case strings.Contains(msg, "旧密码不正确"):
+	case strings.Contains(msg, "old password is incorrect"):
 		return apperr.CodeWrongPassword
 	case strings.Contains(msg, "user not found"):
 		return apperr.CodeUserNotFound
@@ -135,26 +127,24 @@ func classifyChangePasswordError(err error) string {
 	}
 }
 
-// classifyAuthError maps login domain/infra errors to an error code.
 func classifyAuthError(err error) string {
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, "user not found"):
 		return apperr.CodeUserNotFound
-	case strings.Contains(msg, "密码错误"):
+	case strings.Contains(msg, "瀵嗙爜閿欒"):
 		return apperr.CodeWrongPassword
-	case strings.Contains(msg, "封禁"), strings.Contains(msg, "未激活"):
+	case strings.Contains(msg, "domain_error:"):
 		return apperr.CodeAccountDisabled
 	default:
 		return apperr.CodeUnauthorized
 	}
 }
 
-// classifyRegisterError maps registration errors to an error code.
 func classifyRegisterError(err error) string {
 	msg := err.Error()
 	switch {
-	case strings.Contains(msg, "已被注册"):
+	case strings.Contains(msg, "email already registered"):
 		return apperr.CodeEmailTaken
 	default:
 		return apperr.CodeInternalError

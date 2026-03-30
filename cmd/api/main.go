@@ -38,6 +38,7 @@ import (
 	"backend-core/pkg/delayed"
 	"backend-core/pkg/eventbus"
 	"backend-core/pkg/events"
+	"backend-core/pkg/messageclient"
 	"backend-core/pkg/perf"
 	"backend-core/pkg/ratelimit"
 	"backend-core/pkg/timeout"
@@ -45,7 +46,6 @@ import (
 	"flag"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -84,6 +84,19 @@ func main() {
 	if v := os.Getenv("API_GRPC_LISTEN"); v != "" {
 		cfg.GRPC.Listen = v
 	}
+	if v := os.Getenv("API_MESSAGE_ADDRESS"); v != "" {
+		cfg.Message.Address = v
+	}
+	if v := os.Getenv("API_MESSAGE_SERVICE_TOKEN"); v != "" {
+		cfg.Message.ServiceToken = v
+	}
+	if v := os.Getenv("API_MESSAGE_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Message.Timeout = d
+		} else {
+			log.Printf("[api] invalid API_MESSAGE_TIMEOUT %q: %v", v, err)
+		}
+	}
 
 	// 1. Open database (SQLite or PostgreSQL, based on config)
 	db, err := database.Open(cfg.Database)
@@ -104,9 +117,35 @@ func main() {
 	pwdHasher := infra.NewBcryptPasswordService(bcrypt.DefaultCost)
 	userRepo := infra.NewGormUserRepo(db)
 	jwtService := infra.NewJWTService(cfg.JWT.Secret, cfg.JWT.Issuer)
+	var msgClient *messageclient.Client
+	var registrationNotifier app.RegistrationNotifier
+	if cfg.Message.Enabled() {
+		msgClient, err = messageclient.Dial(messageclient.Config{
+			Address:      cfg.Message.Address,
+			ServiceToken: cfg.Message.ServiceToken,
+			Timeout:      cfg.Message.Timeout,
+		})
+		if err != nil {
+			log.Fatalf("[api] failed to initialise message client: %v", err)
+		}
+		registrationNotifier = messageclient.NewUserRegisteredNotifier(msgClient, messageclient.UserRegisteredNotifierConfig{
+			Enabled:      cfg.Message.UserRegistered.Enabled,
+			Channel:      cfg.Message.UserRegistered.Channel,
+			Subject:      cfg.Message.UserRegistered.Subject,
+			Content:      cfg.Message.UserRegistered.Content,
+			TemplateCode: cfg.Message.UserRegistered.TemplateCode,
+		})
+		log.Printf("[api] message service integration enabled: address=%s user_registered=%t channel=%s",
+			cfg.Message.Address,
+			cfg.Message.UserRegistered.Enabled,
+			cfg.Message.UserRegistered.Channel,
+		)
+	} else {
+		log.Printf("[api] message service integration disabled (set message.address and message.service_token to enable)")
+	}
 
 	// 3. Wire up application layer
-	authApp := app.NewAuthAppService(userRepo, jwtService, pwdHasher)
+	authApp := app.NewAuthAppService(userRepo, jwtService, pwdHasher, registrationNotifier)
 	authHandler := identityHttp.NewAuthHandler(authApp)
 
 	// ── Admin Account Seeding ──────────────────────────────────────────────
@@ -768,6 +807,13 @@ func main() {
 	if sqlDB, err := db.DB(); err == nil {
 		sqlDB.Close()
 		log.Printf("[api] database connections closed")
+	}
+	if msgClient != nil {
+		if err := msgClient.Close(); err != nil {
+			log.Printf("[api] failed to close message client: %v", err)
+		} else {
+			log.Printf("[api] message client closed")
+		}
 	}
 
 	// Wait for shutdown deadline or completion
