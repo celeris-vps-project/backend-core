@@ -306,4 +306,4 @@ sudo ./deploy/install.sh agent
 
 ## 许可证
 
-仓库内未包含许可证文件。如需开源发布，请补充 `LICENSE`。
+本仓库采用 `MIT` 许可证，详见根目录 [LICENSE](LICENSE)。
