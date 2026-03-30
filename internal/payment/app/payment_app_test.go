@@ -25,7 +25,7 @@ func (m *mockOrderActivator) CancelOrder(orderID, reason string) error          
 
 type mockProductPurchaser struct{}
 
-func (m *mockProductPurchaser) PurchaseProduct(ctx context.Context, productID, customerID, orderID, hostname, os string) (app.PurchasedProduct, error) {
+func (m *mockProductPurchaser) PurchaseProduct(ctx context.Context, productID, customerID, orderID, instanceID, hostname, os string) (app.PurchasedProduct, error) {
 	return app.PurchasedProduct{}, nil
 }
 

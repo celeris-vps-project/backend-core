@@ -110,5 +110,36 @@ func (a *BillingAdapter) GetInvoiceStatus(invoiceID string) (string, error) {
 	return invoice.Status(), nil
 }
 
+func (a *BillingAdapter) GetInvoice(invoiceID string) (paymentApp.RenewalInvoice, error) {
+	invoice, err := a.svc.GetInvoice(invoiceID)
+	if err != nil {
+		return paymentApp.RenewalInvoice{}, err
+	}
+	return paymentApp.RenewalInvoice{
+		ID:        invoice.ID(),
+		Status:    invoice.Status(),
+		PeriodEnd: invoice.PeriodEnd(),
+		DueAt:     invoice.DueAt(),
+	}, nil
+}
+
+func (a *BillingAdapter) GenerateRenewalInvoice(sourceInvoiceID string) (paymentApp.RenewalInvoice, error) {
+	invoice, err := a.svc.GenerateRenewalInvoice(sourceInvoiceID)
+	if err != nil {
+		return paymentApp.RenewalInvoice{}, err
+	}
+	return paymentApp.RenewalInvoice{
+		ID:        invoice.ID(),
+		Status:    invoice.Status(),
+		PeriodEnd: invoice.PeriodEnd(),
+		DueAt:     invoice.DueAt(),
+	}, nil
+}
+
+func (a *BillingAdapter) IssueInvoice(invoiceID string, issuedAt time.Time, dueAt *time.Time) error {
+	return a.svc.IssueInvoice(invoiceID, issuedAt, dueAt)
+}
+
 // Compile-time interface check
 var _ paymentApp.InvoiceCreator = (*BillingAdapter)(nil)
+var _ paymentApp.RenewalInvoiceManager = (*BillingAdapter)(nil)

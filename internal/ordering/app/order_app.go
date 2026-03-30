@@ -59,6 +59,11 @@ func (s *OrderAppService) GetOrder(orderID string) (*domain.Order, error) {
 	return s.repo.GetByID(orderID)
 }
 
+// ListAll returns all orders for background workflows such as recurring billing.
+func (s *OrderAppService) ListAll() ([]*domain.Order, error) {
+	return s.repo.ListAll()
+}
+
 // ListByCustomer returns all orders for a customer.
 func (s *OrderAppService) ListByCustomer(customerID string) ([]*domain.Order, error) {
 	return s.repo.ListByCustomerID(customerID)
@@ -71,6 +76,18 @@ func (s *OrderAppService) LinkInvoiceToOrder(orderID, invoiceID string) error {
 		return err
 	}
 	if err := order.LinkInvoice(invoiceID); err != nil {
+		return err
+	}
+	return s.repo.Save(order)
+}
+
+// ReplaceInvoice updates the outstanding invoice reference for a recurring order.
+func (s *OrderAppService) ReplaceInvoice(orderID, invoiceID string) error {
+	order, err := s.repo.GetByID(orderID)
+	if err != nil {
+		return err
+	}
+	if err := order.ReplaceInvoice(invoiceID); err != nil {
 		return err
 	}
 	return s.repo.Save(order)

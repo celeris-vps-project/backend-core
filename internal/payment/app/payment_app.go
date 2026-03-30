@@ -43,6 +43,7 @@ type PaymentAppService struct {
 	providerSvc  *ProviderAppService
 	orchestrator *PostPaymentOrchestrator
 	cryptoProv   domain.CryptoPaymentProvider // optional legacy crypto provider
+	renewals     *RenewalService
 }
 
 func NewPaymentAppService(
@@ -55,6 +56,10 @@ func NewPaymentAppService(
 		orchestrator: orchestrator,
 		cryptoProv:   cryptoProv,
 	}
+}
+
+func (s *PaymentAppService) SetRenewalService(renewals *RenewalService) {
+	s.renewals = renewals
 }
 
 // InitiatePayment is the single entry-point for starting a payment.
@@ -73,16 +78,27 @@ func (s *PaymentAppService) InitiatePayment(ctx context.Context, req *InitiatePa
 	if err != nil {
 		return nil, apperr.ErrNotFound(apperr.CodeOrderNotFound, "order not found: "+err.Error())
 	}
-	if order.Status != "pending" {
+	invoiceID := ""
+	switch order.Status {
+	case "pending":
+		// 2. Create invoice
+		invoiceID, err = s.orchestrator.CreateInvoiceForPayment(order)
+		if err != nil {
+			log.Printf("[PaymentAppService] WARNING: invoice creation failed for order %s: %v", req.OrderID, err)
+			// Non-fatal — continue without invoice
+		}
+	case "active", "suspended":
+		if s.renewals == nil {
+			return nil, apperr.ErrUnprocessable(apperr.CodeOrderNotPending,
+				"order is not in pending status, current: "+order.Status)
+		}
+		invoiceID, err = s.renewals.PreparePayment(order)
+		if err != nil {
+			return nil, apperr.ErrUnprocessable(apperr.CodeOrderNotPending, err.Error())
+		}
+	default:
 		return nil, apperr.ErrUnprocessable(apperr.CodeOrderNotPending,
-			"order is not in pending status, current: "+order.Status)
-	}
-
-	// 2. Create invoice
-	invoiceID, err := s.orchestrator.CreateInvoiceForPayment(order)
-	if err != nil {
-		log.Printf("[PaymentAppService] WARNING: invoice creation failed for order %s: %v", req.OrderID, err)
-		// Non-fatal — continue without invoice
+			"order is not payable in current status: "+order.Status)
 	}
 
 	// 3. Create charge — route based on provider_id or legacy flow
@@ -217,8 +233,27 @@ func (s *PaymentAppService) HandleWebhookPayload(payload *domain.WebhookPayload)
 		return
 	}
 
-	if err := s.orchestrator.HandlePaymentConfirmed(payload.OrderID); err != nil {
-		log.Printf("[PaymentAppService.HandleWebhookPayload] WARNING: post-payment flow failed: %v", err)
+	order, err := s.orchestrator.GetOrderForPay(payload.OrderID)
+	if err != nil {
+		log.Printf("[PaymentAppService.HandleWebhookPayload] WARNING: order lookup failed: %v", err)
+		return
+	}
+
+	switch order.Status {
+	case "pending":
+		if err := s.orchestrator.HandlePaymentConfirmed(payload.OrderID); err != nil {
+			log.Printf("[PaymentAppService.HandleWebhookPayload] WARNING: post-payment flow failed: %v", err)
+		}
+	case "active", "suspended":
+		if s.renewals == nil {
+			log.Printf("[PaymentAppService.HandleWebhookPayload] WARNING: renewal service not configured for order=%s", payload.OrderID)
+			return
+		}
+		if err := s.renewals.HandlePaidOrder(order); err != nil {
+			log.Printf("[PaymentAppService.HandleWebhookPayload] WARNING: renewal payment flow failed: %v", err)
+		}
+	default:
+		log.Printf("[PaymentAppService.HandleWebhookPayload] ignoring successful payment for order=%s status=%s", payload.OrderID, order.Status)
 	}
 }
 

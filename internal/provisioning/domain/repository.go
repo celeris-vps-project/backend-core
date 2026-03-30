@@ -54,6 +54,7 @@ type ResourcePoolRepository interface {
 type IPAddressRepository interface {
 	GetByID(id string) (*IPAddress, error)
 	ListByNodeID(nodeID string) ([]*IPAddress, error)
+	FindByInstanceID(instanceID string) (*IPAddress, error)
 	FindAvailable(nodeID string, version int) (*IPAddress, error)
 	Save(ip *IPAddress) error
 

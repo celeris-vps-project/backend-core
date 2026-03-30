@@ -19,6 +19,7 @@ type CreateProductRequest struct {
 	Location       string `json:"location"`
 	RegionID       string `json:"region_id"`
 	ResourcePoolID string `json:"resource_pool_id"`
+	NetworkMode    string `json:"network_mode"`
 	CPU            int    `json:"cpu" vd:"$>0"`
 	MemoryMB       int    `json:"memory_mb" vd:"$>0"`
 	DiskGB         int    `json:"disk_gb" vd:"$>0"`
@@ -57,6 +58,7 @@ type ProductResponse struct {
 	Location       string `json:"location"`
 	RegionID       string `json:"region_id,omitempty"`
 	ResourcePoolID string `json:"resource_pool_id,omitempty"`
+	NetworkMode    string `json:"network_mode"`
 	CPU            int    `json:"cpu"`
 	MemoryMB       int    `json:"memory_mb"`
 	DiskGB         int    `json:"disk_gb"`
@@ -93,7 +95,7 @@ func (h *ProductHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
-	p, err := h.svc.CreateProduct(ctx, req.Name, req.Slug, req.Location, req.RegionID, req.ResourcePoolID, req.CPU, req.MemoryMB, req.DiskGB, req.BandwidthGB, req.PriceAmount, req.Currency, domain.BillingCycle(req.BillingCycle), req.TotalSlots)
+	p, err := h.svc.CreateProduct(ctx, req.Name, req.Slug, req.Location, req.RegionID, req.ResourcePoolID, req.NetworkMode, req.CPU, req.MemoryMB, req.DiskGB, req.BandwidthGB, req.PriceAmount, req.Currency, domain.BillingCycle(req.BillingCycle), req.TotalSlots)
 	if err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyProductError(err), err.Error()))
 		return
@@ -112,7 +114,7 @@ func (h *ProductHandler) Purchase(ctx context.Context, c *hz_app.RequestContext)
 		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
-	p, err := h.svc.PurchaseProduct(ctx, req.ProductID, uid.String(), req.OrderID, req.Hostname, req.OS)
+	p, err := h.svc.PurchaseProduct(ctx, req.ProductID, uid.String(), req.OrderID, "", req.Hostname, req.OS)
 	if err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyProductError(err), err.Error()))
 		return
@@ -227,7 +229,7 @@ func (h *ProductHandler) SetRegion(ctx context.Context, c *hz_app.RequestContext
 func toProductResp(p *domain.Product) ProductResponse {
 	return ProductResponse{
 		ID: p.ID(), Name: p.Name(), Slug: p.Slug(), Location: p.Location(),
-		RegionID: p.RegionID(), ResourcePoolID: p.ResourcePoolID(),
+		RegionID: p.RegionID(), ResourcePoolID: p.ResourcePoolID(), NetworkMode: p.NetworkMode(),
 		CPU: p.CPU(), MemoryMB: p.MemoryMB(), DiskGB: p.DiskGB(), BandwidthGB: p.BandwidthGB(),
 		PriceAmount: p.PriceAmount(), Currency: p.Currency(),
 		BillingCycle: string(p.BillingCycle()), Enabled: p.Enabled(), SortOrder: p.SortOrder(),

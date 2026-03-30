@@ -4,6 +4,7 @@ import (
 	"backend-core/internal/agent/client"
 	"backend-core/internal/agent/config"
 	"backend-core/internal/agent/handler"
+	"backend-core/internal/agent/nat"
 	"backend-core/internal/agent/monitor"
 	"backend-core/internal/agent/vm"
 	"backend-core/pkg/contracts"
@@ -84,6 +85,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("[agent] failed to create hypervisor: %v", err)
 	}
+	natForwarder := nat.NewIPTablesForwarder(cfg.NAT)
 
 	// Connect to the controller via gRPC
 	grpcClient, err := client.Dial(cfg.GRPCAddress)
@@ -157,7 +159,7 @@ func main() {
 
 		if len(ack.Tasks) > 0 {
 			log.Printf("[agent] received %d task(s)", len(ack.Tasks))
-			handler.ProcessTasks(ack.Tasks, driver, func(result contracts.TaskResult) {
+			handler.ProcessTasks(ack.Tasks, driver, natForwarder, func(result contracts.TaskResult) {
 				if err := grpcClient.ReportTaskResult(ctx, result); err != nil {
 					log.Printf("[agent] failed to report task result %s: %v", result.TaskID, err)
 				}

@@ -17,6 +17,7 @@ type Config struct {
 	JWT       JWTConfig           `json:"jwt" yaml:"jwt"`
 	GRPC      GRPCConfig          `json:"grpc" yaml:"grpc"`
 	Message   MessageConfig       `json:"message" yaml:"message"`
+	Billing   BillingConfig       `json:"billing" yaml:"billing"`
 	RateLimit RateLimitConfig     `json:"rate_limit" yaml:"rate_limit"`
 	Crypto    CryptoPaymentConfig `json:"crypto" yaml:"crypto"`
 	Server    ServerConfig        `json:"server" yaml:"server"`
@@ -29,6 +30,11 @@ type Config struct {
 // the log exactly once.
 type AdminConfig struct {
 	Email string `json:"email" yaml:"email"` // default: "admin@celeris.local"
+}
+
+type BillingConfig struct {
+	RenewalIssueLeadDays int    `json:"renewal_issue_lead_days" yaml:"renewal_issue_lead_days"`
+	RenewalPollInterval  string `json:"renewal_poll_interval" yaml:"renewal_poll_interval"`
 }
 
 type PortConfig string
@@ -245,6 +251,10 @@ func DefaultConfig() Config {
 				Subject: "Welcome to Celeris",
 				Content: "Your account has been created successfully.",
 			},
+		},
+		Billing: BillingConfig{
+			RenewalIssueLeadDays: 7,
+			RenewalPollInterval:  "1h",
 		},
 		RateLimit: RateLimitConfig{
 			Baseline: RateLimitTier{GlobalQPS: 5000, IPMaxQPS: 50},

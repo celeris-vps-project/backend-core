@@ -6,18 +6,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"sync"
 	"time"
 )
 
 // PostPaymentOrchestrator orchestrates the cross-domain flow after a
 // payment is confirmed via webhook:
 //  1. Activate the order (ordering context)
-//  2. Consume product slot + trigger provisioning (catalog context)
-//  3. Create a pending instance (instance context)
+//  2. Create a pending instance (instance context)
+//  3. Consume product stock and trigger provisioning (catalog/provisioning)
 //
-// This keeps the PaymentHandler thin (only calls payment app services)
-// and centralizes cross-domain logic in the app layer where it belongs.
+// The instance context owns the fulfillment identity. Provisioning must reuse
+// that instanceID so async callbacks update the same record visible to users.
 
 // OrderActivator is a port for the ordering context.
 type OrderActivator interface {
@@ -48,7 +47,7 @@ type PayableOrder struct {
 
 // ProductPurchaser is a port for the catalog context.
 type ProductPurchaser interface {
-	PurchaseProduct(ctx context.Context, productID, customerID, orderID, hostname, os string) (PurchasedProduct, error)
+	PurchaseProduct(ctx context.Context, productID, customerID, orderID, instanceID, hostname, os string) (PurchasedProduct, error)
 }
 
 // PurchasedProduct is the minimal read-model returned after purchase.
@@ -67,22 +66,10 @@ type InstanceCreator interface {
 }
 
 // InvoiceCreator is a port for the billing context.
-// It provides invoice lifecycle operations needed by the payment flow.
 type InvoiceCreator interface {
-	// CreateAndIssueInvoice creates a draft invoice, adds a snapshot line item,
-	// issues it, and returns the invoice ID. The description and price are
-	// hard-copied snapshots of the product at purchase time (immutable).
-	// billingCycle is one of "one_time", "monthly", "yearly".
 	CreateAndIssueInvoice(customerID, currency, billingCycle, description string, priceAmount int64) (invoiceID string, err error)
-
-	// RecordInvoicePayment marks an issued invoice as paid.
 	RecordInvoicePayment(invoiceID string, amount int64, currency string) error
-
-	// VoidInvoice marks an invoice as void (e.g. payment failed or timed out).
 	VoidInvoice(invoiceID, reason string) error
-
-	// GetInvoiceStatus returns the current status of an invoice
-	// (e.g. "draft", "issued", "paid", "void").
 	GetInvoiceStatus(invoiceID string) (string, error)
 }
 
@@ -113,95 +100,68 @@ func NewPostPaymentOrchestrator(
 	}
 }
 
-// HandlePaymentConfirmed runs the full post-payment flow for a confirmed order:
-//  1. ActivateOrder   — transitions order pending → active
-//  2. GetOrder        — reloads order to obtain VPS configuration
-//  3. PurchaseProduct — consumes a commercial slot & fires provisioning event
-//  4. CreatePendingInstance — creates an instance record immediately visible to the user
+// HandlePaymentConfirmed runs the full post-payment flow for a confirmed order.
 //
-// A non-nil error is returned only for critical failures; instance-creation
-// failures are logged but do not roll back the order activation.
+// The pending instance is created first so provisioning can reuse the same
+// instanceID when it later reports IP/NAT information back.
 func (s *PostPaymentOrchestrator) HandlePaymentConfirmed(orderID string) error {
-	// 1. Activate the order (pending → active)
+	// 1. Activate the order (pending -> active).
 	if err := s.orders.ActivateOrder(orderID); err != nil {
 		return fmt.Errorf("activate order: %w", err)
 	}
 
-	// 2. Reload the order to obtain VPS configuration for downstream steps
+	// 2. Reload the order to obtain VPS configuration for downstream steps.
 	order, err := s.orders.GetOrderForPayment(orderID)
 	if err != nil {
 		return fmt.Errorf("get order after activation: %w", err)
 	}
 
-	// 2.5 Record payment on the linked invoice (invoice → paid)
+	// 2.5 Record payment on the linked invoice (invoice -> paid).
 	if s.invoices != nil && order.InvoiceID != "" {
 		if err := s.invoices.RecordInvoicePayment(order.InvoiceID, order.PriceAmount, order.Currency); err != nil {
-			// Non-fatal: order is already activated, log and continue
+			// Non-fatal: order is already activated, log and continue.
 			log.Printf("[PostPaymentOrchestrator] WARNING: record invoice payment failed for invoice %s: %v", order.InvoiceID, err)
 		} else {
 			log.Printf("[PostPaymentOrchestrator] invoice payment recorded: invoice=%s amount=%d", order.InvoiceID, order.PriceAmount)
 		}
 	}
 
-	// ── Steps 3 & 4: Parallel execution ────────────────────────────────────
-	// Product slot consumption and instance creation are independent operations
-	// that can run concurrently. This cuts ~50% off the post-payment latency
-	// compared to sequential execution.
-	//
-	// Both steps are non-fatal: the order is already activated and the invoice
-	// is paid, so failures are logged but do not cause a rollback.
-	var (
-		purchaseErr error
-		instanceID  string
-		instanceErr error
-		wg          sync.WaitGroup
-	)
-
-	// 3. (parallel) Consume a commercial slot and fire provisioning event
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		_, purchaseErr = s.products.PurchaseProduct(
-			context.Background(),
-			order.ProductID,
+	// 3. Create the pending instance first so the provisioning callback can
+	// update the same instance record instead of a controller-generated ID.
+	instanceID := ""
+	if s.instances != nil {
+		instanceID, err = s.instances.CreatePendingInstance(
 			order.CustomerID,
 			orderID,
+			order.Region,
 			order.Hostname,
+			order.Plan,
 			order.OS,
+			order.CPU,
+			order.MemoryMB,
+			order.DiskGB,
 		)
-		if purchaseErr != nil {
-			log.Printf("[PostPaymentOrchestrator] WARNING: product purchase (slot consume) failed for order %s: %v", orderID, purchaseErr)
+		if err != nil {
+			return fmt.Errorf("create pending instance: %w", err)
 		}
-	}()
-
-	// 4. (parallel) Create a pending instance — immediately visible to the user
-	// Uses order snapshot data (not product data, since that's being fetched concurrently)
-	if s.instances != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			instanceID, instanceErr = s.instances.CreatePendingInstance(
-				order.CustomerID,
-				orderID,
-				order.Region,
-				order.Hostname,
-				order.Plan,
-				order.OS,
-				order.CPU,
-				order.MemoryMB,
-				order.DiskGB,
-			)
-			if instanceErr != nil {
-				log.Printf("[PostPaymentOrchestrator] WARNING: create pending instance failed for order %s: %v", orderID, instanceErr)
-			} else {
-				log.Printf("[PostPaymentOrchestrator] pending instance created: %s (order=%s)", instanceID, orderID)
-			}
-		}()
+		log.Printf("[PostPaymentOrchestrator] pending instance created: %s (order=%s)", instanceID, orderID)
 	}
 
-	wg.Wait()
+	// 4. Consume a commercial slot and trigger asynchronous provisioning using
+	// the same instanceID when one already exists.
+	if _, err := s.products.PurchaseProduct(
+		context.Background(),
+		order.ProductID,
+		order.CustomerID,
+		orderID,
+		instanceID,
+		order.Hostname,
+		order.OS,
+	); err != nil {
+		return fmt.Errorf("purchase product: %w", err)
+	}
 
-	log.Printf("[PostPaymentOrchestrator] post-payment flow complete: order=%s → activated → provisioned", orderID)
+	log.Printf("[PostPaymentOrchestrator] post-payment flow complete: order=%s instance=%s -> activated -> provision triggered", orderID, instanceID)
 	return nil
 }
 
@@ -212,19 +172,14 @@ func (s *PostPaymentOrchestrator) GetOrderForPay(orderID string) (PayableOrder, 
 	return s.orders.GetOrderForPayment(orderID)
 }
 
-// ── Invoice integration methods (Pay-time) ─────────────────────────────
-
 // CreateInvoiceForPayment creates and issues an invoice for a pending order,
 // then links the invoice to the order. The line item is a hard-copied snapshot
 // of the product description and price at purchase time.
-//
-// Returns the invoiceID for inclusion in the pay response.
 func (s *PostPaymentOrchestrator) CreateInvoiceForPayment(order PayableOrder) (string, error) {
 	if s.invoices == nil {
 		return "", nil // invoice creation disabled
 	}
 
-	// Build a snapshot description: "VPS Plan (2 vCPU / 4096MB / 80GB)"
 	description := fmt.Sprintf("%s (%d vCPU / %dMB / %dGB)",
 		order.Plan, order.CPU, order.MemoryMB, order.DiskGB)
 
@@ -239,9 +194,9 @@ func (s *PostPaymentOrchestrator) CreateInvoiceForPayment(order PayableOrder) (s
 		return "", fmt.Errorf("create invoice: %w", err)
 	}
 
-	// Link the invoice to the order
+	// Link the invoice to the order.
 	if err := s.orders.LinkInvoiceToOrder(order.ID, invoiceID); err != nil {
-		// Invoice created but link failed — void the orphan invoice
+		// Invoice created but link failed; void the orphan invoice.
 		log.Printf("[PostPaymentOrchestrator] WARNING: link invoice failed, voiding invoice %s: %v", invoiceID, err)
 		_ = s.invoices.VoidInvoice(invoiceID, "failed to link to order")
 		return "", fmt.Errorf("link invoice to order: %w", err)
@@ -252,7 +207,6 @@ func (s *PostPaymentOrchestrator) CreateInvoiceForPayment(order PayableOrder) (s
 }
 
 // VoidInvoiceOnFailure voids an invoice when the payment charge creation fails.
-// This ensures no orphan issued invoices remain in the system.
 func (s *PostPaymentOrchestrator) VoidInvoiceOnFailure(invoiceID, reason string) {
 	if s.invoices == nil || invoiceID == "" {
 		return
@@ -273,11 +227,6 @@ type InvoiceTimeoutPayload struct {
 // HandleInvoiceTimeout checks whether an invoice has been paid after the
 // timeout period. If still unpaid ("issued"), it voids the invoice and
 // cancels the associated order.
-//
-// Idempotent by design:
-//   - If invoice is already "paid" → no-op
-//   - If invoice is already "void" → no-op
-//   - If invoice is "issued" (still unpaid) → void invoice + cancel order
 func (s *PostPaymentOrchestrator) HandleInvoiceTimeout(invoiceID, orderID string) {
 	if s.invoices == nil {
 		return
@@ -291,7 +240,6 @@ func (s *PostPaymentOrchestrator) HandleInvoiceTimeout(invoiceID, orderID string
 		return
 	}
 
-	// Idempotent: if already paid or void, nothing to do
 	switch status {
 	case "paid":
 		log.Printf("[PostPaymentOrchestrator] invoice %s already paid, skipping", invoiceID)
@@ -301,17 +249,15 @@ func (s *PostPaymentOrchestrator) HandleInvoiceTimeout(invoiceID, orderID string
 		return
 	}
 
-	// Invoice is still issued (unpaid) — void it
-	if err := s.invoices.VoidInvoice(invoiceID, "payment timeout — auto-voided after deadline"); err != nil {
+	if err := s.invoices.VoidInvoice(invoiceID, "payment timeout - auto-voided after deadline"); err != nil {
 		log.Printf("[PostPaymentOrchestrator] ERROR: failed to void invoice %s: %v", invoiceID, err)
 		return
 	}
 	log.Printf("[PostPaymentOrchestrator] invoice voided: %s (payment timeout)", invoiceID)
 
-	// Cancel the associated order
 	if orderID != "" {
-		if err := s.orders.CancelOrder(orderID, "payment timeout — invoice auto-voided"); err != nil {
-			// Order might already be activated (race with webhook) — that's fine
+		if err := s.orders.CancelOrder(orderID, "payment timeout - invoice auto-voided"); err != nil {
+			// Order might already be activated (race with webhook); that is fine.
 			log.Printf("[PostPaymentOrchestrator] WARNING: failed to cancel order %s (may already be active): %v", orderID, err)
 		} else {
 			log.Printf("[PostPaymentOrchestrator] order cancelled: %s (payment timeout)", orderID)
@@ -320,8 +266,7 @@ func (s *PostPaymentOrchestrator) HandleInvoiceTimeout(invoiceID, orderID string
 }
 
 // ScheduleInvoiceTimeout publishes a delayed event that will check whether
-// the invoice has been paid after the timeout duration. If not paid, the
-// timeout worker will void the invoice and cancel the order.
+// the invoice has been paid after the timeout duration.
 func (s *PostPaymentOrchestrator) ScheduleInvoiceTimeout(invoiceID, orderID string, timeout time.Duration) {
 	if s.delayed == nil || invoiceID == "" {
 		return

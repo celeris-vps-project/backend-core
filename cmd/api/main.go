@@ -18,6 +18,7 @@ import (
 	instanceDomain "backend-core/internal/instance/domain"
 	instanceInfra "backend-core/internal/instance/infra"
 	instanceHttp "backend-core/internal/instance/interfaces/http"
+	instanceWs "backend-core/internal/instance/interfaces/ws"
 	orderingApp "backend-core/internal/ordering/app"
 	orderingInfra "backend-core/internal/ordering/infra"
 	orderingHttp "backend-core/internal/ordering/interfaces/http"
@@ -33,6 +34,7 @@ import (
 	"backend-core/internal/web"
 	"backend-core/pkg/adaptive"
 	"backend-core/pkg/agentpb"
+	"backend-core/pkg/contracts"
 	"backend-core/pkg/circuitbreaker"
 	"backend-core/pkg/database"
 	"backend-core/pkg/delayed"
@@ -276,6 +278,8 @@ func main() {
 	}
 	vpsProvisioner := provisioningApp.NewVPSProvisioner(hostRepo, poolRepo, taskRepo, idGen,
 		provisioningApp.WithDelayedPublisher(delayedPublisher),
+		provisioningApp.WithIPRepo(ipRepo),
+		provisioningApp.WithStateCache(nodeStateCache),
 		provisioningApp.WithMockMode(provisionMockMode),
 	)
 	provDispatcher := provisioningApp.NewProvisionDispatcher("vps")
@@ -295,6 +299,8 @@ func main() {
 	// Instance (uses adapter to delegate node capacity to the provisioning module)
 	nodeAllocatorRepo := instanceInfra.NewHostNodeAllocatorAdapter(hostRepo)
 	instRepo := instanceInfra.NewGormInstanceRepo(db)
+	instanceWSHub := instanceWs.NewHub(instRepo)
+	instanceWSHub.Register(bus)
 
 	// Provisioning Bus — in-memory channel-based queue that throttles concurrent
 	// provisioning requests. The handler callback is a placeholder (mock log);
@@ -310,6 +316,8 @@ func main() {
 	provisioningBus.Start(context.Background())
 
 	instApp := instanceApp.NewInstanceAppService(nodeAllocatorRepo, instRepo, idGen, provisioningBus)
+	instApp.SetLifecycleScheduler(instanceInfra.NewProvisioningTaskScheduler(provSvc))
+	instApp.SetEventPublisher(bus)
 	instHandler := instanceHttp.NewInstanceHandler(instApp)
 
 	// ── Provisioning → Instance Event Bridge ───────────────────────────────
@@ -324,7 +332,7 @@ func main() {
 		}
 		log.Printf("[event-bridge] provisioning completed: instance=%s ipv4=%s nat_port=%d",
 			e.InstanceID, e.IPv4, e.NATPort)
-		if err := instApp.ConfirmProvisioning(e.InstanceID, e.IPv4, e.IPv6, e.NetworkMode, e.NATPort); err != nil {
+		if err := instApp.ConfirmProvisioning(e.InstanceID, e.NodeID, e.IPv4, e.IPv6, e.NetworkMode, e.NATPort); err != nil {
 			log.Printf("[event-bridge] ERROR: failed to confirm provisioning for instance %s: %v", e.InstanceID, err)
 		}
 	})
@@ -334,7 +342,55 @@ func main() {
 			return
 		}
 		log.Printf("[event-bridge] provisioning failed: instance=%s error=%s", e.InstanceID, e.Error)
+		if err := vpsProvisioner.Release(provisioningApp.ProvisionCommand{
+			InstanceID: e.InstanceID,
+			NodeID:     e.NodeID,
+		}); err != nil {
+			log.Printf("[event-bridge] ERROR: failed to release resources for failed instance %s: %v", e.InstanceID, err)
+		}
 		// Instance stays in "pending" state — admin can investigate and retry
+	})
+	bus.Subscribe("node.instance_task_completed", func(evt eventbus.Event) {
+		e, ok := evt.(events.InstanceTaskCompletedEvent)
+		if !ok {
+			return
+		}
+		switch contracts.TaskType(e.TaskType) {
+		case contracts.TaskStart, contracts.TaskReboot:
+			if err := instApp.ConfirmStarted(e.InstanceID); err != nil {
+				log.Printf("[event-bridge] ERROR: failed to confirm start for instance %s: %v", e.InstanceID, err)
+			}
+		case contracts.TaskStop:
+			if err := instApp.ConfirmStopped(e.InstanceID); err != nil {
+				log.Printf("[event-bridge] ERROR: failed to confirm stop for instance %s: %v", e.InstanceID, err)
+			}
+		case contracts.TaskSuspend:
+			if err := instApp.ConfirmSuspended(e.InstanceID); err != nil {
+				log.Printf("[event-bridge] ERROR: failed to confirm suspend for instance %s: %v", e.InstanceID, err)
+			}
+		case contracts.TaskUnsuspend:
+			if err := instApp.ConfirmUnsuspended(e.InstanceID); err != nil {
+				log.Printf("[event-bridge] ERROR: failed to confirm unsuspend for instance %s: %v", e.InstanceID, err)
+			}
+		case contracts.TaskDeprovision:
+			if err := vpsProvisioner.Release(provisioningApp.ProvisionCommand{
+				InstanceID: e.InstanceID,
+				NodeID:     e.NodeID,
+			}); err != nil {
+				log.Printf("[event-bridge] ERROR: failed to release resources for terminated instance %s: %v", e.InstanceID, err)
+				return
+			}
+			if err := instApp.ConfirmTerminated(e.InstanceID); err != nil {
+				log.Printf("[event-bridge] ERROR: failed to confirm termination for instance %s: %v", e.InstanceID, err)
+			}
+		}
+	})
+	bus.Subscribe("node.instance_task_failed", func(evt eventbus.Event) {
+		e, ok := evt.(events.InstanceTaskFailedEvent)
+		if !ok {
+			return
+		}
+		log.Printf("[event-bridge] instance task failed: instance=%s type=%s error=%s", e.InstanceID, e.TaskType, e.Error)
 	})
 	log.Printf("[api] provisioning → instance event bridge enabled")
 
@@ -376,6 +432,7 @@ func main() {
 		circuitbreaker.New("pay-billing", 3, 2, 20*time.Second))
 
 	postPayOrch := paymentApp.NewPostPaymentOrchestrator(orderAdapter, catalogAdapter, instanceAdapter, billingAdapter, delayedPublisher)
+	renewalSvc := paymentApp.NewRenewalService(orderAdapter, billingAdapter, instanceAdapter)
 
 	// Invoice timeout worker — handles delayed "invoice.check_timeout" events.
 	// Now delegates to the orchestrator (via ports) instead of direct cross-context imports.
@@ -410,6 +467,7 @@ func main() {
 	// PaymentAppService now owns all business logic: provider routing, invoice
 	// creation, timeout scheduling, and webhook handling.
 	paySvc := paymentApp.NewPaymentAppService(providerSvc, postPayOrch, cryptoProvider)
+	paySvc.SetRenewalService(renewalSvc)
 	// PaymentHandler is now a thin HTTP adapter — only parses/serialises.
 	payHandler := paymentHttp.NewPaymentHandler(paySvc)
 	providerHandler := paymentHttp.NewProviderHandler(providerSvc)
@@ -418,9 +476,19 @@ func main() {
 	if cryptoCfg.MockMode {
 		log.Printf("[api] USDT crypto payment: MOCK MODE (auto-confirms after %v, set CRYPTO_MOCK_MODE=false for real blockchain)", cryptoCfg.MockConfirmDelay)
 	} else {
-		log.Printf("[api] USDT crypto payment: PRODUCTION MODE (awaiting real blockchain confirmations via webhook)")
+	log.Printf("[api] USDT crypto payment: PRODUCTION MODE (awaiting real blockchain confirmations via webhook)")
 	}
 	log.Printf("[api]   payment timeout: %v, wallets configured: %d networks", cryptoCfg.PaymentTimeout, len(cryptoCfg.Wallets))
+
+	renewalPollInterval, err := time.ParseDuration(cfg.Billing.RenewalPollInterval)
+	if err != nil {
+		log.Printf("[api] invalid billing.renewal_poll_interval %q: %v (using 1h)", cfg.Billing.RenewalPollInterval, err)
+		renewalPollInterval = time.Hour
+	}
+	renewalWorkerCtx, renewalWorkerCancel := context.WithCancel(context.Background())
+	renewalWorker := paymentInfra.NewRenewalWorker(renewalSvc, cfg.Billing.RenewalIssueLeadDays, renewalPollInterval)
+	renewalWorker.Start(renewalWorkerCtx)
+	log.Printf("[api] renewal worker started (lead_days=%d interval=%v)", cfg.Billing.RenewalIssueLeadDays, renewalPollInterval)
 
 	// Wire the crypto provider's async webhook callback to the app service.
 	// When payment is confirmed (mock auto-confirm or real blockchain callback),
@@ -640,6 +708,7 @@ func main() {
 		privateAPI.POST("/instances/:id/unsuspend", standardRL, instHandler.Unsuspend)
 		privateAPI.POST("/instances/:id/terminate", standardRL, instHandler.Terminate)
 		privateAPI.PUT("/instances/:id/ip", standardRL, instHandler.AssignIP)
+		privateAPI.POST("/ws/instances/ticket", standardRL, instanceWSHub.IssueTicket)
 
 		// ── Checkout tier: Product purchase & unified checkout ──────────
 		// These involve inventory/funds and need strict per-IP limiting.
@@ -666,6 +735,7 @@ func main() {
 	}
 
 	// ---- WebSocket routes (auth via ?ticket= one-time token) ----
+	h.GET("/api/v1/ws/instances", instanceWSHub.ServeWS)
 	h.GET("/api/v1/admin/ws/nodes", wsHub.ServeWS)
 	h.GET("/api/v1/admin/ws/performance", perfHub.ServeWS)
 
@@ -799,6 +869,8 @@ func main() {
 	// 2. Stop background workers
 	provPollerCancel() // stop provision poller goroutine
 	log.Printf("[api] provision poller stopped")
+	renewalWorkerCancel()
+	log.Printf("[api] renewal worker stopped")
 
 	provisioningBus.Stop()
 	log.Printf("[api] provisioning bus stopped")

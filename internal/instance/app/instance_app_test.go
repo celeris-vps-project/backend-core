@@ -3,6 +3,7 @@ package app
 import (
 	"backend-core/internal/instance/domain"
 	nodeDomain "backend-core/internal/provisioning/domain"
+	"backend-core/pkg/contracts"
 	"errors"
 	"testing"
 )
@@ -58,6 +59,14 @@ func (r *memInstRepo) GetByID(id string) (*domain.Instance, error) {
 	}
 	return i, nil
 }
+func (r *memInstRepo) GetByOrderID(orderID string) (*domain.Instance, error) {
+	for _, i := range r.items {
+		if i.OrderID() == orderID {
+			return i, nil
+		}
+	}
+	return nil, errors.New("not found")
+}
 func (r *memInstRepo) ListByCustomerID(cid string) ([]*domain.Instance, error) {
 	var out []*domain.Instance
 	for _, i := range r.items {
@@ -77,6 +86,25 @@ func (r *memInstRepo) ListByNodeID(nid string) ([]*domain.Instance, error) {
 	return out, nil
 }
 func (r *memInstRepo) Save(i *domain.Instance) error { r.items[i.ID()] = i; return nil }
+
+type scheduledTask struct {
+	nodeID   string
+	taskType contracts.TaskType
+	spec     contracts.ProvisionSpec
+}
+
+type memLifecycleScheduler struct {
+	tasks []scheduledTask
+}
+
+func (s *memLifecycleScheduler) Enqueue(nodeID string, taskType contracts.TaskType, spec contracts.ProvisionSpec) error {
+	s.tasks = append(s.tasks, scheduledTask{
+		nodeID:   nodeID,
+		taskType: taskType,
+		spec:     spec,
+	})
+	return nil
+}
 
 type seqIDGen struct{ counter int }
 
@@ -149,5 +177,162 @@ func TestTerminateInstance_ReleasesSlot(t *testing.T) {
 	storedNode, _ := nodeRepo.GetByID("node-2")
 	if storedNode.UsedSlots() != 0 {
 		t.Fatalf("expected 0 used slots after terminate, got %d", storedNode.UsedSlots())
+	}
+}
+
+func TestCreatePendingInstance_DoesNotAllocateNodeOrSlot(t *testing.T) {
+	nodeRepo := newMemNodeAllocatorRepo()
+	instRepo := newMemInstRepo()
+	idGen := &seqIDGen{}
+	svc := NewInstanceAppService(nodeRepo, instRepo, idGen, nil)
+
+	node := createTestHostNode(nodeRepo, "node-3", "JP-tyo-01", "JP-tyo", "Tokyo #1", 2)
+
+	inst, err := svc.CreatePendingInstance("cust-1", "ord-1", "JP-tyo", "web-01", "vps-basic", "ubuntu-24.04", 2, 2048, 40)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if inst.NodeID() != "" {
+		t.Fatalf("expected empty node assignment, got %s", inst.NodeID())
+	}
+
+	storedNode, _ := nodeRepo.GetByID(node.ID())
+	if storedNode.UsedSlots() != 0 {
+		t.Fatalf("expected 0 used slots after pending instance creation, got %d", storedNode.UsedSlots())
+	}
+}
+
+func TestConfirmProvisioning_AssignsNodeAndNetworkDetails(t *testing.T) {
+	nodeRepo := newMemNodeAllocatorRepo()
+	instRepo := newMemInstRepo()
+	idGen := &seqIDGen{}
+	svc := NewInstanceAppService(nodeRepo, instRepo, idGen, nil)
+
+	inst, err := svc.CreatePendingInstance("cust-1", "ord-1", "US-lax", "app-01", "vps-pro", "debian-12", 4, 8192, 100)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := svc.ConfirmProvisioning(inst.ID(), "node-real-1", "198.51.100.10", "", "nat", 22001); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	stored, err := svc.GetInstance(inst.ID())
+	if err != nil {
+		t.Fatalf("unexpected get error: %v", err)
+	}
+	if stored.NodeID() != "node-real-1" {
+		t.Fatalf("expected node-real-1, got %s", stored.NodeID())
+	}
+	if stored.IPv4() != "198.51.100.10" {
+		t.Fatalf("expected ipv4 assigned, got %s", stored.IPv4())
+	}
+	if stored.NetworkMode() != "nat" {
+		t.Fatalf("expected nat mode, got %s", stored.NetworkMode())
+	}
+	if stored.NATPort() != 22001 {
+		t.Fatalf("expected NAT port 22001, got %d", stored.NATPort())
+	}
+	if stored.Status() != domain.InstanceStatusRunning {
+		t.Fatalf("expected running status, got %s", stored.Status())
+	}
+}
+
+func TestStartInstance_WithLifecycleSchedulerEnqueuesTask(t *testing.T) {
+	nodeRepo := newMemNodeAllocatorRepo()
+	instRepo := newMemInstRepo()
+	idGen := &seqIDGen{}
+	scheduler := &memLifecycleScheduler{}
+	svc := NewInstanceAppService(nodeRepo, instRepo, idGen, nil)
+	svc.SetLifecycleScheduler(scheduler)
+
+	_ = createTestHostNode(nodeRepo, "node-4", "US-lax-01", "US-lax", "Los Angeles #1", 2)
+	inst, err := svc.PurchaseInstance("cust-1", "ord-1", "US-lax", "web-01", "vps-basic", "ubuntu-24.04", 2, 2048, 40)
+	if err != nil {
+		t.Fatalf("unexpected purchase error: %v", err)
+	}
+
+	if err := svc.StartInstance(inst.ID()); err != nil {
+		t.Fatalf("unexpected start error: %v", err)
+	}
+	if len(scheduler.tasks) != 1 {
+		t.Fatalf("expected 1 scheduled task, got %d", len(scheduler.tasks))
+	}
+	if scheduler.tasks[0].taskType != contracts.TaskStart {
+		t.Fatalf("expected start task, got %s", scheduler.tasks[0].taskType)
+	}
+	stored, _ := svc.GetInstance(inst.ID())
+	if stored.Status() != domain.InstanceStatusPending {
+		t.Fatalf("expected status to remain pending until task completion, got %s", stored.Status())
+	}
+}
+
+func TestStopInstance_WithLifecycleSchedulerEnqueuesTask(t *testing.T) {
+	nodeRepo := newMemNodeAllocatorRepo()
+	instRepo := newMemInstRepo()
+	idGen := &seqIDGen{}
+	scheduler := &memLifecycleScheduler{}
+	svc := NewInstanceAppService(nodeRepo, instRepo, idGen, nil)
+
+	_ = createTestHostNode(nodeRepo, "node-5", "US-sea-01", "US-sea", "Seattle #1", 2)
+	inst, err := svc.PurchaseInstance("cust-1", "ord-1", "US-sea", "web-01", "vps-basic", "ubuntu-24.04", 2, 2048, 40)
+	if err != nil {
+		t.Fatalf("unexpected purchase error: %v", err)
+	}
+	if err := svc.StartInstance(inst.ID()); err != nil {
+		t.Fatalf("unexpected local start error: %v", err)
+	}
+	svc.SetLifecycleScheduler(scheduler)
+
+	if err := svc.StopInstance(inst.ID()); err != nil {
+		t.Fatalf("unexpected stop error: %v", err)
+	}
+	if len(scheduler.tasks) != 1 {
+		t.Fatalf("expected 1 scheduled task, got %d", len(scheduler.tasks))
+	}
+	if scheduler.tasks[0].taskType != contracts.TaskStop {
+		t.Fatalf("expected stop task, got %s", scheduler.tasks[0].taskType)
+	}
+	stored, _ := svc.GetInstance(inst.ID())
+	if stored.Status() != domain.InstanceStatusRunning {
+		t.Fatalf("expected status to remain running until task completion, got %s", stored.Status())
+	}
+}
+
+func TestTerminateInstance_WithLifecycleSchedulerEnqueuesDeprovision(t *testing.T) {
+	nodeRepo := newMemNodeAllocatorRepo()
+	instRepo := newMemInstRepo()
+	idGen := &seqIDGen{}
+	scheduler := &memLifecycleScheduler{}
+	svc := NewInstanceAppService(nodeRepo, instRepo, idGen, nil)
+
+	_ = createTestHostNode(nodeRepo, "node-6", "SG-sin-01", "SG-sin", "Singapore #1", 2)
+	inst, err := svc.PurchaseInstance("cust-1", "ord-1", "SG-sin", "web-01", "vps-basic", "ubuntu-24.04", 2, 2048, 40)
+	if err != nil {
+		t.Fatalf("unexpected purchase error: %v", err)
+	}
+	if err := svc.StartInstance(inst.ID()); err != nil {
+		t.Fatalf("unexpected local start error: %v", err)
+	}
+	if err := svc.ConfirmProvisioning(inst.ID(), inst.NodeID(), "198.51.100.20", "", "nat", 22010); err != nil {
+		t.Fatalf("unexpected provisioning confirm error: %v", err)
+	}
+	svc.SetLifecycleScheduler(scheduler)
+
+	if err := svc.TerminateInstance(inst.ID()); err != nil {
+		t.Fatalf("unexpected terminate error: %v", err)
+	}
+	if len(scheduler.tasks) != 1 {
+		t.Fatalf("expected 1 scheduled task, got %d", len(scheduler.tasks))
+	}
+	if scheduler.tasks[0].taskType != contracts.TaskDeprovision {
+		t.Fatalf("expected deprovision task, got %s", scheduler.tasks[0].taskType)
+	}
+	if scheduler.tasks[0].spec.NetworkMode != contracts.NetworkModeNAT || scheduler.tasks[0].spec.NATPort != 22010 {
+		t.Fatalf("expected NAT details to be propagated, got mode=%s port=%d", scheduler.tasks[0].spec.NetworkMode, scheduler.tasks[0].spec.NATPort)
+	}
+	stored, _ := svc.GetInstance(inst.ID())
+	if stored.Status() != domain.InstanceStatusRunning {
+		t.Fatalf("expected status to remain running until deprovision completes, got %s", stored.Status())
 	}
 }

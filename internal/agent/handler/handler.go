@@ -12,11 +12,17 @@ import (
 // to cover slow cloud-init + DHCP scenarios.
 const DefaultBootTimeout = 5 * time.Minute
 
+// NATForwarder applies host-level port forwarding for NAT-mode tasks.
+type NATForwarder interface {
+	EnsureForward(instanceID string, hostPort int, guestIP string) error
+	ReleaseForward(instanceID string, hostPort int) error
+}
+
 // ProcessTasks executes any tasks received from the controller heartbeat ack,
 // then reports results back. For provision/start tasks, if the driver supports
 // BootWaiter, it polls the hypervisor until the VM is fully booted and has
 // a valid internal IP, then includes the IP in the task result.
-func ProcessTasks(tasks []contracts.Task, driver vm.Hypervisor, reportFn func(contracts.TaskResult)) {
+func ProcessTasks(tasks []contracts.Task, driver vm.Hypervisor, natForwarder NATForwarder, reportFn func(contracts.TaskResult)) {
 	for _, task := range tasks {
 		log.Printf("[agent] executing task %s type=%s instance=%s", task.ID, task.Type, task.Spec.InstanceID)
 
@@ -71,6 +77,17 @@ func ProcessTasks(tasks []contracts.Task, driver vm.Hypervisor, reportFn func(co
 			}
 		}
 
+		if natErr := ensureNATForward(task, result, natForwarder); natErr != nil {
+			result.Status = contracts.TaskStatusFailed
+			result.Error = natErr.Error()
+			log.Printf("[agent] task %s NAT setup FAILED: %v", task.ID, natErr)
+		}
+		if natErr := releaseNATForward(task, result, natForwarder); natErr != nil {
+			result.Status = contracts.TaskStatusFailed
+			result.Error = natErr.Error()
+			log.Printf("[agent] task %s NAT cleanup FAILED: %v", task.ID, natErr)
+		}
+
 		reportFn(result)
 	}
 }
@@ -84,4 +101,42 @@ func needsBootWait(tt contracts.TaskType) bool {
 	default:
 		return false
 	}
+}
+
+func ensureNATForward(task contracts.Task, result contracts.TaskResult, forwarder NATForwarder) error {
+	if task.Spec.NetworkMode != contracts.NetworkModeNAT {
+		return nil
+	}
+	if result.Status != contracts.TaskStatusCompleted {
+		return nil
+	}
+	if task.Spec.NATPort <= 0 {
+		return nil
+	}
+	if forwarder == nil {
+		return nil
+	}
+	if result.IPv4 == "" {
+		return nil
+	}
+	return forwarder.EnsureForward(task.Spec.InstanceID, task.Spec.NATPort, result.IPv4)
+}
+
+func releaseNATForward(task contracts.Task, result contracts.TaskResult, forwarder NATForwarder) error {
+	if task.Type != contracts.TaskDeprovision {
+		return nil
+	}
+	if task.Spec.NetworkMode != contracts.NetworkModeNAT {
+		return nil
+	}
+	if result.Status != contracts.TaskStatusCompleted {
+		return nil
+	}
+	if task.Spec.NATPort <= 0 {
+		return nil
+	}
+	if forwarder == nil {
+		return nil
+	}
+	return forwarder.ReleaseForward(task.Spec.InstanceID, task.Spec.NATPort)
 }

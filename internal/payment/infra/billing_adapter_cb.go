@@ -4,6 +4,7 @@ import (
 	paymentApp "backend-core/internal/payment/app"
 	"backend-core/pkg/circuitbreaker"
 	"log"
+	"time"
 )
 
 // BillingAdapterWithCB wraps a BillingAdapter with circuit breaker
@@ -58,6 +59,24 @@ func (a *BillingAdapterWithCB) GetInvoiceStatus(invoiceID string) (string, error
 	})
 }
 
+func (a *BillingAdapterWithCB) GetInvoice(invoiceID string) (paymentApp.RenewalInvoice, error) {
+	return circuitbreaker.Execute(a.cb, func() (paymentApp.RenewalInvoice, error) {
+		return a.inner.GetInvoice(invoiceID)
+	})
+}
+
+func (a *BillingAdapterWithCB) GenerateRenewalInvoice(sourceInvoiceID string) (paymentApp.RenewalInvoice, error) {
+	return circuitbreaker.Execute(a.cb, func() (paymentApp.RenewalInvoice, error) {
+		return a.inner.GenerateRenewalInvoice(sourceInvoiceID)
+	})
+}
+
+func (a *BillingAdapterWithCB) IssueInvoice(invoiceID string, issuedAt time.Time, dueAt *time.Time) error {
+	return circuitbreaker.ExecuteNoResult(a.cb, func() error {
+		return a.inner.IssueInvoice(invoiceID, issuedAt, dueAt)
+	})
+}
+
 // Stats returns the circuit breaker's current statistics.
 func (a *BillingAdapterWithCB) Stats() circuitbreaker.Stats {
 	return a.cb.Stats()
@@ -65,3 +84,4 @@ func (a *BillingAdapterWithCB) Stats() circuitbreaker.Stats {
 
 // Compile-time interface check
 var _ paymentApp.InvoiceCreator = (*BillingAdapterWithCB)(nil)
+var _ paymentApp.RenewalInvoiceManager = (*BillingAdapterWithCB)(nil)

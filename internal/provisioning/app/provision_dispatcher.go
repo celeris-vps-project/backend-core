@@ -23,6 +23,8 @@ import (
 
 // ProvisionCommand carries all the info needed to provision a purchased product.
 type ProvisionCommand struct {
+	InstanceID     string
+	NodeID         string
 	ProductID      string
 	ProductSlug    string
 	ProductType    string // "vps", "license", "cdn", etc.
@@ -114,8 +116,8 @@ type VPSProvisioner struct {
 	stateCache     domain.NodeStateCache      // for resolving host IP in NAT mode
 	ids            IDGenerator
 	delayPublisher delayed.Publisher // async boot confirmation queue (nil = skip)
-	bootCheckDelay time.Duration    // how long to wait before checking boot status
-	mockMode       bool             // when true, auto-complete tasks (dev/test without real agents)
+	bootCheckDelay time.Duration     // how long to wait before checking boot status
+	mockMode       bool              // when true, auto-complete tasks (dev/test without real agents)
 }
 
 // NewVPSProvisioner creates a provisioner for VPS-type products.
@@ -227,7 +229,10 @@ func (p *VPSProvisioner) Provision(cmd ProvisionCommand) (*ProvisionResult, erro
 
 	// 4. Build the provision spec
 	virtType := resolveVirtType(cmd.VirtType)
-	instanceID := p.ids.NewID()
+	instanceID := cmd.InstanceID
+	if instanceID == "" {
+		instanceID = p.ids.NewID()
+	}
 	spec := contracts.ProvisionSpec{
 		InstanceID:  instanceID,
 		Hostname:    cmd.Hostname,
@@ -293,8 +298,28 @@ func (p *VPSProvisioner) Provision(cmd ProvisionCommand) (*ProvisionResult, erro
 }
 
 func (p *VPSProvisioner) Release(cmd ProvisionCommand) error {
-	log.Printf("[vps-provisioner] releasing resources for order %s", cmd.OrderID)
-	// TODO: release slot on node, free IP, etc.
+	log.Printf("[vps-provisioner] releasing resources: instance=%s node=%s order=%s",
+		cmd.InstanceID, cmd.NodeID, cmd.OrderID)
+
+	nodeID := cmd.NodeID
+	if p.ipRepo != nil && cmd.InstanceID != "" {
+		ip, err := p.ipRepo.FindByInstanceID(cmd.InstanceID)
+		if err == nil && ip != nil {
+			if nodeID == "" {
+				nodeID = ip.NodeID()
+			}
+			ip.Release()
+			if saveErr := p.ipRepo.Save(ip); saveErr != nil {
+				return saveErr
+			}
+		}
+	}
+
+	if nodeID != "" {
+		if err := p.hostRepo.ReleaseSlotAtomic(nodeID); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -469,6 +494,7 @@ func (d *ProvisionDispatcher) onProductPurchased(evt eventbus.Event) {
 	}
 
 	cmd := ProvisionCommand{
+		InstanceID:     e.InstanceID,
 		ProductID:      e.ProductID,
 		ProductSlug:    e.ProductSlug,
 		ProductType:    "vps", // default; future: read from event
@@ -494,5 +520,25 @@ func (d *ProvisionDispatcher) onProductSlotReleased(evt eventbus.Event) {
 	if !ok {
 		return
 	}
-	log.Printf("[provision-dispatcher] slot released: product=%s order=%s", e.ProductID, e.OrderID)
+	cmd := ProvisionCommand{
+		ProductID:   e.ProductID,
+		OrderID:     e.OrderID,
+		InstanceID:  e.InstanceID,
+		NetworkMode: e.NetworkMode,
+		NodeID:      e.NodeID,
+	}
+	pt := cmd.ProductType
+	if pt == "" {
+		pt = d.defaultType
+	}
+	p, exists := d.provisioners[pt]
+	if !exists {
+		log.Printf("[provision-dispatcher] WARNING: no provisioner registered for release type %q", pt)
+		return
+	}
+	if err := p.Release(cmd); err != nil {
+		log.Printf("[provision-dispatcher] ERROR releasing resources for order %s instance=%s: %v", e.OrderID, e.InstanceID, err)
+		return
+	}
+	log.Printf("[provision-dispatcher] slot released: product=%s order=%s instance=%s", e.ProductID, e.OrderID, e.InstanceID)
 }

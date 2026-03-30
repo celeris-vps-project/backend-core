@@ -111,9 +111,12 @@ func TestProductApp_PurchasePublishesEvent(t *testing.T) {
 
 	svc := NewProductAppService(repo, staticIDGen{id: "prod-1"}, bus, nil)
 
-	p, err := svc.CreateProduct(ctx, "VPS Starter", "vps-starter", "DE-fra", "region-de", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 5)
+	p, err := svc.CreateProduct(ctx, "VPS Starter", "vps-starter", "DE-fra", "region-de", "", "nat", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if p.NetworkMode() != "nat" {
+		t.Fatalf("expected nat product mode, got %s", p.NetworkMode())
 	}
 
 	var receivedEvent *events.ProductPurchasedEvent
@@ -122,7 +125,7 @@ func TestProductApp_PurchasePublishesEvent(t *testing.T) {
 		receivedEvent = &e
 	})
 
-	result, err := svc.PurchaseProduct(ctx, p.ID(), "cust-1", "ord-1", "web-01", "ubuntu-22.04")
+	result, err := svc.PurchaseProduct(ctx, p.ID(), "cust-1", "ord-1", "inst-1", "web-01", "ubuntu-22.04")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,6 +149,12 @@ func TestProductApp_PurchasePublishesEvent(t *testing.T) {
 	if receivedEvent.CustomerID != "cust-1" {
 		t.Fatalf("expected customer cust-1, got %s", receivedEvent.CustomerID)
 	}
+	if receivedEvent.InstanceID != "inst-1" {
+		t.Fatalf("expected instance inst-1, got %s", receivedEvent.InstanceID)
+	}
+	if receivedEvent.NetworkMode != "nat" {
+		t.Fatalf("expected network mode nat, got %s", receivedEvent.NetworkMode)
+	}
 	if receivedEvent.Hostname != "web-01" {
 		t.Fatalf("expected hostname web-01, got %s", receivedEvent.Hostname)
 	}
@@ -160,13 +169,13 @@ func TestProductApp_PurchaseFailsWhenOutOfStock(t *testing.T) {
 	bus := eventbus.New()
 	svc := NewProductAppService(repo, staticIDGen{id: "prod-2"}, bus, nil)
 
-	p, _ := svc.CreateProduct(ctx, "VPS Tiny", "vps-tiny", "US-nyc", "", "", 1, 512, 10, 500, 299, "USD", domain.BillingMonthly, 1)
+	p, _ := svc.CreateProduct(ctx, "VPS Tiny", "vps-tiny", "US-nyc", "", "", "", 1, 512, 10, 500, 299, "USD", domain.BillingMonthly, 1)
 
-	if _, err := svc.PurchaseProduct(ctx, p.ID(), "cust-1", "ord-1", "h1", "ubuntu"); err != nil {
+	if _, err := svc.PurchaseProduct(ctx, p.ID(), "cust-1", "ord-1", "", "h1", "ubuntu"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if _, err := svc.PurchaseProduct(ctx, p.ID(), "cust-2", "ord-2", "h2", "ubuntu"); err == nil {
+	if _, err := svc.PurchaseProduct(ctx, p.ID(), "cust-2", "ord-2", "", "h2", "ubuntu"); err == nil {
 		t.Fatal("expected error when no slots available")
 	}
 }
@@ -177,10 +186,10 @@ func TestProductApp_PurchaseFailsWhenDisabled(t *testing.T) {
 	bus := eventbus.New()
 	svc := NewProductAppService(repo, staticIDGen{id: "prod-3"}, bus, nil)
 
-	p, _ := svc.CreateProduct(ctx, "VPS Off", "vps-off", "DE-fra", "", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 10)
+	p, _ := svc.CreateProduct(ctx, "VPS Off", "vps-off", "DE-fra", "", "", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 10)
 	_ = svc.DisableProduct(ctx, p.ID())
 
-	if _, err := svc.PurchaseProduct(ctx, p.ID(), "cust-1", "ord-1", "h1", "ubuntu"); err == nil {
+	if _, err := svc.PurchaseProduct(ctx, p.ID(), "cust-1", "ord-1", "", "h1", "ubuntu"); err == nil {
 		t.Fatal("expected error when product disabled")
 	}
 }
@@ -192,7 +201,7 @@ func TestProductApp_AdjustStock_NormalSave(t *testing.T) {
 	checker := &stubCapacityChecker{slots: map[string]int{"region-de": 50}}
 	svc := NewProductAppService(repo, staticIDGen{id: "prod-4"}, bus, checker)
 
-	p, _ := svc.CreateProduct(ctx, "VPS Stock", "vps-stock", "DE-fra", "region-de", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 10)
+	p, _ := svc.CreateProduct(ctx, "VPS Stock", "vps-stock", "DE-fra", "region-de", "", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 10)
 
 	result, err := svc.AdjustStock(ctx, p.ID(), 30, false)
 	if err != nil {
@@ -213,7 +222,7 @@ func TestProductApp_AdjustStock_WarningWhenExceedsPhysical(t *testing.T) {
 	checker := &stubCapacityChecker{slots: map[string]int{"region-de": 10}}
 	svc := NewProductAppService(repo, staticIDGen{id: "prod-5"}, bus, checker)
 
-	p, _ := svc.CreateProduct(ctx, "VPS Over", "vps-over", "DE-fra", "region-de", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 5)
+	p, _ := svc.CreateProduct(ctx, "VPS Over", "vps-over", "DE-fra", "region-de", "", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 5)
 
 	result, err := svc.AdjustStock(ctx, p.ID(), 50, false)
 	if err != nil {
@@ -250,7 +259,7 @@ func TestProductApp_SetRegion(t *testing.T) {
 	bus := eventbus.New()
 	svc := NewProductAppService(repo, staticIDGen{id: "prod-6"}, bus, nil)
 
-	p, _ := svc.CreateProduct(ctx, "VPS Region", "vps-region", "DE-fra", "", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 10)
+	p, _ := svc.CreateProduct(ctx, "VPS Region", "vps-region", "DE-fra", "", "", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 10)
 
 	if err := svc.SetRegion(ctx, p.ID(), "region-de-fra"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -259,5 +268,16 @@ func TestProductApp_SetRegion(t *testing.T) {
 	stored, _ := repo.GetByID(ctx, p.ID())
 	if stored.RegionID() != "region-de-fra" {
 		t.Fatalf("expected region-de-fra, got %s", stored.RegionID())
+	}
+}
+
+func TestProductApp_CreateProductRejectsInvalidNetworkMode(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemProductRepo()
+	bus := eventbus.New()
+	svc := NewProductAppService(repo, staticIDGen{id: "prod-7"}, bus, nil)
+
+	if _, err := svc.CreateProduct(ctx, "VPS Invalid", "vps-invalid", "DE-fra", "", "", "bridge", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 1); err == nil {
+		t.Fatal("expected error for invalid network mode")
 	}
 }

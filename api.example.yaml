@@ -37,6 +37,10 @@ message:
     content: "Your account has been created successfully."
     template_code: ""                        # Optional template code; when set, raw content is ignored
 
+billing:
+  renewal_issue_lead_days: 7                 # generate next monthly invoice N days before current period ends
+  renewal_poll_interval: "1h"                # how often the renewal worker scans active monthly orders
+
 # Agent authentication is now handled via bootstrap tokens (created via
 # the admin API: POST /admin/bootstrap-tokens) and permanent node tokens
 # issued during registration. The old static agent.secret is no longer used.

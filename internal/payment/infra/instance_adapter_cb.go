@@ -56,6 +56,24 @@ func (a *InstanceAdapterWithCB) CreatePendingInstance(
 	return instanceID, nil
 }
 
+func (a *InstanceAdapterWithCB) GetByOrderID(orderID string) (paymentApp.RenewalInstance, error) {
+	return circuitbreaker.Execute(a.cb, func() (paymentApp.RenewalInstance, error) {
+		return a.inner.GetByOrderID(orderID)
+	})
+}
+
+func (a *InstanceAdapterWithCB) SuspendInstance(instanceID string) error {
+	return circuitbreaker.ExecuteNoResult(a.cb, func() error {
+		return a.inner.SuspendInstance(instanceID)
+	})
+}
+
+func (a *InstanceAdapterWithCB) RecoverFromBillingSuspension(instanceID string) error {
+	return circuitbreaker.ExecuteNoResult(a.cb, func() error {
+		return a.inner.RecoverFromBillingSuspension(instanceID)
+	})
+}
+
 // Stats returns the circuit breaker's current statistics.
 func (a *InstanceAdapterWithCB) Stats() circuitbreaker.Stats {
 	return a.cb.Stats()
@@ -63,3 +81,4 @@ func (a *InstanceAdapterWithCB) Stats() circuitbreaker.Stats {
 
 // Compile-time interface check
 var _ paymentApp.InstanceCreator = (*InstanceAdapterWithCB)(nil)
+var _ paymentApp.RenewalInstanceManager = (*InstanceAdapterWithCB)(nil)

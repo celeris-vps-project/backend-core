@@ -2,6 +2,9 @@ package app
 
 import (
 	"backend-core/internal/instance/domain"
+	"backend-core/pkg/contracts"
+	"backend-core/pkg/eventbus"
+	"backend-core/pkg/events"
 	"fmt"
 	"time"
 )
@@ -15,6 +18,16 @@ type InstanceAppService struct {
 	instanceRepo domain.InstanceRepository
 	ids          IDGenerator
 	bus          domain.ProvisioningBus // nil = no async dispatch
+	lifecycle    LifecycleTaskScheduler
+	events       EventPublisher
+}
+
+type EventPublisher interface {
+	Publish(eventbus.Event)
+}
+
+type LifecycleTaskScheduler interface {
+	Enqueue(nodeID string, taskType contracts.TaskType, spec contracts.ProvisionSpec) error
 }
 
 func NewInstanceAppService(
@@ -24,6 +37,14 @@ func NewInstanceAppService(
 	bus domain.ProvisioningBus,
 ) *InstanceAppService {
 	return &InstanceAppService{nodeRepo: nodeRepo, instanceRepo: instanceRepo, ids: ids, bus: bus}
+}
+
+func (s *InstanceAppService) SetLifecycleScheduler(scheduler LifecycleTaskScheduler) {
+	s.lifecycle = scheduler
+}
+
+func (s *InstanceAppService) SetEventPublisher(publisher EventPublisher) {
+	s.events = publisher
 }
 
 // ---- Instance purchase ----
@@ -71,95 +92,36 @@ func (s *InstanceAppService) PurchaseInstance(
 	if err := s.instanceRepo.Save(inst); err != nil {
 		return nil, err
 	}
+	s.publishState(inst)
 	return inst, nil
 }
 
 // CreatePendingInstance creates a pending instance that is immediately visible
-// to the user, and dispatches a provisioning request through the ProvisioningBus.
+// to the user.
 //
-// This is the primary entry point called after a successful payment webhook:
-//  1. Find an available node in the requested region → allocate a slot (best-effort)
-//  2. Persist the Instance with status=pending → user sees it immediately
-//  3. Dispatch a ProvisionRequest to the bus → async provisioning (only if node assigned)
-//
-// Slot validation failure is non-fatal: if no node is available in the region,
-// the instance is still created and persisted with an empty nodeID so the user
-// can see the pending record. Provisioning will be handled out-of-band.
-//
-// The bus implementation determines how provisioning is processed:
-// in-memory channel (throttled), RabbitMQ, direct call, etc.
+// In the payment flow, the provisioning context owns physical placement. This
+// method therefore only persists the user-facing delivery record and leaves
+// node selection / slot allocation to provisioning.
 func (s *InstanceAppService) CreatePendingInstance(
 	customerID, orderID, region string,
 	hostname, plan, os string,
 	cpu, memoryMB, diskGB int,
 ) (*domain.Instance, error) {
-	// 1. Attempt to find an available node in the requested region (best-effort).
-	//    If none is available, we still create the instance record as pending.
-	var node domain.NodeAllocator
-	nodes, err := s.nodeRepo.ListByLocation(region)
-	if err != nil {
-		fmt.Printf("[InstanceAppService] WARNING: could not list nodes for region %s: %v\n", region, err)
-	} else {
-		for _, n := range nodes {
-			if n.HasCapacity() {
-				node = n
-				break
-			}
-		}
-	}
+	// Region remains part of the request contract even though placement is
+	// deferred to provisioning. Keep it in the signature for compatibility.
+	_ = region
 
-	// 2. Allocate a physical slot on the chosen node (if one was found).
-	nodeID := ""
-	if node != nil {
-		if err := node.AllocateSlot(); err != nil {
-			fmt.Printf("[InstanceAppService] WARNING: slot allocation failed on node %s: %v — instance will be created without a node\n", node.ID(), err)
-			node = nil // treat as unavailable; fall through to no-node path
-		} else {
-			nodeID = node.ID()
-		}
-	}
-	if node == nil {
-		fmt.Printf("[InstanceAppService] WARNING: no available nodes in region %s — creating pending instance without node assignment\n", region)
-	}
-
-	// 3. Create the instance (status = pending, nodeID may be empty)
+	// Create the instance with no node assignment yet.
 	id := s.ids.NewID()
-	inst, err := domain.NewInstance(id, customerID, orderID, nodeID, hostname, plan, os, cpu, memoryMB, diskGB)
+	inst, err := domain.NewInstance(id, customerID, orderID, "", hostname, plan, os, cpu, memoryMB, diskGB)
 	if err != nil {
 		return nil, fmt.Errorf("create_pending: %w", err)
 	}
 
-	// 4. Persist node slot (if allocated) + instance (user sees it immediately)
-	if node != nil {
-		if err := s.nodeRepo.Save(node); err != nil {
-			// Non-fatal: log and continue — instance record is more important.
-			fmt.Printf("[InstanceAppService] WARNING: save node slot failed for node %s: %v\n", nodeID, err)
-		}
-	}
 	if err := s.instanceRepo.Save(inst); err != nil {
 		return nil, fmt.Errorf("create_pending: save instance failed: %w", err)
 	}
-
-	// 5. Dispatch to the provisioning bus (async) — only when a node was assigned.
-	if s.bus != nil && nodeID != "" {
-		req := domain.ProvisionRequest{
-			InstanceID: inst.ID(),
-			CustomerID: customerID,
-			OrderID:    orderID,
-			NodeID:     nodeID,
-			Hostname:   hostname,
-			Plan:       plan,
-			OS:         os,
-			CPU:        cpu,
-			MemoryMB:   memoryMB,
-			DiskGB:     diskGB,
-		}
-		if err := s.bus.Dispatch(req); err != nil {
-			// Instance is already persisted — provisioning can be retried.
-			// Log the error but don't fail the whole operation.
-			fmt.Printf("[InstanceAppService] WARNING: bus dispatch failed for instance %s: %v\n", inst.ID(), err)
-		}
-	}
+	s.publishState(inst)
 
 	return inst, nil
 }
@@ -168,6 +130,10 @@ func (s *InstanceAppService) CreatePendingInstance(
 
 func (s *InstanceAppService) GetInstance(instanceID string) (*domain.Instance, error) {
 	return s.instanceRepo.GetByID(instanceID)
+}
+
+func (s *InstanceAppService) GetByOrderID(orderID string) (*domain.Instance, error) {
+	return s.instanceRepo.GetByOrderID(orderID)
 }
 
 func (s *InstanceAppService) ListByCustomer(customerID string) ([]*domain.Instance, error) {
@@ -185,10 +151,20 @@ func (s *InstanceAppService) StartInstance(instanceID string) error {
 	if err != nil {
 		return err
 	}
+	if s.lifecycle != nil && inst.NodeID() != "" {
+		if inst.Status() != domain.InstanceStatusPending && inst.Status() != domain.InstanceStatusStopped {
+			return fmt.Errorf("domain_error: can only start from pending or stopped")
+		}
+		return s.enqueueLifecycleTask(inst, contracts.TaskStart)
+	}
 	if err := inst.Start(time.Now()); err != nil {
 		return err
 	}
-	return s.instanceRepo.Save(inst)
+	if err := s.instanceRepo.Save(inst); err != nil {
+		return err
+	}
+	s.publishState(inst)
+	return nil
 }
 
 func (s *InstanceAppService) StopInstance(instanceID string) error {
@@ -196,10 +172,20 @@ func (s *InstanceAppService) StopInstance(instanceID string) error {
 	if err != nil {
 		return err
 	}
+	if s.lifecycle != nil && inst.NodeID() != "" {
+		if inst.Status() != domain.InstanceStatusRunning {
+			return fmt.Errorf("domain_error: only running instances can be stopped")
+		}
+		return s.enqueueLifecycleTask(inst, contracts.TaskStop)
+	}
 	if err := inst.Stop(time.Now()); err != nil {
 		return err
 	}
-	return s.instanceRepo.Save(inst)
+	if err := s.instanceRepo.Save(inst); err != nil {
+		return err
+	}
+	s.publishState(inst)
+	return nil
 }
 
 func (s *InstanceAppService) SuspendInstance(instanceID string) error {
@@ -207,10 +193,17 @@ func (s *InstanceAppService) SuspendInstance(instanceID string) error {
 	if err != nil {
 		return err
 	}
+	if s.lifecycle != nil && inst.NodeID() != "" && inst.Status() == domain.InstanceStatusRunning {
+		return s.enqueueLifecycleTask(inst, contracts.TaskSuspend)
+	}
 	if err := inst.Suspend(time.Now()); err != nil {
 		return err
 	}
-	return s.instanceRepo.Save(inst)
+	if err := s.instanceRepo.Save(inst); err != nil {
+		return err
+	}
+	s.publishState(inst)
+	return nil
 }
 
 func (s *InstanceAppService) UnsuspendInstance(instanceID string) error {
@@ -218,16 +211,32 @@ func (s *InstanceAppService) UnsuspendInstance(instanceID string) error {
 	if err != nil {
 		return err
 	}
+	if s.lifecycle != nil && inst.NodeID() != "" {
+		if inst.Status() != domain.InstanceStatusSuspended {
+			return fmt.Errorf("domain_error: only suspended instances can be unsuspended")
+		}
+		return s.enqueueLifecycleTask(inst, contracts.TaskUnsuspend)
+	}
 	if err := inst.Unsuspend(time.Now()); err != nil {
 		return err
 	}
-	return s.instanceRepo.Save(inst)
+	if err := s.instanceRepo.Save(inst); err != nil {
+		return err
+	}
+	s.publishState(inst)
+	return nil
 }
 
 func (s *InstanceAppService) TerminateInstance(instanceID string) error {
 	inst, err := s.instanceRepo.GetByID(instanceID)
 	if err != nil {
 		return err
+	}
+	if s.lifecycle != nil && inst.NodeID() != "" {
+		if inst.Status() == domain.InstanceStatusTerminated {
+			return fmt.Errorf("domain_error: instance already terminated")
+		}
+		return s.enqueueLifecycleTask(inst, contracts.TaskDeprovision)
 	}
 	if err := inst.Terminate(time.Now()); err != nil {
 		return err
@@ -240,7 +249,11 @@ func (s *InstanceAppService) TerminateInstance(instanceID string) error {
 		_ = s.nodeRepo.Save(node)
 	}
 
-	return s.instanceRepo.Save(inst)
+	if err := s.instanceRepo.Save(inst); err != nil {
+		return err
+	}
+	s.publishState(inst)
+	return nil
 }
 
 func (s *InstanceAppService) AssignIP(instanceID, ipv4, ipv6 string) error {
@@ -251,16 +264,21 @@ func (s *InstanceAppService) AssignIP(instanceID, ipv4, ipv6 string) error {
 	if err := inst.AssignIP(ipv4, ipv6); err != nil {
 		return err
 	}
-	return s.instanceRepo.Save(inst)
+	if err := s.instanceRepo.Save(inst); err != nil {
+		return err
+	}
+	s.publishState(inst)
+	return nil
 }
 
 // ConfirmProvisioning is called when the provisioning layer confirms that
 // a VM has been successfully created and booted. It updates the instance
-// status to "running", assigns the internal IP, and records NAT port info.
+// status to "running", records the actual node assignment, assigns the
+// internal IP, and stores NAT port info.
 //
 // This method is designed to be called from an event handler subscribing
 // to ProvisioningCompletedEvent.
-func (s *InstanceAppService) ConfirmProvisioning(instanceID, ipv4, ipv6, networkMode string, natPort int) error {
+func (s *InstanceAppService) ConfirmProvisioning(instanceID, nodeID, ipv4, ipv6, networkMode string, natPort int) error {
 	inst, err := s.instanceRepo.GetByID(instanceID)
 	if err != nil {
 		// Instance may not exist yet if the provisioning was triggered
@@ -268,6 +286,12 @@ func (s *InstanceAppService) ConfirmProvisioning(instanceID, ipv4, ipv6, network
 		// creating an instance record first). Log and skip.
 		fmt.Printf("[InstanceAppService] WARNING: instance %s not found for provisioning confirmation: %v\n", instanceID, err)
 		return nil
+	}
+
+	if nodeID != "" && inst.NodeID() != nodeID {
+		if assignNodeErr := inst.AssignNode(nodeID); assignNodeErr != nil {
+			fmt.Printf("[InstanceAppService] WARNING: failed to assign node to instance %s: %v\n", instanceID, assignNodeErr)
+		}
 	}
 
 	// Assign IP addresses (if provided)
@@ -294,8 +318,176 @@ func (s *InstanceAppService) ConfirmProvisioning(instanceID, ipv4, ipv6, network
 	if err := s.instanceRepo.Save(inst); err != nil {
 		return fmt.Errorf("confirm_provisioning: save instance %s failed: %w", instanceID, err)
 	}
+	s.publishState(inst)
 
 	fmt.Printf("[InstanceAppService] provisioning confirmed: instance=%s status=%s ipv4=%s nat=%s:%d\n",
 		instanceID, inst.Status(), ipv4, networkMode, natPort)
 	return nil
+}
+
+func (s *InstanceAppService) ConfirmStarted(instanceID string) error {
+	inst, err := s.instanceRepo.GetByID(instanceID)
+	if err != nil {
+		return err
+	}
+	if inst.Status() == domain.InstanceStatusRunning {
+		return nil
+	}
+	if err := inst.Start(time.Now()); err != nil {
+		return err
+	}
+	if err := s.instanceRepo.Save(inst); err != nil {
+		return err
+	}
+	s.publishState(inst)
+	return nil
+}
+
+func (s *InstanceAppService) ConfirmStopped(instanceID string) error {
+	inst, err := s.instanceRepo.GetByID(instanceID)
+	if err != nil {
+		return err
+	}
+	if inst.Status() == domain.InstanceStatusStopped {
+		return nil
+	}
+	if err := inst.Stop(time.Now()); err != nil {
+		return err
+	}
+	if err := s.instanceRepo.Save(inst); err != nil {
+		return err
+	}
+	s.publishState(inst)
+	return nil
+}
+
+func (s *InstanceAppService) ConfirmSuspended(instanceID string) error {
+	inst, err := s.instanceRepo.GetByID(instanceID)
+	if err != nil {
+		return err
+	}
+	if inst.Status() == domain.InstanceStatusSuspended {
+		return nil
+	}
+	if err := inst.Suspend(time.Now()); err != nil {
+		return err
+	}
+	if err := s.instanceRepo.Save(inst); err != nil {
+		return err
+	}
+	s.publishState(inst)
+	return nil
+}
+
+func (s *InstanceAppService) ConfirmUnsuspended(instanceID string) error {
+	inst, err := s.instanceRepo.GetByID(instanceID)
+	if err != nil {
+		return err
+	}
+	if inst.Status() == domain.InstanceStatusRunning {
+		return nil
+	}
+	if err := inst.Unsuspend(time.Now()); err != nil {
+		return err
+	}
+	if err := s.instanceRepo.Save(inst); err != nil {
+		return err
+	}
+	s.publishState(inst)
+	return nil
+}
+
+func (s *InstanceAppService) ConfirmTerminated(instanceID string) error {
+	inst, err := s.instanceRepo.GetByID(instanceID)
+	if err != nil {
+		return err
+	}
+	if inst.Status() == domain.InstanceStatusTerminated {
+		return nil
+	}
+	if err := inst.Terminate(time.Now()); err != nil {
+		return err
+	}
+	if err := s.instanceRepo.Save(inst); err != nil {
+		return err
+	}
+	s.publishState(inst)
+	return nil
+}
+
+func (s *InstanceAppService) RecoverFromBillingSuspension(instanceID string) error {
+	inst, err := s.instanceRepo.GetByID(instanceID)
+	if err != nil {
+		return err
+	}
+	if inst.Status() == domain.InstanceStatusStopped {
+		return nil
+	}
+	if err := inst.RecoverFromBillingSuspension(time.Now()); err != nil {
+		return err
+	}
+	if err := s.instanceRepo.Save(inst); err != nil {
+		return err
+	}
+	s.publishState(inst)
+	return nil
+}
+
+func (s *InstanceAppService) enqueueLifecycleTask(inst *domain.Instance, taskType contracts.TaskType) error {
+	if s.lifecycle == nil {
+		return nil
+	}
+	spec := contracts.ProvisionSpec{
+		InstanceID: inst.ID(),
+		Hostname:   inst.Hostname(),
+		OS:         inst.OS(),
+		CPU:        inst.CPU(),
+		MemoryMB:   inst.MemoryMB(),
+		DiskGB:     inst.DiskGB(),
+	}
+	if inst.NetworkMode() == "nat" {
+		spec.NetworkMode = contracts.NetworkModeNAT
+		spec.NATPort = inst.NATPort()
+	}
+	return s.lifecycle.Enqueue(inst.NodeID(), taskType, spec)
+}
+
+func (s *InstanceAppService) publishState(inst *domain.Instance) {
+	if s.events == nil || inst == nil {
+		return
+	}
+	s.events.Publish(toInstanceStateEvent(inst))
+}
+
+func toInstanceStateEvent(inst *domain.Instance) events.InstanceStateUpdatedEvent {
+	return events.InstanceStateUpdatedEvent{
+		InstanceID:   inst.ID(),
+		CustomerID:   inst.CustomerID(),
+		OrderID:      inst.OrderID(),
+		NodeID:       inst.NodeID(),
+		Hostname:     inst.Hostname(),
+		Plan:         inst.Plan(),
+		OS:           inst.OS(),
+		CPU:          inst.CPU(),
+		MemoryMB:     inst.MemoryMB(),
+		DiskGB:       inst.DiskGB(),
+		IPv4:         inst.IPv4(),
+		IPv6:         inst.IPv6(),
+		Status:       inst.Status(),
+		NetworkMode:  inst.NetworkMode(),
+		NATPort:      inst.NATPort(),
+		CreatedAt:    inst.CreatedAt().Format(time.RFC3339),
+		StartedAt:    formatOptionalTime(inst.StartedAt()),
+		StoppedAt:    formatOptionalTime(inst.StoppedAt()),
+		SuspendedAt:  formatOptionalTime(inst.SuspendedAt()),
+		TerminatedAt: formatOptionalTime(inst.TerminatedAt()),
+	}
+}
+
+func formatOptionalTime(ts *time.Time) *string {
+	if ts == nil {
+		return nil
+	}
+	formatted := ts.Format(time.RFC3339)
+	return &formatted
 }

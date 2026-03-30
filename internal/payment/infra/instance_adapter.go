@@ -2,6 +2,7 @@ package infra
 
 import (
 	instanceApp "backend-core/internal/instance/app"
+	paymentApp "backend-core/internal/payment/app"
 )
 
 // InstanceAdapter implements paymentApp.InstanceCreator by wrapping the
@@ -27,4 +28,23 @@ func (a *InstanceAdapter) CreatePendingInstance(
 		return "", err
 	}
 	return inst.ID(), nil
+}
+
+func (a *InstanceAdapter) GetByOrderID(orderID string) (paymentApp.RenewalInstance, error) {
+	inst, err := a.svc.GetByOrderID(orderID)
+	if err != nil {
+		return paymentApp.RenewalInstance{}, err
+	}
+	return paymentApp.RenewalInstance{
+		ID:     inst.ID(),
+		Status: inst.Status(),
+	}, nil
+}
+
+func (a *InstanceAdapter) SuspendInstance(instanceID string) error {
+	return a.svc.SuspendInstance(instanceID)
+}
+
+func (a *InstanceAdapter) RecoverFromBillingSuspension(instanceID string) error {
+	return a.svc.RecoverFromBillingSuspension(instanceID)
 }

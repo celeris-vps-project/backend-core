@@ -24,6 +24,14 @@ func (r *memoryOrderRepo) GetByID(id string) (*domain.Order, error) {
 	return o, nil
 }
 
+func (r *memoryOrderRepo) ListAll() ([]*domain.Order, error) {
+	var result []*domain.Order
+	for _, o := range r.items {
+		result = append(result, o)
+	}
+	return result, nil
+}
+
 func (r *memoryOrderRepo) ListByCustomerID(customerID string) ([]*domain.Order, error) {
 	var result []*domain.Order
 	for _, o := range r.items {
@@ -121,5 +129,26 @@ func TestOrderApp_Cancel(t *testing.T) {
 	stored, _ := repo.GetByID("ord-300")
 	if stored.Status() != domain.OrderStatusCancelled {
 		t.Fatalf("expected cancelled, got %s", stored.Status())
+	}
+}
+
+func TestOrderApp_ReplaceInvoice(t *testing.T) {
+	repo := newMemoryOrderRepo()
+	svc := NewOrderAppService(repo, staticIDGen{id: "ord-400"})
+
+	order, _ := svc.CreateOrder(
+		"cust-4", "prod-4", "inv-4", "monthly",
+		"app-01", "vps-basic", "ap-southeast-1", "ubuntu-24.04",
+		2, 2048, 40,
+		"USD", 1200,
+	)
+	_ = svc.ActivateOrder(order.ID())
+
+	if err := svc.ReplaceInvoice(order.ID(), "inv-4-renew"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	stored, _ := repo.GetByID(order.ID())
+	if stored.InvoiceID() != "inv-4-renew" {
+		t.Fatalf("expected invoice inv-4-renew, got %s", stored.InvoiceID())
 	}
 }

@@ -142,10 +142,19 @@ func (i *Instance) NetworkMode() string {
 	return i.networkMode
 }
 
-func (i *Instance) NATPort() int              { return i.natPort }
-func (i *Instance) IsNAT() bool               { return i.networkMode == "nat" }
+func (i *Instance) NATPort() int               { return i.natPort }
+func (i *Instance) IsNAT() bool                { return i.networkMode == "nat" }
 func (i *Instance) SetNetworkMode(mode string) { i.networkMode = mode }
 func (i *Instance) SetNATPort(port int)        { i.natPort = port }
+
+// AssignNode records the host node that fulfilled this instance.
+func (i *Instance) AssignNode(nodeID string) error {
+	if nodeID == "" {
+		return errors.New("domain_error: node id is required")
+	}
+	i.nodeID = nodeID
+	return nil
+}
 
 // AssignNAT sets the NAT network mode and port for this instance.
 func (i *Instance) AssignNAT(port int) error {
@@ -203,6 +212,18 @@ func (i *Instance) Unsuspend(at time.Time) error {
 	}
 	i.status = InstanceStatusRunning
 	i.startedAt = &at
+	i.suspendedAt = nil
+	return nil
+}
+
+// RecoverFromBillingSuspension returns a suspended instance to stopped state
+// after overdue payment is received. The user must start it manually.
+func (i *Instance) RecoverFromBillingSuspension(at time.Time) error {
+	if i.status != InstanceStatusSuspended {
+		return errors.New("domain_error: only suspended instances can recover to stopped")
+	}
+	i.status = InstanceStatusStopped
+	i.stoppedAt = &at
 	i.suspendedAt = nil
 	return nil
 }

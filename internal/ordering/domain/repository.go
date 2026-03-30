@@ -3,6 +3,7 @@ package domain
 // OrderRepository provides persistence for orders.
 type OrderRepository interface {
 	GetByID(id string) (*Order, error)
+	ListAll() ([]*Order, error)
 	ListByCustomerID(customerID string) ([]*Order, error)
 	Save(order *Order) error
 }

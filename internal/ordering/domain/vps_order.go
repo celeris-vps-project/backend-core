@@ -105,7 +105,7 @@ func (o *Order) ID() string           { return o.id }
 func (o *Order) CustomerID() string   { return o.customerID }
 func (o *Order) ProductID() string    { return o.productID }
 func (o *Order) InvoiceID() string    { return o.invoiceID }
-func (o *Order) BillingCycle() string  { return o.billingCycle }
+func (o *Order) BillingCycle() string { return o.billingCycle }
 func (o *Order) VPSConfig() VPSConfig { return o.vpsConfig }
 func (o *Order) Status() string       { return o.status }
 func (o *Order) Currency() string     { return o.currency }
@@ -176,6 +176,18 @@ func (o *Order) LinkInvoice(invoiceID string) error {
 	}
 	if o.status != OrderStatusPending {
 		return errors.New("domain_error: invoice can only be linked to pending orders")
+	}
+	o.invoiceID = invoiceID
+	return nil
+}
+
+// ReplaceInvoice updates the outstanding invoice reference for recurring billing.
+func (o *Order) ReplaceInvoice(invoiceID string) error {
+	if invoiceID == "" {
+		return errors.New("domain_error: invoice id is required")
+	}
+	if o.status == OrderStatusCancelled || o.status == OrderStatusTerminated {
+		return errors.New("domain_error: inactive orders cannot replace invoice")
 	}
 	o.invoiceID = invoiceID
 	return nil

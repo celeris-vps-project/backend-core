@@ -54,6 +54,30 @@ func (a *OrderingAdapterWithCB) CancelOrder(orderID, reason string) error {
 	})
 }
 
+func (a *OrderingAdapterWithCB) SuspendOrder(orderID string) error {
+	return circuitbreaker.ExecuteNoResult(a.cb, func() error {
+		return a.inner.SuspendOrder(orderID)
+	})
+}
+
+func (a *OrderingAdapterWithCB) UnsuspendOrder(orderID string) error {
+	return circuitbreaker.ExecuteNoResult(a.cb, func() error {
+		return a.inner.UnsuspendOrder(orderID)
+	})
+}
+
+func (a *OrderingAdapterWithCB) ReplaceInvoice(orderID, invoiceID string) error {
+	return circuitbreaker.ExecuteNoResult(a.cb, func() error {
+		return a.inner.ReplaceInvoice(orderID, invoiceID)
+	})
+}
+
+func (a *OrderingAdapterWithCB) ListOrders() ([]paymentApp.PayableOrder, error) {
+	return circuitbreaker.Execute(a.cb, func() ([]paymentApp.PayableOrder, error) {
+		return a.inner.ListOrders()
+	})
+}
+
 // GetOrderForPayment delegates to the inner adapter with circuit breaker protection.
 // On circuit open: returns a fast-fail error.
 func (a *OrderingAdapterWithCB) GetOrderForPayment(orderID string) (paymentApp.PayableOrder, error) {

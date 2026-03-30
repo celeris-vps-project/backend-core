@@ -17,6 +17,7 @@ type ProductPurchasedEvent struct {
 	ResourcePoolID string // the resource pool this product belongs to
 	CustomerID     string
 	OrderID        string
+	InstanceID     string // optional: the pre-created instance record to fulfill
 	Hostname       string
 	OS             string
 	CPU            int
@@ -30,10 +31,13 @@ func (ProductPurchasedEvent) EventName() string { return "product.purchased" }
 // ProductSlotReleasedEvent is emitted when a product slot is released
 // (e.g. cancellation / termination), so the Node domain can free resources.
 type ProductSlotReleasedEvent struct {
-	ProductID  string
-	RegionID   string
-	CustomerID string
-	OrderID    string
+	ProductID   string
+	RegionID    string
+	CustomerID  string
+	OrderID     string
+	InstanceID  string
+	NodeID      string
+	NetworkMode string
 }
 
 func (ProductSlotReleasedEvent) EventName() string { return "product.slot_released" }
@@ -67,6 +71,28 @@ type ProvisioningFailedEvent struct {
 
 func (ProvisioningFailedEvent) EventName() string { return "node.provisioning_failed" }
 
+type InstanceTaskCompletedEvent struct {
+	InstanceID string
+	NodeID     string
+	TaskID     string
+	TaskType   string
+	IPv4       string
+	IPv6       string
+	VMState    string
+}
+
+func (InstanceTaskCompletedEvent) EventName() string { return "node.instance_task_completed" }
+
+type InstanceTaskFailedEvent struct {
+	InstanceID string
+	NodeID     string
+	TaskID     string
+	TaskType   string
+	Error      string
+}
+
+func (InstanceTaskFailedEvent) EventName() string { return "node.instance_task_failed" }
+
 // NodeStateUpdatedEvent is emitted whenever a node's runtime state changes
 // (agent registration or heartbeat). The WebSocket hub listens to this event
 // to push real-time updates to connected admin clients.
@@ -83,3 +109,31 @@ type NodeStateUpdatedEvent struct {
 }
 
 func (NodeStateUpdatedEvent) EventName() string { return "node.state_updated" }
+
+// InstanceStateUpdatedEvent is emitted whenever the customer-visible runtime
+// state of an instance changes. The customer-facing WebSocket hub listens to
+// this event and forwards matching updates to the owning user.
+type InstanceStateUpdatedEvent struct {
+	InstanceID   string  `json:"id"`
+	CustomerID   string  `json:"-"`
+	OrderID      string  `json:"order_id"`
+	NodeID       string  `json:"node_id"`
+	Hostname     string  `json:"hostname"`
+	Plan         string  `json:"plan"`
+	OS           string  `json:"os"`
+	CPU          int     `json:"cpu"`
+	MemoryMB     int     `json:"memory_mb"`
+	DiskGB       int     `json:"disk_gb"`
+	IPv4         string  `json:"ipv4,omitempty"`
+	IPv6         string  `json:"ipv6,omitempty"`
+	Status       string  `json:"status"`
+	NetworkMode  string  `json:"network_mode,omitempty"`
+	NATPort      int     `json:"nat_port,omitempty"`
+	CreatedAt    string  `json:"created_at"`
+	StartedAt    *string `json:"started_at,omitempty"`
+	StoppedAt    *string `json:"stopped_at,omitempty"`
+	SuspendedAt  *string `json:"suspended_at,omitempty"`
+	TerminatedAt *string `json:"terminated_at,omitempty"`
+}
+
+func (InstanceStateUpdatedEvent) EventName() string { return "instance.state_updated" }

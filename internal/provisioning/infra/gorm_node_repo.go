@@ -242,6 +242,18 @@ func (r *GormIPAddressRepo) ListByNodeID(nodeID string) ([]*domain.IPAddress, er
 	return out, nil
 }
 
+func (r *GormIPAddressRepo) FindByInstanceID(instanceID string) (*domain.IPAddress, error) {
+	var po IPAddressPO
+	err := r.db.Where("instance_id = ?", instanceID).First(&po).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("ip allocation not found")
+		}
+		return nil, err
+	}
+	return ipToDomain(po), nil
+}
+
 func (r *GormIPAddressRepo) FindAvailable(nodeID string, version int) (*domain.IPAddress, error) {
 	var po IPAddressPO
 	err := r.db.Where("node_id = ? AND version = ? AND instance_id = ''", nodeID, version).First(&po).Error

@@ -26,8 +26,8 @@ func NewHostNodeAllocatorAdapter(hostRepo nodeDomain.HostNodeRepository) *HostNo
 // can avoid a brittle concrete type assertion on *nodeDomain.HostNode.
 // The wrapper is an internal infra detail — callers only see domain.NodeAllocator.
 type wrappedNode struct {
-	*nodeDomain.HostNode                          // promotes all NodeAllocator methods
-	repo         nodeDomain.HostNodeRepository    // back-reference for persisting
+	*nodeDomain.HostNode                               // promotes all NodeAllocator methods
+	repo                 nodeDomain.HostNodeRepository // back-reference for persisting
 }
 
 func (w *wrappedNode) save() error {
@@ -119,6 +119,17 @@ func NewGormInstanceRepo(db *gorm.DB) *GormInstanceRepo { return &GormInstanceRe
 func (r *GormInstanceRepo) GetByID(id string) (*domain.Instance, error) {
 	var po InstancePO
 	if err := r.db.Where("id = ?", id).First(&po).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("instance not found")
+		}
+		return nil, err
+	}
+	return instanceToDomain(po), nil
+}
+
+func (r *GormInstanceRepo) GetByOrderID(orderID string) (*domain.Instance, error) {
+	var po InstancePO
+	if err := r.db.Where("order_id = ?", orderID).First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("instance not found")
 		}

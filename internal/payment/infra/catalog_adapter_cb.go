@@ -18,9 +18,9 @@ func NewCatalogAdapterWithCB(inner *CatalogAdapter, cb *circuitbreaker.CircuitBr
 	return &CatalogAdapterWithCB{inner: inner, cb: cb}
 }
 
-func (a *CatalogAdapterWithCB) PurchaseProduct(ctx context.Context, productID, customerID, orderID, hostname, os string) (paymentApp.PurchasedProduct, error) {
+func (a *CatalogAdapterWithCB) PurchaseProduct(ctx context.Context, productID, customerID, orderID, instanceID, hostname, os string) (paymentApp.PurchasedProduct, error) {
 	return circuitbreaker.Execute(a.cb, func() (paymentApp.PurchasedProduct, error) {
-		return a.inner.PurchaseProduct(ctx, productID, customerID, orderID, hostname, os)
+		return a.inner.PurchaseProduct(ctx, productID, customerID, orderID, instanceID, hostname, os)
 	})
 }
 

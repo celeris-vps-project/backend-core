@@ -59,6 +59,18 @@ func (r *GormOrderRepo) GetByID(id string) (*domain.Order, error) {
 	return orderToDomain(po), nil
 }
 
+func (r *GormOrderRepo) ListAll() ([]*domain.Order, error) {
+	var pos []OrderPO
+	if err := r.db.Find(&pos).Error; err != nil {
+		return nil, err
+	}
+	orders := make([]*domain.Order, len(pos))
+	for i, po := range pos {
+		orders[i] = orderToDomain(po)
+	}
+	return orders, nil
+}
+
 func (r *GormOrderRepo) ListByCustomerID(customerID string) ([]*domain.Order, error) {
 	var pos []OrderPO
 	if err := r.db.Where("customer_id = ?", customerID).Find(&pos).Error; err != nil {

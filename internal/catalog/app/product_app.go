@@ -6,6 +6,7 @@ import (
 	"backend-core/pkg/events"
 	"context"
 	"fmt"
+	"strings"
 )
 
 type IDGenerator interface{ NewID() string }
@@ -47,9 +48,13 @@ func NewProductAppService(
 }
 
 // CreateProduct creates a new VPS product in the catalog.
-func (s *ProductAppService) CreateProduct(ctx context.Context, name, slug, location, regionID, resourcePoolID string, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle domain.BillingCycle, totalSlots int) (*domain.Product, error) {
+func (s *ProductAppService) CreateProduct(ctx context.Context, name, slug, location, regionID, resourcePoolID, networkMode string, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle domain.BillingCycle, totalSlots int) (*domain.Product, error) {
 	id := s.ids.NewID()
 	p, err := domain.NewProduct(id, name, slug, location, cpu, memoryMB, diskGB, bandwidthGB, priceAmount, currency, cycle, totalSlots)
+	if err != nil {
+		return nil, err
+	}
+	mode, err := normalizeNetworkMode(networkMode)
 	if err != nil {
 		return nil, err
 	}
@@ -59,6 +64,7 @@ func (s *ProductAppService) CreateProduct(ctx context.Context, name, slug, locat
 	if resourcePoolID != "" {
 		p.SetResourcePoolID(resourcePoolID)
 	}
+	p.SetNetworkMode(mode)
 	if err := s.repo.Save(ctx, p); err != nil {
 		return nil, err
 	}
@@ -69,7 +75,7 @@ func (s *ProductAppService) CreateProduct(ctx context.Context, name, slug, locat
 // and publishes a ProductPurchasedEvent for the Node domain to handle
 // physical provisioning independently.
 func (s *ProductAppService) PurchaseProduct(
-	ctx context.Context, productID, customerID, orderID, hostname, os string,
+	ctx context.Context, productID, customerID, orderID, instanceID, hostname, os string,
 ) (*domain.Product, error) {
 	p, err := s.repo.GetByID(ctx, productID)
 	if err != nil {
@@ -99,11 +105,13 @@ func (s *ProductAppService) PurchaseProduct(
 		ResourcePoolID: p.ResourcePoolID(),
 		CustomerID:     customerID,
 		OrderID:        orderID,
+		InstanceID:     instanceID,
 		Hostname:       hostname,
 		OS:             os,
 		CPU:            p.CPU(),
 		MemoryMB:       p.MemoryMB(),
 		DiskGB:         p.DiskGB(),
+		NetworkMode:    p.NetworkMode(),
 	})
 
 	// Publish collected domain events
@@ -235,5 +243,16 @@ func (s *ProductAppService) publishEvents(p *domain.Product) {
 		if evt, ok := e.(eventbus.Event); ok {
 			s.eventBus.Publish(evt)
 		}
+	}
+}
+
+func normalizeNetworkMode(mode string) (string, error) {
+	switch normalized := strings.ToLower(strings.TrimSpace(mode)); normalized {
+	case "", "dedicated":
+		return "dedicated", nil
+	case "nat":
+		return "nat", nil
+	default:
+		return "", fmt.Errorf("domain_error: invalid network mode %q", mode)
 	}
 }
