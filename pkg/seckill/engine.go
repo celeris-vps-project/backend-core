@@ -16,11 +16,11 @@ import (
 //
 // Pipeline stages (each is optional except Execute):
 //
-//	1. Gate     — reject if too many in-flight requests (thundering herd)
-//	2. Dedup    — reject if same key was seen within TTL (double buy)
-//	3. Stock    — reject if inventory exhausted (overselling)
-//	4. Execute  — run the caller's business logic (the closure)
-//	5. Hooks    — fire onSuccess / onReject callbacks
+//  1. Gate     — reject if too many in-flight requests (thundering herd)
+//  2. Dedup    — reject if same key was seen within TTL (double buy)
+//  3. Stock    — reject if inventory exhausted (overselling)
+//  4. Execute  — run the caller's business logic (the closure)
+//  5. Hooks    — fire onSuccess / onReject callbacks
 //
 // If a stage is not configured (e.g. no WithGate), it is simply skipped.
 //

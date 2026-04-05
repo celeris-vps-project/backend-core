@@ -24,7 +24,7 @@ virt_opts: {}                 # Backend-specific options, e.g.:
   # ── libvirt ──
   # uri: "qemu:///system"
 
-  # ── incus ──de
+  # ── incus ──
   # project: "default"
   # socket: "/var/lib/incus/unix.socket"
 
