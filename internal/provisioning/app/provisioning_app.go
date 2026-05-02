@@ -140,6 +140,17 @@ func (s *ProvisioningAppService) DisableHost(id string) error {
 	return s.hostRepo.Save(h)
 }
 
+func (s *ProvisioningAppService) UpdateNATEntryHost(nodeID, natEntryHost string) error {
+	h, err := s.hostRepo.GetByID(nodeID)
+	if err != nil {
+		return err
+	}
+	if err := h.SetNATEntryHost(natEntryHost); err != nil {
+		return err
+	}
+	return s.hostRepo.Save(h)
+}
+
 func (s *ProvisioningAppService) AllocateSlot(nodeID string) error {
 	h, err := s.hostRepo.GetByID(nodeID)
 	if err != nil {

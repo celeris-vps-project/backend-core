@@ -37,6 +37,10 @@ type AddIPRequest struct {
 	Version int    `json:"version" vd:"$==4||$==6"`
 }
 
+type UpdateNATEntryHostRequest struct {
+	NATEntryHost string `json:"nat_entry_host"`
+}
+
 type EnqueueTaskRequest struct {
 	Type contracts.TaskType      `json:"type" vd:"len($)>0"`
 	Spec contracts.ProvisionSpec `json:"spec"`
@@ -234,6 +238,22 @@ func (h *NodeHandler) EnableHost(ctx context.Context, c *hz_app.RequestContext) 
 // POST /host-nodes/:id/disable
 func (h *NodeHandler) DisableHost(ctx context.Context, c *hz_app.RequestContext) {
 	if err := h.svc.DisableHost(c.Param("id")); err != nil {
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
+		return
+	}
+	node, _ := h.svc.GetHost(c.Param("id"))
+	state, _ := h.svc.StateCache().GetNodeState(node.ID())
+	c.JSON(consts.StatusOK, utils.H{"data": toHostResp(node, state)})
+}
+
+// PUT /host-nodes/:id/nat-entry
+func (h *NodeHandler) UpdateNATEntryHost(ctx context.Context, c *hz_app.RequestContext) {
+	var req UpdateNATEntryHostRequest
+	if err := c.BindAndValidate(&req); err != nil {
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
+		return
+	}
+	if err := h.svc.UpdateNATEntryHost(c.Param("id"), req.NATEntryHost); err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
 		return
 	}

@@ -18,8 +18,9 @@ type LoginRequest struct {
 }
 
 type RegisterRequest struct {
-	Email    string `json:"email" vd:"email"`
-	Password string `json:"password" vd:"len($)>5"`
+	Email            string `json:"email" vd:"email"`
+	Password         string `json:"password" vd:"len($)>5"`
+	VerificationCode string `json:"verification_code"`
 }
 
 type AuthHandler struct {
@@ -60,7 +61,7 @@ func (h *AuthHandler) Register(ctx context.Context, c *hz_app.RequestContext) {
 		return
 	}
 
-	token, err := h.authApp.RegisterUser(ctx, req.Email, req.Password)
+	token, err := h.authApp.RegisterUser(ctx, req.Email, req.Password, req.VerificationCode)
 	if err != nil {
 		code := classifyRegisterError(err)
 		c.JSON(consts.StatusBadRequest, apperr.Resp(code, err.Error()))
@@ -146,6 +147,10 @@ func classifyRegisterError(err error) string {
 	switch {
 	case strings.Contains(msg, "email already registered"):
 		return apperr.CodeEmailTaken
+	case strings.Contains(msg, "verification code is required"):
+		return apperr.CodeVerificationRequired
+	case strings.Contains(msg, "invalid verification code"):
+		return apperr.CodeInvalidVerificationCode
 	default:
 		return apperr.CodeInternalError
 	}

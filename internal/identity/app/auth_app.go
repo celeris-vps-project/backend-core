@@ -25,11 +25,22 @@ type RegistrationNotifier interface {
 	NotifyUserRegistered(ctx context.Context, userID, email string) error
 }
 
+type RegistrationVerifier interface {
+	IsRegistrationVerificationRequired(ctx context.Context) (bool, error)
+	VerifyRegistrationCode(ctx context.Context, email, code string) error
+}
+
+type PasswordResetVerifier interface {
+	VerifyPasswordResetCode(ctx context.Context, email, code string) error
+}
+
 type AuthAppService struct {
-	repo                 domain.UserRepository
-	token                TokenGenerator
-	hasher               PasswordHasher
-	registrationNotifier RegistrationNotifier
+	repo                  domain.UserRepository
+	token                 TokenGenerator
+	hasher                PasswordHasher
+	registrationNotifier  RegistrationNotifier
+	registrationVerifier  RegistrationVerifier
+	passwordResetVerifier PasswordResetVerifier
 }
 
 func NewAuthAppService(r domain.UserRepository, t TokenGenerator, h PasswordHasher, registrationNotifier RegistrationNotifier) *AuthAppService {
@@ -39,6 +50,14 @@ func NewAuthAppService(r domain.UserRepository, t TokenGenerator, h PasswordHash
 		hasher:               h,
 		registrationNotifier: registrationNotifier,
 	}
+}
+
+func (app *AuthAppService) SetRegistrationVerifier(verifier RegistrationVerifier) {
+	app.registrationVerifier = verifier
+}
+
+func (app *AuthAppService) SetPasswordResetVerifier(verifier PasswordResetVerifier) {
+	app.passwordResetVerifier = verifier
 }
 
 func (app *AuthAppService) Login(ctx context.Context, email, plainPassword string) (string, string, error) {
@@ -58,9 +77,25 @@ func (app *AuthAppService) Login(ctx context.Context, email, plainPassword strin
 	return token, user.Role(), nil
 }
 
-func (app *AuthAppService) RegisterUser(ctx context.Context, email, plainPassword string) (string, error) {
+func (app *AuthAppService) RegisterUser(ctx context.Context, email, plainPassword string, verificationCode ...string) (string, error) {
 	if _, err := app.repo.FindByEmail(ctx, email); err == nil {
 		return "", errors.New("email already registered")
+	}
+
+	if app.registrationVerifier != nil {
+		required, err := app.registrationVerifier.IsRegistrationVerificationRequired(ctx)
+		if err != nil {
+			return "", err
+		}
+		if required {
+			code := ""
+			if len(verificationCode) > 0 {
+				code = verificationCode[0]
+			}
+			if err := app.registrationVerifier.VerifyRegistrationCode(ctx, email, code); err != nil {
+				return "", err
+			}
+		}
 	}
 
 	hash, err := app.hasher.Hash(plainPassword)
@@ -85,6 +120,24 @@ func (app *AuthAppService) RegisterUser(ctx context.Context, email, plainPasswor
 	}
 
 	return token, nil
+}
+
+func (app *AuthAppService) ResetPassword(ctx context.Context, email, code, newPassword string) error {
+	if app.passwordResetVerifier == nil {
+		return errors.New("password reset is not configured")
+	}
+	user, err := app.repo.FindByEmail(ctx, email)
+	if err != nil {
+		return err
+	}
+	if err := app.passwordResetVerifier.VerifyPasswordResetCode(ctx, email, code); err != nil {
+		return err
+	}
+	newHash, err := app.hasher.Hash(newPassword)
+	if err != nil {
+		return err
+	}
+	return app.repo.UpdatePasswordHash(ctx, user.ID(), newHash)
 }
 
 func (app *AuthAppService) ChangePassword(ctx context.Context, userID, oldPassword, newPassword string) error {

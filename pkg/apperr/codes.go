@@ -11,28 +11,30 @@ package apperr
 // ── Auth / Identity ──
 
 const (
-	CodeInvalidParams  = "INVALID_PARAMS"   // request body validation failed
-	CodeUnauthorized   = "UNAUTHORIZED"     // missing or expired JWT
-	CodeForbidden      = "FORBIDDEN"        // insufficient permissions
-	CodeUserNotFound   = "USER_NOT_FOUND"   // email not registered
-	CodeWrongPassword  = "WRONG_PASSWORD"   // password mismatch
-	CodeAccountDisabled = "ACCOUNT_DISABLED" // account banned or inactive
-	CodeEmailTaken     = "EMAIL_TAKEN"      // email already registered
+	CodeInvalidParams           = "INVALID_PARAMS"   // request body validation failed
+	CodeUnauthorized            = "UNAUTHORIZED"     // missing or expired JWT
+	CodeForbidden               = "FORBIDDEN"        // insufficient permissions
+	CodeUserNotFound            = "USER_NOT_FOUND"   // email not registered
+	CodeWrongPassword           = "WRONG_PASSWORD"   // password mismatch
+	CodeAccountDisabled         = "ACCOUNT_DISABLED" // account banned or inactive
+	CodeEmailTaken              = "EMAIL_TAKEN"      // email already registered
+	CodeVerificationRequired    = "VERIFICATION_REQUIRED"
+	CodeInvalidVerificationCode = "INVALID_VERIFICATION_CODE"
 )
 
 // ── Resource not found ──
 
 const (
-	CodeOrderNotFound   = "ORDER_NOT_FOUND"
-	CodeProductNotFound = "PRODUCT_NOT_FOUND"
+	CodeOrderNotFound    = "ORDER_NOT_FOUND"
+	CodeProductNotFound  = "PRODUCT_NOT_FOUND"
 	CodeInstanceNotFound = "INSTANCE_NOT_FOUND"
-	CodeInvoiceNotFound = "INVOICE_NOT_FOUND"
-	CodeNodeNotFound    = "NODE_NOT_FOUND"
-	CodeChargeNotFound  = "CHARGE_NOT_FOUND"
-	CodeRegionNotFound  = "REGION_NOT_FOUND"
-	CodePoolNotFound    = "POOL_NOT_FOUND"
-	CodeTokenNotFound   = "TOKEN_NOT_FOUND"
-	CodeIPNotFound      = "IP_NOT_FOUND"
+	CodeInvoiceNotFound  = "INVOICE_NOT_FOUND"
+	CodeNodeNotFound     = "NODE_NOT_FOUND"
+	CodeChargeNotFound   = "CHARGE_NOT_FOUND"
+	CodeRegionNotFound   = "REGION_NOT_FOUND"
+	CodePoolNotFound     = "POOL_NOT_FOUND"
+	CodeTokenNotFound    = "TOKEN_NOT_FOUND"
+	CodeIPNotFound       = "IP_NOT_FOUND"
 	CodeTaskNotFound     = "TASK_NOT_FOUND"
 	CodeProviderNotFound = "PROVIDER_NOT_FOUND"
 )
@@ -53,12 +55,14 @@ const (
 	CodeTokenAlreadyUsed       = "TOKEN_ALREADY_USED"
 	CodeNodeDisabled           = "NODE_DISABLED"
 	CodeCryptoNotConfigured    = "CRYPTO_NOT_CONFIGURED"
+	CodeSMTPNotEnabled         = "SMTP_NOT_ENABLED"
+	CodeMailSendFailed         = "MAIL_SEND_FAILED"
 )
 
 // ── Generic ──
 
 const (
-	CodeInternalError  = "INTERNAL_ERROR"
-	CodeWebhookFailed  = "WEBHOOK_FAILED"
-	CodeAlreadyPaid    = "ALREADY_PAID"
+	CodeInternalError = "INTERNAL_ERROR"
+	CodeWebhookFailed = "WEBHOOK_FAILED"
+	CodeAlreadyPaid   = "ALREADY_PAID"
 )

@@ -19,6 +19,9 @@ import (
 	instanceInfra "backend-core/internal/instance/infra"
 	instanceHttp "backend-core/internal/instance/interfaces/http"
 	instanceWs "backend-core/internal/instance/interfaces/ws"
+	mailApp "backend-core/internal/mail/app"
+	mailInfra "backend-core/internal/mail/infra"
+	mailHttp "backend-core/internal/mail/interfaces/http"
 	orderingApp "backend-core/internal/ordering/app"
 	orderingInfra "backend-core/internal/ordering/infra"
 	orderingHttp "backend-core/internal/ordering/interfaces/http"
@@ -118,11 +121,15 @@ func main() {
 	db.AutoMigrate(&catalogInfra.ProductPO{})
 	db.AutoMigrate(&provisioningInfra.RegionPO{}, &provisioningInfra.HostNodePO{}, &provisioningInfra.IPAddressPO{}, &provisioningInfra.TaskPO{}, &provisioningInfra.ResourcePoolPO{}, &provisioningInfra.BootstrapTokenPO{})
 	db.AutoMigrate(&paymentInfra.PaymentProviderPO{})
+	db.AutoMigrate(&mailInfra.MailSettingsPO{}, &mailInfra.MailVerificationCodePO{})
 
 	// 2. Wire up infrastructure
 	pwdHasher := infra.NewBcryptPasswordService(bcrypt.DefaultCost)
 	userRepo := infra.NewGormUserRepo(db)
 	jwtService := infra.NewJWTService(cfg.JWT.Secret, cfg.JWT.Issuer)
+	mailSettingsRepo := mailInfra.NewGormSettingsRepo(db)
+	mailCodeRepo := mailInfra.NewGormVerificationCodeRepo(db)
+	mailSvc := mailApp.NewMailAppService(mailSettingsRepo, mailCodeRepo, mailInfra.NewSMTPSender())
 	var msgClient *messageclient.Client
 	var registrationNotifier app.RegistrationNotifier
 	var instanceProvisionedNotifier *messageclient.InstanceProvisionedNotifier
@@ -154,7 +161,10 @@ func main() {
 
 	// 3. Wire up application layer
 	authApp := app.NewAuthAppService(userRepo, jwtService, pwdHasher, registrationNotifier)
+	authApp.SetRegistrationVerifier(mailSvc)
+	authApp.SetPasswordResetVerifier(mailSvc)
 	authHandler := identityHttp.NewAuthHandler(authApp)
+	mailHandler := mailHttp.NewMailHandler(mailSvc, authApp)
 
 	// ── Admin Account Seeding ──────────────────────────────────────────────
 	// On first run, creates an admin account with a random 12-char password
@@ -635,8 +645,12 @@ func main() {
 	v1 := h.Group("/api/v1")
 	{
 		// ── Auth tier (strict per-IP: anti brute-force) ────────────────
+		v1.GET("/auth/options", authRL, mailHandler.PublicOptions)
+		v1.POST("/auth/register/code", authRL, mailHandler.SendRegistrationCode)
 		v1.POST("/auth/register", authRL, authHandler.Register)
 		v1.POST("/auth/login", authRL, authHandler.Login)
+		v1.POST("/auth/password/forgot", authRL, mailHandler.SendPasswordResetCode)
+		v1.POST("/auth/password/reset", authRL, mailHandler.ResetPassword)
 
 		// ── Critical tier + Adaptive Cache (user ordering flow) ────────
 		// Only products and groups are browsed by ordering users.
@@ -777,6 +791,7 @@ func main() {
 		adminAPI.GET("/host-nodes", nHandler.ListHosts)
 		adminAPI.GET("/host-nodes/:id", nHandler.GetHost)
 		adminAPI.POST("/host-nodes", nHandler.CreateHost)
+		adminAPI.PUT("/host-nodes/:id/nat-entry", nHandler.UpdateNATEntryHost)
 		adminAPI.POST("/host-nodes/:id/ips", nHandler.AddIP)
 		adminAPI.GET("/host-nodes/:id/ips", nHandler.ListIPs)
 		adminAPI.POST("/host-nodes/:id/tasks", nHandler.EnqueueTask)
@@ -829,6 +844,13 @@ func main() {
 		adminAPI.POST("/ws/perf-ticket", perfHub.IssueTicket)
 		adminAPI.PUT("/performance/interval", perfHub.SetIntervalHandler)
 		adminAPI.GET("/performance/snapshot", perfHub.GetSnapshotHandler)
+
+		// General and SMTP settings
+		adminAPI.GET("/general", mailHandler.GetGeneral)
+		adminAPI.PUT("/general", mailHandler.UpdateGeneral)
+		adminAPI.GET("/smtp", mailHandler.GetSMTP)
+		adminAPI.PUT("/smtp", mailHandler.UpdateSMTP)
+		adminAPI.POST("/smtp/test", mailHandler.TestSMTP)
 
 		// Payment Provider management (dynamic provider configuration)
 		adminAPI.POST("/payment-providers", providerHandler.Create)
