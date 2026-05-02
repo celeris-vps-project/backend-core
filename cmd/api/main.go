@@ -119,7 +119,7 @@ func main() {
 	db.AutoMigrate(&orderingInfra.OrderPO{})
 	db.AutoMigrate(&instanceInfra.InstancePO{})
 	db.AutoMigrate(&catalogInfra.ProductPO{})
-	db.AutoMigrate(&provisioningInfra.RegionPO{}, &provisioningInfra.HostNodePO{}, &provisioningInfra.IPAddressPO{}, &provisioningInfra.TaskPO{}, &provisioningInfra.ResourcePoolPO{}, &provisioningInfra.BootstrapTokenPO{})
+	db.AutoMigrate(&provisioningInfra.RegionPO{}, &provisioningInfra.HostNodePO{}, &provisioningInfra.IPAddressPO{}, &provisioningInfra.NATPortAllocationPO{}, &provisioningInfra.TaskPO{}, &provisioningInfra.ResourcePoolPO{}, &provisioningInfra.BootstrapTokenPO{})
 	db.AutoMigrate(&paymentInfra.PaymentProviderPO{})
 	db.AutoMigrate(&mailInfra.MailSettingsPO{}, &mailInfra.MailVerificationCodePO{})
 
@@ -219,12 +219,13 @@ func main() {
 	// Provisioning (host machines, IP pools, agent tasks, resource pools, bootstrap tokens)
 	hostRepo := provisioningInfra.NewGormHostNodeRepo(db)
 	ipRepo := provisioningInfra.NewGormIPAddressRepo(db)
+	natPortRepo := provisioningInfra.NewGormNATPortAllocationRepo(db)
 	taskRepo := provisioningInfra.NewGormTaskRepo(db)
 	regionRepo := provisioningInfra.NewGormRegionRepo(db)
 	poolRepo := provisioningInfra.NewGormResourcePoolRepo(db)
 	btRepo := provisioningInfra.NewGormBootstrapTokenRepo(db)
 	nodeStateCache := provisioningInfra.NewMemoryNodeStateCache(60 * time.Second)
-	provSvc := provisioningApp.NewProvisioningAppService(hostRepo, ipRepo, taskRepo, regionRepo, poolRepo, btRepo, nodeStateCache, idGen, bus)
+	provSvc := provisioningApp.NewProvisioningAppService(hostRepo, ipRepo, natPortRepo, taskRepo, regionRepo, poolRepo, btRepo, nodeStateCache, idGen, bus)
 	nHandler := provisioningHttp.NewNodeHandler(provSvc)
 
 	// Catalog (products with event-driven provisioning & physical capacity checking)
@@ -295,6 +296,7 @@ func main() {
 	vpsProvisioner := provisioningApp.NewVPSProvisioner(hostRepo, poolRepo, taskRepo, idGen,
 		provisioningApp.WithDelayedPublisher(delayedPublisher),
 		provisioningApp.WithIPRepo(ipRepo),
+		provisioningApp.WithNATPortRepo(natPortRepo),
 		provisioningApp.WithStateCache(nodeStateCache),
 		provisioningApp.WithMockMode(provisionMockMode),
 	)
@@ -334,6 +336,7 @@ func main() {
 	instApp := instanceApp.NewInstanceAppService(nodeAllocatorRepo, instRepo, idGen, provisioningBus)
 	instApp.SetLifecycleScheduler(instanceInfra.NewProvisioningTaskScheduler(provSvc))
 	instApp.SetEventPublisher(bus)
+	instApp.SetNATPortMappingReader(natPortRepo)
 	instHandler := instanceHttp.NewInstanceHandler(instApp)
 
 	// ── Provisioning → Instance Event Bridge ───────────────────────────────

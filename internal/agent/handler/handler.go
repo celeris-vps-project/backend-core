@@ -13,7 +13,7 @@ const DefaultBootTimeout = 5 * time.Minute
 
 // NATForwarder applies host-level port forwarding for NAT-mode tasks.
 type NATForwarder interface {
-	EnsureForward(instanceID string, hostPort int, guestIP string) error
+	EnsureForward(instanceID string, hostPort int, guestIP string, guestPort int) error
 	ReleaseForward(instanceID string, hostPort int) error
 }
 
@@ -104,7 +104,7 @@ func SyncNATForwards(rules []contracts.NATForwardRule, forwarder NATForwarder) e
 		if rule.InstanceID == "" || rule.HostPort <= 0 || rule.GuestIP == "" {
 			continue
 		}
-		if err := forwarder.EnsureForward(rule.InstanceID, rule.HostPort, rule.GuestIP); err != nil {
+		if err := forwarder.EnsureForward(rule.InstanceID, rule.HostPort, rule.GuestIP, normalizeGuestPort(rule.GuestPort)); err != nil {
 			return err
 		}
 	}
@@ -142,7 +142,12 @@ func ensureNATForward(task contracts.Task, result contracts.TaskResult, forwarde
 	if guestIP == "" {
 		return nil
 	}
-	return forwarder.EnsureForward(task.Spec.InstanceID, task.Spec.NATPort, guestIP)
+	for _, rule := range natForwardRulesForTask(task, guestIP) {
+		if err := forwarder.EnsureForward(rule.InstanceID, rule.HostPort, rule.GuestIP, normalizeGuestPort(rule.GuestPort)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func releaseNATForward(task contracts.Task, result contracts.TaskResult, forwarder NATForwarder) error {
@@ -155,11 +160,50 @@ func releaseNATForward(task contracts.Task, result contracts.TaskResult, forward
 	if result.Status != contracts.TaskStatusCompleted {
 		return nil
 	}
-	if task.Spec.NATPort <= 0 {
-		return nil
-	}
 	if forwarder == nil {
 		return nil
 	}
-	return forwarder.ReleaseForward(task.Spec.InstanceID, task.Spec.NATPort)
+	for _, rule := range natForwardRulesForTask(task, task.Spec.IPv4) {
+		if rule.HostPort <= 0 {
+			continue
+		}
+		if err := forwarder.ReleaseForward(task.Spec.InstanceID, rule.HostPort); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func natForwardRulesForTask(task contracts.Task, guestIP string) []contracts.NATForwardRule {
+	if len(task.Spec.NATForwards) > 0 {
+		rules := make([]contracts.NATForwardRule, 0, len(task.Spec.NATForwards))
+		for _, rule := range task.Spec.NATForwards {
+			if rule.InstanceID == "" {
+				rule.InstanceID = task.Spec.InstanceID
+			}
+			if rule.GuestIP == "" {
+				rule.GuestIP = guestIP
+			}
+			rule.GuestPort = normalizeGuestPort(rule.GuestPort)
+			rules = append(rules, rule)
+		}
+		return rules
+	}
+	if task.Spec.NATPort <= 0 {
+		return nil
+	}
+	return []contracts.NATForwardRule{{
+		InstanceID: task.Spec.InstanceID,
+		HostPort:   task.Spec.NATPort,
+		GuestIP:    guestIP,
+		GuestPort:  22,
+		Protocol:   "tcp",
+	}}
+}
+
+func normalizeGuestPort(port int) int {
+	if port <= 0 {
+		return 22
+	}
+	return port
 }

@@ -52,6 +52,19 @@ type IPAddressPO struct {
 
 func (IPAddressPO) TableName() string { return "ip_addresses" }
 
+type NATPortAllocationPO struct {
+	ID           string `gorm:"primaryKey;column:id"`
+	AllocationID string `gorm:"column:allocation_id;index"`
+	NodeID       string `gorm:"column:node_id;index;uniqueIndex:idx_nat_alloc_node_protocol_host,priority:1"`
+	InstanceID   string `gorm:"column:instance_id;index"`
+	GuestIP      string `gorm:"column:guest_ip"`
+	Protocol     string `gorm:"column:protocol;default:tcp;uniqueIndex:idx_nat_alloc_node_protocol_host,priority:2"`
+	HostPort     int    `gorm:"column:host_port;uniqueIndex:idx_nat_alloc_node_protocol_host,priority:3"`
+	GuestPort    int    `gorm:"column:guest_port"`
+}
+
+func (NATPortAllocationPO) TableName() string { return "nat_port_allocations" }
+
 type TaskPO struct {
 	ID         string `gorm:"primaryKey;column:id"`
 	NodeID     string `gorm:"index;column:node_id"`
@@ -299,6 +312,75 @@ func (r *GormIPAddressRepo) FindAvailableNAT(nodeID string) (*domain.IPAddress, 
 	return ipToDomain(po), nil
 }
 
+// ---- NAT Port Allocation Repository ----
+
+type GormNATPortAllocationRepo struct{ db *gorm.DB }
+
+func NewGormNATPortAllocationRepo(db *gorm.DB) *GormNATPortAllocationRepo {
+	return &GormNATPortAllocationRepo{db: db}
+}
+
+func (r *GormNATPortAllocationRepo) ListByNodeID(nodeID string) ([]*domain.NATPortAllocation, error) {
+	var pos []NATPortAllocationPO
+	if err := r.db.Where("node_id = ?", nodeID).Order("host_port ASC").Find(&pos).Error; err != nil {
+		return nil, err
+	}
+	return natPortAllocationsToDomain(pos), nil
+}
+
+func (r *GormNATPortAllocationRepo) ListByInstanceID(instanceID string) ([]*domain.NATPortAllocation, error) {
+	var pos []NATPortAllocationPO
+	if err := r.db.Where("instance_id = ?", instanceID).Order("host_port ASC").Find(&pos).Error; err != nil {
+		return nil, err
+	}
+	return natPortAllocationsToDomain(pos), nil
+}
+
+func (r *GormNATPortAllocationRepo) ListForwardRulesByInstanceID(instanceID string) ([]contracts.NATForwardRule, error) {
+	allocations, err := r.ListByInstanceID(instanceID)
+	if err != nil {
+		return nil, err
+	}
+	rules := make([]contracts.NATForwardRule, 0, len(allocations))
+	for _, allocation := range allocations {
+		if allocation == nil {
+			continue
+		}
+		rules = append(rules, contracts.NATForwardRule{
+			InstanceID: allocation.InstanceID(),
+			HostPort:   allocation.HostPort(),
+			GuestIP:    allocation.GuestIP(),
+			GuestPort:  allocation.GuestPort(),
+			Protocol:   allocation.Protocol(),
+		})
+	}
+	return rules, nil
+}
+
+func (r *GormNATPortAllocationRepo) SaveMany(allocations []*domain.NATPortAllocation) error {
+	if len(allocations) == 0 {
+		return nil
+	}
+	pos := make([]NATPortAllocationPO, 0, len(allocations))
+	for _, allocation := range allocations {
+		if allocation == nil {
+			continue
+		}
+		pos = append(pos, natPortAllocationFromDomain(allocation))
+	}
+	if len(pos) == 0 {
+		return nil
+	}
+	return r.db.Create(&pos).Error
+}
+
+func (r *GormNATPortAllocationRepo) DeleteByInstanceID(instanceID string) error {
+	if instanceID == "" {
+		return nil
+	}
+	return r.db.Where("instance_id = ?", instanceID).Delete(&NATPortAllocationPO{}).Error
+}
+
 // ---- Task Repository ----
 
 type GormTaskRepo struct{ db *gorm.DB }
@@ -385,6 +467,40 @@ func ipFromDomain(ip *domain.IPAddress) IPAddressPO {
 	return IPAddressPO{
 		ID: ip.ID(), NodeID: ip.NodeID(), Address: ip.Address(), Version: ip.Version(),
 		Mode: string(ip.Mode()), Port: ip.Port(), InstanceID: ip.InstanceID(),
+	}
+}
+
+func natPortAllocationToDomain(po NATPortAllocationPO) *domain.NATPortAllocation {
+	return domain.ReconstituteNATPortAllocation(
+		po.ID,
+		po.AllocationID,
+		po.NodeID,
+		po.InstanceID,
+		po.GuestIP,
+		po.Protocol,
+		po.HostPort,
+		po.GuestPort,
+	)
+}
+
+func natPortAllocationsToDomain(pos []NATPortAllocationPO) []*domain.NATPortAllocation {
+	out := make([]*domain.NATPortAllocation, len(pos))
+	for i, po := range pos {
+		out[i] = natPortAllocationToDomain(po)
+	}
+	return out
+}
+
+func natPortAllocationFromDomain(a *domain.NATPortAllocation) NATPortAllocationPO {
+	return NATPortAllocationPO{
+		ID:           a.ID(),
+		AllocationID: a.AllocationID(),
+		NodeID:       a.NodeID(),
+		InstanceID:   a.InstanceID(),
+		GuestIP:      a.GuestIP(),
+		Protocol:     a.Protocol(),
+		HostPort:     a.HostPort(),
+		GuestPort:    a.GuestPort(),
 	}
 }
 

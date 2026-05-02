@@ -160,6 +160,7 @@ func protoToSpec(ps *agentpb.ProvisionSpec) contracts.ProvisionSpec {
 		SSHKeys:         ps.GetSshKeys(),
 		NetworkMode:     contracts.NetworkMode(ps.GetNetworkMode()),
 		NATPort:         int(ps.GetNatPort()),
+		NATForwards:     protoToNATForwards(ps.GetNatForwards()),
 		InitialPassword: ps.GetInitialPassword(),
 	}
 }
@@ -171,6 +172,8 @@ func protoToNATForwards(prs []*agentpb.NATForwardRule) []contracts.NATForwardRul
 			InstanceID: pr.GetInstanceId(),
 			HostPort:   int(pr.GetHostPort()),
 			GuestIP:    pr.GetGuestIp(),
+			GuestPort:  int(pr.GetGuestPort()),
+			Protocol:   pr.GetProtocol(),
 		}
 	}
 	return out

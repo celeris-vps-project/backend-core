@@ -12,7 +12,7 @@ import (
 
 // Forwarder ensures host-level NAT rules exist for a provisioned guest.
 type Forwarder interface {
-	EnsureForward(instanceID string, hostPort int, guestIP string) error
+	EnsureForward(instanceID string, hostPort int, guestIP string, guestPort int) error
 	ReleaseForward(instanceID string, hostPort int) error
 }
 
@@ -69,9 +69,15 @@ func NewIPTablesForwarder(cfg config.NATConfig) *IPTablesForwarder {
 
 // EnsureForward installs the forwarding and masquerade rules required for a
 // NAT-mode instance to be reachable from the host's public IP.
-func (f *IPTablesForwarder) EnsureForward(instanceID string, hostPort int, guestIP string) error {
+func (f *IPTablesForwarder) EnsureForward(instanceID string, hostPort int, guestIP string, guestPort int) error {
 	if hostPort <= 0 || hostPort > 65535 {
 		return fmt.Errorf("nat: invalid host port %d", hostPort)
+	}
+	if guestPort <= 0 {
+		guestPort = f.sshTargetPort
+	}
+	if guestPort <= 0 || guestPort > 65535 {
+		return fmt.Errorf("nat: invalid guest port %d", guestPort)
 	}
 	if instanceID == "" {
 		return fmt.Errorf("nat: instance id is required")
@@ -84,7 +90,7 @@ func (f *IPTablesForwarder) EnsureForward(instanceID string, hostPort int, guest
 		return err
 	}
 	port := strconv.Itoa(hostPort)
-	targetPort := strconv.Itoa(f.sshTargetPort)
+	targetPort := strconv.Itoa(guestPort)
 	target := net.JoinHostPort(guestIP, targetPort)
 	commentArgs := []string{"-m", "comment", "--comment", ruleComment(instanceID, hostPort)}
 

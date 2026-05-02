@@ -66,6 +66,13 @@ type IPAddressRepository interface {
 	FindAvailableNAT(nodeID string) (*IPAddress, error)
 }
 
+type NATPortAllocationRepository interface {
+	ListByNodeID(nodeID string) ([]*NATPortAllocation, error)
+	ListByInstanceID(instanceID string) ([]*NATPortAllocation, error)
+	SaveMany(allocations []*NATPortAllocation) error
+	DeleteByInstanceID(instanceID string) error
+}
+
 // TaskRepository persists provisioning tasks for agents to poll.
 type TaskRepository interface {
 	GetByID(id string) (*contracts.Task, error)

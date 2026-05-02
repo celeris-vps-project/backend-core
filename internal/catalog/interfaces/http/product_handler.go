@@ -20,6 +20,7 @@ type CreateProductRequest struct {
 	RegionID       string `json:"region_id"`
 	ResourcePoolID string `json:"resource_pool_id"`
 	NetworkMode    string `json:"network_mode"`
+	NATPortCount   int    `json:"nat_port_count"`
 	CPU            int    `json:"cpu" vd:"$>0"`
 	MemoryMB       int    `json:"memory_mb" vd:"$>0"`
 	DiskGB         int    `json:"disk_gb" vd:"$>0"`
@@ -43,7 +44,8 @@ type UpdatePriceRequest struct {
 }
 
 type UpdateNetworkModeRequest struct {
-	NetworkMode string `json:"network_mode" vd:"len($)>0"`
+	NetworkMode  string `json:"network_mode" vd:"len($)>0"`
+	NATPortCount int    `json:"nat_port_count"`
 }
 
 type AdjustStockRequest struct {
@@ -63,6 +65,7 @@ type ProductResponse struct {
 	RegionID       string `json:"region_id,omitempty"`
 	ResourcePoolID string `json:"resource_pool_id,omitempty"`
 	NetworkMode    string `json:"network_mode"`
+	NATPortCount   int    `json:"nat_port_count"`
 	CPU            int    `json:"cpu"`
 	MemoryMB       int    `json:"memory_mb"`
 	DiskGB         int    `json:"disk_gb"`
@@ -99,7 +102,7 @@ func (h *ProductHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
-	p, err := h.svc.CreateProduct(ctx, req.Name, req.Slug, req.Location, req.RegionID, req.ResourcePoolID, req.NetworkMode, req.CPU, req.MemoryMB, req.DiskGB, req.BandwidthGB, req.PriceAmount, req.Currency, domain.BillingCycle(req.BillingCycle), req.TotalSlots)
+	p, err := h.svc.CreateProductWithNATPortCount(ctx, req.Name, req.Slug, req.Location, req.RegionID, req.ResourcePoolID, req.NetworkMode, req.NATPortCount, req.CPU, req.MemoryMB, req.DiskGB, req.BandwidthGB, req.PriceAmount, req.Currency, domain.BillingCycle(req.BillingCycle), req.TotalSlots)
 	if err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyProductError(err), err.Error()))
 		return
@@ -208,6 +211,12 @@ func (h *ProductHandler) UpdateNetworkMode(ctx context.Context, c *hz_app.Reques
 		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyProductError(err), err.Error()))
 		return
 	}
+	if req.NetworkMode == "nat" && req.NATPortCount > 0 {
+		if err := h.svc.UpdateNATPortCount(ctx, c.Param("id"), req.NATPortCount); err != nil {
+			c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyProductError(err), err.Error()))
+			return
+		}
+	}
 	p, _ := h.svc.GetProduct(ctx, c.Param("id"))
 	c.JSON(consts.StatusOK, utils.H{"data": toProductResp(p)})
 }
@@ -253,7 +262,8 @@ func toProductResp(p *domain.Product) ProductResponse {
 	return ProductResponse{
 		ID: p.ID(), Name: p.Name(), Slug: p.Slug(), Location: p.Location(),
 		RegionID: p.RegionID(), ResourcePoolID: p.ResourcePoolID(), NetworkMode: p.NetworkMode(),
-		CPU: p.CPU(), MemoryMB: p.MemoryMB(), DiskGB: p.DiskGB(), BandwidthGB: p.BandwidthGB(),
+		NATPortCount: p.NATPortCount(),
+		CPU:          p.CPU(), MemoryMB: p.MemoryMB(), DiskGB: p.DiskGB(), BandwidthGB: p.BandwidthGB(),
 		PriceAmount: p.PriceAmount(), Currency: p.Currency(),
 		BillingCycle: string(p.BillingCycle()), Enabled: p.Enabled(), SortOrder: p.SortOrder(),
 		TotalSlots: p.TotalSlots(), SoldSlots: p.SoldSlots(), AvailableSlots: p.AvailableSlots(),
@@ -268,6 +278,8 @@ func classifyProductError(err error) string {
 	case strings.Contains(msg, "not found"):
 		return apperr.CodeProductNotFound
 	case strings.Contains(msg, "invalid network mode"):
+		return apperr.CodeInvalidParams
+	case strings.Contains(msg, "NAT port count"):
 		return apperr.CodeInvalidParams
 	case strings.Contains(msg, "no available slots"):
 		return apperr.CodeNoAvailableSlots

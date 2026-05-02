@@ -7,6 +7,7 @@ import (
 	"backend-core/pkg/events"
 	"errors"
 	"log"
+	"sort"
 	"strings"
 	"time"
 )
@@ -23,20 +24,22 @@ const (
 // host nodes, IP pools, resource pools, regions, agent registration,
 // bootstrap tokens, tasks, and capacity queries.
 type ProvisioningAppService struct {
-	hostRepo   domain.HostNodeRepository
-	ipRepo     domain.IPAddressRepository
-	taskRepo   domain.TaskRepository
-	regionRepo domain.RegionRepository
-	poolRepo   domain.ResourcePoolRepository
-	btRepo     domain.BootstrapTokenRepository
-	stateCache domain.NodeStateCache
-	ids        IDGenerator
-	bus        *eventbus.EventBus
+	hostRepo    domain.HostNodeRepository
+	ipRepo      domain.IPAddressRepository
+	natPortRepo domain.NATPortAllocationRepository
+	taskRepo    domain.TaskRepository
+	regionRepo  domain.RegionRepository
+	poolRepo    domain.ResourcePoolRepository
+	btRepo      domain.BootstrapTokenRepository
+	stateCache  domain.NodeStateCache
+	ids         IDGenerator
+	bus         *eventbus.EventBus
 }
 
 func NewProvisioningAppService(
 	hostRepo domain.HostNodeRepository,
 	ipRepo domain.IPAddressRepository,
+	natPortRepo domain.NATPortAllocationRepository,
 	taskRepo domain.TaskRepository,
 	regionRepo domain.RegionRepository,
 	poolRepo domain.ResourcePoolRepository,
@@ -46,7 +49,7 @@ func NewProvisioningAppService(
 	bus *eventbus.EventBus,
 ) *ProvisioningAppService {
 	return &ProvisioningAppService{
-		hostRepo: hostRepo, ipRepo: ipRepo, taskRepo: taskRepo,
+		hostRepo: hostRepo, ipRepo: ipRepo, natPortRepo: natPortRepo, taskRepo: taskRepo,
 		regionRepo: regionRepo, poolRepo: poolRepo, btRepo: btRepo,
 		stateCache: stateCache,
 		ids:        ids, bus: bus,
@@ -337,23 +340,50 @@ func (s *ProvisioningAppService) Heartbeat(hb contracts.Heartbeat) (*contracts.H
 }
 
 func (s *ProvisioningAppService) activeNATForwards(nodeID string) []contracts.NATForwardRule {
+	rules := make([]contracts.NATForwardRule, 0)
+	usedHostPorts := make(map[int]struct{})
+	if s.natPortRepo != nil {
+		allocations, err := s.natPortRepo.ListByNodeID(nodeID)
+		if err != nil {
+			log.Printf("[provisioning] WARNING: failed to list NAT port allocations for node %s: %v", nodeID, err)
+		} else {
+			for _, allocation := range allocations {
+				if allocation == nil || allocation.HostPort() <= 0 || allocation.GuestIP() == "" {
+					continue
+				}
+				usedHostPorts[allocation.HostPort()] = struct{}{}
+				rules = append(rules, contracts.NATForwardRule{
+					InstanceID: allocation.InstanceID(),
+					HostPort:   allocation.HostPort(),
+					GuestIP:    allocation.GuestIP(),
+					GuestPort:  allocation.GuestPort(),
+					Protocol:   allocation.Protocol(),
+				})
+			}
+		}
+	}
 	if s.ipRepo == nil {
-		return nil
+		return rules
 	}
 	ips, err := s.ipRepo.ListByNodeID(nodeID)
 	if err != nil {
 		log.Printf("[provisioning] WARNING: failed to list NAT forwards for node %s: %v", nodeID, err)
-		return nil
+		return rules
 	}
-	rules := make([]contracts.NATForwardRule, 0, len(ips))
 	for _, ip := range ips {
 		if ip == nil || !ip.IsNAT() || ip.IsAvailable() || ip.Port() <= 0 || ip.Address() == "" {
 			continue
 		}
+		if _, exists := usedHostPorts[ip.Port()]; exists {
+			continue
+		}
+		usedHostPorts[ip.Port()] = struct{}{}
 		rules = append(rules, contracts.NATForwardRule{
 			InstanceID: ip.InstanceID(),
 			HostPort:   ip.Port(),
 			GuestIP:    ip.Address(),
+			GuestPort:  domain.DefaultSSHPort,
+			Protocol:   domain.NATProtocolTCP,
 		})
 	}
 	return rules
@@ -393,6 +423,16 @@ func (s *ProvisioningAppService) ReportTaskResult(result contracts.TaskResult) e
 				// Resolve NAT info from the task spec
 				networkMode := string(task.Spec.NetworkMode)
 				natPort := task.Spec.NATPort
+				natForwards := task.Spec.NATForwards
+				if len(natForwards) == 0 && natPort > 0 {
+					natForwards = []contracts.NATForwardRule{{
+						InstanceID: task.Spec.InstanceID,
+						HostPort:   natPort,
+						GuestIP:    ipv4,
+						GuestPort:  domain.DefaultSSHPort,
+						Protocol:   domain.NATProtocolTCP,
+					}}
+				}
 				hostIP := ""
 				if networkMode == "nat" {
 					hostIP = s.resolveHostIP(task.NodeID)
@@ -407,6 +447,7 @@ func (s *ProvisioningAppService) ReportTaskResult(result contracts.TaskResult) e
 					VMState:     result.VMState,
 					NetworkMode: networkMode,
 					NATPort:     natPort,
+					NATForwards: contractNATForwardsToEvents(natForwards),
 					HostIP:      hostIP,
 				})
 				log.Printf("[provisioning] task %s completed: instance=%s ipv4=%s vm_state=%s nat_port=%d",
@@ -545,7 +586,11 @@ func (s *ProvisioningAppService) AllocateNATPort(nodeID, instanceID string) (hos
 		return "", 0, errors.New("app_error: node has no NAT port pool configured")
 	}
 
-	// 1. Try to reuse a previously released NAT port
+	if s.natPortRepo == nil {
+		return s.allocateLegacyNATPort(node, nodeID, instanceID)
+	}
+
+	// 1. Try to reuse a previously released NAT guest allocation.
 	existing, findErr := s.ipRepo.FindAvailableNAT(nodeID)
 	if findErr == nil && existing != nil {
 		if existing.Address() == "" {
@@ -567,16 +612,141 @@ func (s *ProvisioningAppService) AllocateNATPort(nodeID, instanceID string) (hos
 		if err := s.ipRepo.Save(existing); err != nil {
 			return "", 0, err
 		}
+		forwards, err := s.createNATPortAllocations(node, instanceID, existing.Address(), 1)
+		if err != nil {
+			existing.Release()
+			_ = s.ipRepo.Save(existing)
+			return "", 0, err
+		}
+		if err := existing.SetPort(forwards[0].HostPort); err != nil {
+			existing.Release()
+			_ = s.ipRepo.Save(existing)
+			_ = s.natPortRepo.DeleteByInstanceID(instanceID)
+			return "", 0, err
+		}
+		if err := s.ipRepo.Save(existing); err != nil {
+			_ = s.natPortRepo.DeleteByInstanceID(instanceID)
+			return "", 0, err
+		}
 		hostIP = s.resolveHostIP(nodeID)
-		return hostIP, existing.Port(), nil
+		return hostIP, forwards[0].HostPort, nil
 	}
 
-	// 2. Find a free port and internal guest IP from existing allocations.
+	// 2. Find an internal guest IP and create a single host-port mapping.
 	allocations, err := s.ipRepo.ListByNodeID(nodeID)
 	if err != nil {
 		return "", 0, err
 	}
-	usedSet := usedNATPorts(allocations)
+	guestIP, err := nextNATGuestIPv4(node, allocations)
+	if err != nil {
+		return "", 0, err
+	}
+	forwards, err := s.createNATPortAllocations(node, instanceID, guestIP, 1)
+	if err != nil {
+		return "", 0, err
+	}
+
+	// 3. Create and assign a new NAT port allocation
+	alloc, err := domain.NewNATPortAllocation(s.ids.NewID(), nodeID, guestIP, forwards[0].HostPort)
+	if err != nil {
+		_ = s.natPortRepo.DeleteByInstanceID(instanceID)
+		return "", 0, err
+	}
+	if err := alloc.Assign(instanceID); err != nil {
+		_ = s.natPortRepo.DeleteByInstanceID(instanceID)
+		return "", 0, err
+	}
+	if err := s.ipRepo.Save(alloc); err != nil {
+		_ = s.natPortRepo.DeleteByInstanceID(instanceID)
+		return "", 0, err
+	}
+
+	hostIP = s.resolveHostIP(nodeID)
+	return hostIP, forwards[0].HostPort, nil
+}
+
+// ReleaseNATPort releases a NAT port allocation back to the pool.
+func (s *ProvisioningAppService) ReleaseNATPort(ipID string) error {
+	ip, err := s.ipRepo.GetByID(ipID)
+	if err != nil {
+		return err
+	}
+	if s.natPortRepo != nil && ip.InstanceID() != "" {
+		if err := s.natPortRepo.DeleteByInstanceID(ip.InstanceID()); err != nil {
+			return err
+		}
+	}
+	ip.Release()
+	return s.ipRepo.Save(ip)
+}
+
+// ListNATPorts returns all NAT port allocations on a node.
+func (s *ProvisioningAppService) ListNATPorts(nodeID string) ([]int, error) {
+	ports := make([]int, 0)
+	seen := make(map[int]struct{})
+	if s.natPortRepo != nil {
+		allocations, err := s.natPortRepo.ListByNodeID(nodeID)
+		if err != nil {
+			return nil, err
+		}
+		for _, allocation := range allocations {
+			if allocation != nil && allocation.HostPort() > 0 {
+				seen[allocation.HostPort()] = struct{}{}
+				ports = append(ports, allocation.HostPort())
+			}
+		}
+	}
+	if s.ipRepo == nil {
+		return ports, nil
+	}
+	legacyPorts, err := s.ipRepo.ListNATPortsByNodeID(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	for _, port := range legacyPorts {
+		if port <= 0 {
+			continue
+		}
+		if _, exists := seen[port]; exists {
+			continue
+		}
+		seen[port] = struct{}{}
+		ports = append(ports, port)
+	}
+	sort.Ints(ports)
+	return ports, nil
+}
+
+func (s *ProvisioningAppService) allocateLegacyNATPort(node *domain.HostNode, nodeID, instanceID string) (hostIP string, port int, err error) {
+	existing, findErr := s.ipRepo.FindAvailableNAT(nodeID)
+	if findErr == nil && existing != nil {
+		if existing.Address() == "" {
+			allocations, err := s.ipRepo.ListByNodeID(nodeID)
+			if err != nil {
+				return "", 0, err
+			}
+			guestIP, err := nextNATGuestIPv4(node, allocations)
+			if err != nil {
+				return "", 0, err
+			}
+			if err := existing.SetAddress(guestIP); err != nil {
+				return "", 0, err
+			}
+		}
+		if err := existing.Assign(instanceID); err != nil {
+			return "", 0, err
+		}
+		if err := s.ipRepo.Save(existing); err != nil {
+			return "", 0, err
+		}
+		return s.resolveHostIP(nodeID), existing.Port(), nil
+	}
+
+	allocations, err := s.ipRepo.ListByNodeID(nodeID)
+	if err != nil {
+		return "", 0, err
+	}
+	usedSet := usedLegacyNATPorts(allocations)
 	freePort, err := node.FindFreeNATPort(usedSet)
 	if err != nil {
 		return "", 0, err
@@ -586,7 +756,6 @@ func (s *ProvisioningAppService) AllocateNATPort(nodeID, instanceID string) (hos
 		return "", 0, err
 	}
 
-	// 3. Create and assign a new NAT port allocation
 	alloc, err := domain.NewNATPortAllocation(s.ids.NewID(), nodeID, guestIP, freePort)
 	if err != nil {
 		return "", 0, err
@@ -598,18 +767,99 @@ func (s *ProvisioningAppService) AllocateNATPort(nodeID, instanceID string) (hos
 		return "", 0, err
 	}
 
-	hostIP = s.resolveHostIP(nodeID)
-	return hostIP, freePort, nil
+	return s.resolveHostIP(nodeID), freePort, nil
 }
 
-// ReleaseNATPort releases a NAT port allocation back to the pool.
-func (s *ProvisioningAppService) ReleaseNATPort(ipID string) error {
-	return s.ReleaseIP(ipID) // same lifecycle as dedicated IP
+func usedLegacyNATPorts(allocations []*domain.IPAddress) map[int]struct{} {
+	used := make(map[int]struct{}, len(allocations))
+	for _, ip := range allocations {
+		if ip == nil || !ip.IsNAT() || ip.Port() <= 0 {
+			continue
+		}
+		used[ip.Port()] = struct{}{}
+	}
+	return used
 }
 
-// ListNATPorts returns all NAT port allocations on a node.
-func (s *ProvisioningAppService) ListNATPorts(nodeID string) ([]int, error) {
-	return s.ipRepo.ListNATPortsByNodeID(nodeID)
+func mergeUsedPorts(dst, src map[int]struct{}) {
+	for port := range src {
+		if port > 0 {
+			dst[port] = struct{}{}
+		}
+	}
+}
+
+func (s *ProvisioningAppService) createNATPortAllocations(node *domain.HostNode, instanceID, guestIP string, count int) ([]contracts.NATForwardRule, error) {
+	allocations, err := s.natPortRepo.ListByNodeID(node.ID())
+	if err != nil {
+		return nil, err
+	}
+	used := usedNATAllocationPorts(allocations)
+	if s.ipRepo != nil {
+		legacy, err := s.ipRepo.ListByNodeID(node.ID())
+		if err != nil {
+			return nil, err
+		}
+		mergeUsedPorts(used, usedLegacyNATPorts(legacy))
+	}
+	start, err := findFreeNATPortRange(node, used, count)
+	if err != nil {
+		return nil, err
+	}
+	allocationID := s.ids.NewID()
+	items := make([]*domain.NATPortAllocation, 0, count)
+	for i := 0; i < count; i++ {
+		hostPort := start + i
+		guestPort := domain.DefaultSSHPort
+		if i > 0 {
+			guestPort = hostPort
+		}
+		allocation, err := domain.NewNATPortForwardAllocation(
+			s.ids.NewID(),
+			allocationID,
+			node.ID(),
+			instanceID,
+			guestIP,
+			domain.NATProtocolTCP,
+			hostPort,
+			guestPort,
+		)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, allocation)
+	}
+	if err := s.natPortRepo.SaveMany(items); err != nil {
+		return nil, err
+	}
+	return natAllocationsToForwardRules(items), nil
+}
+
+func contractNATForwardsToEvents(forwards []contracts.NATForwardRule) []events.NATForwardRule {
+	if len(forwards) == 0 {
+		return nil
+	}
+	out := make([]events.NATForwardRule, 0, len(forwards))
+	for _, forward := range forwards {
+		if forward.HostPort <= 0 {
+			continue
+		}
+		guestPort := forward.GuestPort
+		if guestPort <= 0 {
+			guestPort = domain.DefaultSSHPort
+		}
+		protocol := forward.Protocol
+		if protocol == "" {
+			protocol = domain.NATProtocolTCP
+		}
+		out = append(out, events.NATForwardRule{
+			HostPort:  forward.HostPort,
+			GuestIP:   forward.GuestIP,
+			GuestPort: guestPort,
+			Protocol:  protocol,
+		})
+	}
+	return out
 }
 
 // resolveHostIP gets the user-facing NAT entry host from persistent node

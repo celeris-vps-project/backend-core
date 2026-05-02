@@ -32,23 +32,24 @@ type DomainEvent interface {
 // node, enabling load-balancing across all nodes in that region.
 type Product struct {
 	id             string
-	name           string       // e.g. "VPS Starter"
-	slug           string       // e.g. "vps-starter"
-	location       string       // e.g. "DE-fra" - legacy display label
-	regionID       string       // FK to Region - legacy
-	resourcePoolID string       // FK to ResourcePool - determines the resource pool for provisioning
+	name           string // e.g. "VPS Starter"
+	slug           string // e.g. "vps-starter"
+	location       string // e.g. "DE-fra" - legacy display label
+	regionID       string // FK to Region - legacy
+	resourcePoolID string // FK to ResourcePool - determines the resource pool for provisioning
 	cpu            int
 	memoryMB       int
 	diskGB         int
 	bandwidthGB    int
-	priceAmount    int64        // minor units per cycle
+	priceAmount    int64 // minor units per cycle
 	currency       string
 	billingCycle   BillingCycle
 	enabled        bool
 	sortOrder      int
-	totalSlots     int          // commercial inventory (how many units admin wants to sell)
-	soldSlots      int          // number of slots already sold / allocated
-	networkMode    string       // "dedicated" or "nat"; empty defaults to "dedicated"
+	totalSlots     int    // commercial inventory (how many units admin wants to sell)
+	soldSlots      int    // number of slots already sold / allocated
+	networkMode    string // "dedicated" or "nat"; empty defaults to "dedicated"
+	natPortCount   int    // NAT mode: number of external ports allocated per instance
 
 	// domainEvents collects events raised by this aggregate during a use-case.
 	domainEvents []DomainEvent
@@ -87,6 +88,7 @@ func NewProduct(id, name, slug, location string, cpu, memoryMB, diskGB, bandwidt
 		cpu: cpu, memoryMB: memoryMB, diskGB: diskGB, bandwidthGB: bandwidthGB,
 		priceAmount: priceAmount, currency: currency, billingCycle: cycle,
 		enabled: true, sortOrder: 0, totalSlots: totalSlots, soldSlots: 0,
+		natPortCount: 1,
 	}, nil
 }
 
@@ -101,34 +103,37 @@ func ReconstituteProduct(id, name, slug, location, regionID, resourcePoolID stri
 }
 
 // ReconstituteProductFull reconstructs a Product with all fields including networkMode.
-func ReconstituteProductFull(id, name, slug, location, regionID, resourcePoolID string, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle BillingCycle, enabled bool, sortOrder, totalSlots, soldSlots int, networkMode string) *Product {
+func ReconstituteProductFull(id, name, slug, location, regionID, resourcePoolID string, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle BillingCycle, enabled bool, sortOrder, totalSlots, soldSlots int, networkMode string, natPortCount int) *Product {
+	if natPortCount <= 0 {
+		natPortCount = 1
+	}
 	return &Product{
 		id: id, name: name, slug: slug, location: location, regionID: regionID,
 		resourcePoolID: resourcePoolID,
 		cpu:            cpu, memoryMB: memoryMB, diskGB: diskGB, bandwidthGB: bandwidthGB,
 		priceAmount: priceAmount, currency: currency, billingCycle: cycle,
 		enabled: enabled, sortOrder: sortOrder, totalSlots: totalSlots, soldSlots: soldSlots,
-		networkMode: networkMode,
+		networkMode: networkMode, natPortCount: natPortCount,
 	}
 }
 
-func (p *Product) ID() string                { return p.id }
-func (p *Product) Name() string              { return p.name }
-func (p *Product) Slug() string              { return p.slug }
-func (p *Product) Location() string          { return p.location }
-func (p *Product) RegionID() string          { return p.regionID }
-func (p *Product) CPU() int                  { return p.cpu }
-func (p *Product) MemoryMB() int             { return p.memoryMB }
-func (p *Product) DiskGB() int               { return p.diskGB }
-func (p *Product) BandwidthGB() int          { return p.bandwidthGB }
-func (p *Product) PriceAmount() int64        { return p.priceAmount }
-func (p *Product) Currency() string          { return p.currency }
+func (p *Product) ID() string                 { return p.id }
+func (p *Product) Name() string               { return p.name }
+func (p *Product) Slug() string               { return p.slug }
+func (p *Product) Location() string           { return p.location }
+func (p *Product) RegionID() string           { return p.regionID }
+func (p *Product) CPU() int                   { return p.cpu }
+func (p *Product) MemoryMB() int              { return p.memoryMB }
+func (p *Product) DiskGB() int                { return p.diskGB }
+func (p *Product) BandwidthGB() int           { return p.bandwidthGB }
+func (p *Product) PriceAmount() int64         { return p.priceAmount }
+func (p *Product) Currency() string           { return p.currency }
 func (p *Product) BillingCycle() BillingCycle { return p.billingCycle }
-func (p *Product) Enabled() bool             { return p.enabled }
-func (p *Product) SortOrder() int            { return p.sortOrder }
-func (p *Product) TotalSlots() int           { return p.totalSlots }
-func (p *Product) SoldSlots() int            { return p.soldSlots }
-func (p *Product) IsUnlimited() bool         { return p.totalSlots == UnlimitedSlots }
+func (p *Product) Enabled() bool              { return p.enabled }
+func (p *Product) SortOrder() int             { return p.sortOrder }
+func (p *Product) TotalSlots() int            { return p.totalSlots }
+func (p *Product) SoldSlots() int             { return p.soldSlots }
+func (p *Product) IsUnlimited() bool          { return p.totalSlots == UnlimitedSlots }
 func (p *Product) AvailableSlots() int {
 	if p.IsUnlimited() {
 		return UnlimitedSlots
@@ -151,6 +156,23 @@ func (p *Product) NetworkMode() string {
 
 func (p *Product) SetNetworkMode(mode string) { p.networkMode = mode }
 func (p *Product) IsNATMode() bool            { return p.networkMode == "nat" }
+func (p *Product) NATPortCount() int {
+	if p.natPortCount <= 0 {
+		return 1
+	}
+	return p.natPortCount
+}
+
+func (p *Product) SetNATPortCount(count int) error {
+	if count <= 0 {
+		return errors.New("domain_error: NAT port count must be > 0")
+	}
+	if count > 1024 {
+		return errors.New("domain_error: NAT port count must not exceed 1024")
+	}
+	p.natPortCount = count
+	return nil
+}
 
 func (p *Product) Enable()            { p.enabled = true }
 func (p *Product) Disable()           { p.enabled = false }

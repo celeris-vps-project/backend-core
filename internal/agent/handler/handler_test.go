@@ -45,6 +45,7 @@ func (d *fakeDriver) WaitForBoot(instanceID string, timeout time.Duration) (*vm.
 type fakeForwarder struct {
 	hostPort     int
 	guestIP      string
+	guestPort    int
 	releasedPort int
 	releasedInst string
 	err          error
@@ -53,10 +54,11 @@ type fakeForwarder struct {
 	releaseCalls int
 }
 
-func (f *fakeForwarder) EnsureForward(instanceID string, hostPort int, guestIP string) error {
+func (f *fakeForwarder) EnsureForward(instanceID string, hostPort int, guestIP string, guestPort int) error {
 	f.calls++
 	f.hostPort = hostPort
 	f.guestIP = guestIP
+	f.guestPort = guestPort
 	return f.err
 }
 
@@ -103,8 +105,8 @@ func TestProcessTasks_ProvisionNATCallsForwarder(t *testing.T) {
 	if forwarder.calls != 1 {
 		t.Fatalf("expected 1 NAT forward call, got %d", forwarder.calls)
 	}
-	if forwarder.hostPort != 20001 || forwarder.guestIP != "10.0.0.15" {
-		t.Fatalf("unexpected NAT forward target: port=%d ip=%s", forwarder.hostPort, forwarder.guestIP)
+	if forwarder.hostPort != 20001 || forwarder.guestIP != "10.0.0.15" || forwarder.guestPort != 22 {
+		t.Fatalf("unexpected NAT forward target: port=%d ip=%s guest_port=%d", forwarder.hostPort, forwarder.guestIP, forwarder.guestPort)
 	}
 	if len(results) != 1 {
 		t.Fatalf("expected 1 task result, got %d", len(results))
@@ -199,13 +201,16 @@ func TestSyncNATForwards_ReplaysDesiredRules(t *testing.T) {
 	forwarder := &fakeForwarder{}
 
 	err := SyncNATForwards([]contracts.NATForwardRule{
-		{InstanceID: "inst-1", HostPort: 20001, GuestIP: "10.0.0.11"},
+		{InstanceID: "inst-1", HostPort: 20001, GuestIP: "10.0.0.11", GuestPort: 8080},
 	}, forwarder)
 	if err != nil {
 		t.Fatalf("unexpected sync error: %v", err)
 	}
 	if forwarder.calls != 1 || forwarder.hostPort != 20001 || forwarder.guestIP != "10.0.0.11" {
 		t.Fatalf("unexpected sync target calls=%d port=%d ip=%s", forwarder.calls, forwarder.hostPort, forwarder.guestIP)
+	}
+	if forwarder.guestPort != 8080 {
+		t.Fatalf("expected guest port 8080, got %d", forwarder.guestPort)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"backend-core/internal/instance/domain"
 	"backend-core/pkg/apperr"
 	"backend-core/pkg/authn"
+	"backend-core/pkg/contracts"
 	"context"
 	"strings"
 	"time"
@@ -35,28 +36,36 @@ type AssignIPRequest struct {
 // ---- Response DTOs ----
 
 type InstanceResponse struct {
-	ID              string  `json:"id"`
-	CustomerID      string  `json:"customer_id"`
-	OrderID         string  `json:"order_id"`
-	NodeID          string  `json:"node_id"`
-	Hostname        string  `json:"hostname"`
-	Plan            string  `json:"plan"`
-	OS              string  `json:"os"`
-	CPU             int     `json:"cpu"`
-	MemoryMB        int     `json:"memory_mb"`
-	DiskGB          int     `json:"disk_gb"`
-	IPv4            string  `json:"ipv4,omitempty"`
-	IPv6            string  `json:"ipv6,omitempty"`
-	HostIP          string  `json:"host_ip,omitempty"`
-	Status          string  `json:"status"`
-	NetworkMode     string  `json:"network_mode,omitempty"` // "dedicated" or "nat"
-	NATPort         int     `json:"nat_port,omitempty"`     // NAT mode: SSH port on host
-	InitialPassword string  `json:"initial_password,omitempty"`
-	CreatedAt       string  `json:"created_at"`
-	StartedAt       *string `json:"started_at,omitempty"`
-	StoppedAt       *string `json:"stopped_at,omitempty"`
-	SuspendedAt     *string `json:"suspended_at,omitempty"`
-	TerminatedAt    *string `json:"terminated_at,omitempty"`
+	ID              string                   `json:"id"`
+	CustomerID      string                   `json:"customer_id"`
+	OrderID         string                   `json:"order_id"`
+	NodeID          string                   `json:"node_id"`
+	Hostname        string                   `json:"hostname"`
+	Plan            string                   `json:"plan"`
+	OS              string                   `json:"os"`
+	CPU             int                      `json:"cpu"`
+	MemoryMB        int                      `json:"memory_mb"`
+	DiskGB          int                      `json:"disk_gb"`
+	IPv4            string                   `json:"ipv4,omitempty"`
+	IPv6            string                   `json:"ipv6,omitempty"`
+	HostIP          string                   `json:"host_ip,omitempty"`
+	Status          string                   `json:"status"`
+	NetworkMode     string                   `json:"network_mode,omitempty"` // "dedicated" or "nat"
+	NATPort         int                      `json:"nat_port,omitempty"`     // NAT mode: SSH port on host
+	NATPorts        []int                    `json:"nat_ports,omitempty"`
+	NATPortMappings []NATPortMappingResponse `json:"nat_port_mappings,omitempty"`
+	InitialPassword string                   `json:"initial_password,omitempty"`
+	CreatedAt       string                   `json:"created_at"`
+	StartedAt       *string                  `json:"started_at,omitempty"`
+	StoppedAt       *string                  `json:"stopped_at,omitempty"`
+	SuspendedAt     *string                  `json:"suspended_at,omitempty"`
+	TerminatedAt    *string                  `json:"terminated_at,omitempty"`
+}
+
+type NATPortMappingResponse struct {
+	HostPort  int    `json:"host_port"`
+	GuestPort int    `json:"guest_port"`
+	Protocol  string `json:"protocol,omitempty"`
 }
 
 // ---- Handler ----
@@ -97,7 +106,7 @@ func (h *InstanceHandler) Purchase(ctx context.Context, c *hz_app.RequestContext
 		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyInstanceError(err), err.Error()))
 		return
 	}
-	c.JSON(consts.StatusCreated, utils.H{"data": toInstResp(inst)})
+	c.JSON(consts.StatusCreated, utils.H{"data": h.toInstResp(inst)})
 }
 
 // GET /instances
@@ -114,7 +123,7 @@ func (h *InstanceHandler) ListByCustomer(ctx context.Context, c *hz_app.RequestC
 	}
 	list := make([]InstanceResponse, len(insts))
 	for i, inst := range insts {
-		list[i] = toInstResp(inst)
+		list[i] = h.toInstResp(inst)
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": list})
 }
@@ -126,7 +135,7 @@ func (h *InstanceHandler) GetByID(ctx context.Context, c *hz_app.RequestContext)
 		c.JSON(consts.StatusNotFound, apperr.Resp(apperr.CodeInstanceNotFound, err.Error()))
 		return
 	}
-	c.JSON(consts.StatusOK, utils.H{"data": toInstResp(inst)})
+	c.JSON(consts.StatusOK, utils.H{"data": h.toInstResp(inst)})
 }
 
 // POST /instances/:id/start
@@ -136,7 +145,7 @@ func (h *InstanceHandler) Start(ctx context.Context, c *hz_app.RequestContext) {
 		return
 	}
 	inst, _ := h.svc.GetInstance(c.Param("id"))
-	c.JSON(consts.StatusOK, utils.H{"data": toInstResp(inst)})
+	c.JSON(consts.StatusOK, utils.H{"data": h.toInstResp(inst)})
 }
 
 // POST /instances/:id/stop
@@ -146,7 +155,7 @@ func (h *InstanceHandler) Stop(ctx context.Context, c *hz_app.RequestContext) {
 		return
 	}
 	inst, _ := h.svc.GetInstance(c.Param("id"))
-	c.JSON(consts.StatusOK, utils.H{"data": toInstResp(inst)})
+	c.JSON(consts.StatusOK, utils.H{"data": h.toInstResp(inst)})
 }
 
 // POST /instances/:id/suspend
@@ -156,7 +165,7 @@ func (h *InstanceHandler) Suspend(ctx context.Context, c *hz_app.RequestContext)
 		return
 	}
 	inst, _ := h.svc.GetInstance(c.Param("id"))
-	c.JSON(consts.StatusOK, utils.H{"data": toInstResp(inst)})
+	c.JSON(consts.StatusOK, utils.H{"data": h.toInstResp(inst)})
 }
 
 // POST /instances/:id/unsuspend
@@ -166,7 +175,7 @@ func (h *InstanceHandler) Unsuspend(ctx context.Context, c *hz_app.RequestContex
 		return
 	}
 	inst, _ := h.svc.GetInstance(c.Param("id"))
-	c.JSON(consts.StatusOK, utils.H{"data": toInstResp(inst)})
+	c.JSON(consts.StatusOK, utils.H{"data": h.toInstResp(inst)})
 }
 
 // POST /instances/:id/terminate
@@ -176,7 +185,7 @@ func (h *InstanceHandler) Terminate(ctx context.Context, c *hz_app.RequestContex
 		return
 	}
 	inst, _ := h.svc.GetInstance(c.Param("id"))
-	c.JSON(consts.StatusOK, utils.H{"data": toInstResp(inst)})
+	c.JSON(consts.StatusOK, utils.H{"data": h.toInstResp(inst)})
 }
 
 // PUT /instances/:id/ip
@@ -191,12 +200,12 @@ func (h *InstanceHandler) AssignIP(ctx context.Context, c *hz_app.RequestContext
 		return
 	}
 	inst, _ := h.svc.GetInstance(c.Param("id"))
-	c.JSON(consts.StatusOK, utils.H{"data": toInstResp(inst)})
+	c.JSON(consts.StatusOK, utils.H{"data": h.toInstResp(inst)})
 }
 
 // ---- Mapping ----
 
-func toInstResp(i *domain.Instance) InstanceResponse {
+func (h *InstanceHandler) toInstResp(i *domain.Instance) InstanceResponse {
 	resp := InstanceResponse{
 		ID: i.ID(), CustomerID: i.CustomerID(), OrderID: i.OrderID(), NodeID: i.NodeID(),
 		Hostname: i.Hostname(), Plan: i.Plan(), OS: i.OS(),
@@ -204,6 +213,10 @@ func toInstResp(i *domain.Instance) InstanceResponse {
 		IPv4: i.IPv4(), IPv6: i.IPv6(), HostIP: i.HostIP(), Status: i.Status(),
 		NetworkMode: i.NetworkMode(), NATPort: i.NATPort(), InitialPassword: i.InitialPassword(),
 		CreatedAt: i.CreatedAt().Format(time.RFC3339),
+	}
+	if mappings, err := h.instanceNATPortMappings(i); err == nil {
+		resp.NATPortMappings = mappings
+		resp.NATPorts = natPortsFromMappings(mappings)
 	}
 	if t := i.StartedAt(); t != nil {
 		s := t.Format(time.RFC3339)
@@ -222,6 +235,56 @@ func toInstResp(i *domain.Instance) InstanceResponse {
 		resp.TerminatedAt = &s
 	}
 	return resp
+}
+
+func (h *InstanceHandler) instanceNATPortMappings(i *domain.Instance) ([]NATPortMappingResponse, error) {
+	if i == nil || i.NetworkMode() != "nat" {
+		return nil, nil
+	}
+	rules, err := h.svc.ListNATPortMappings(i.ID())
+	if err != nil {
+		return nil, err
+	}
+	if len(rules) == 0 && i.NATPort() > 0 {
+		rules = []contracts.NATForwardRule{{
+			HostPort:  i.NATPort(),
+			GuestPort: 22,
+			Protocol:  "tcp",
+		}}
+	}
+	mappings := make([]NATPortMappingResponse, 0, len(rules))
+	for _, rule := range rules {
+		if rule.HostPort <= 0 {
+			continue
+		}
+		guestPort := rule.GuestPort
+		if guestPort <= 0 {
+			guestPort = 22
+		}
+		protocol := rule.Protocol
+		if protocol == "" {
+			protocol = "tcp"
+		}
+		mappings = append(mappings, NATPortMappingResponse{
+			HostPort:  rule.HostPort,
+			GuestPort: guestPort,
+			Protocol:  protocol,
+		})
+	}
+	return mappings, nil
+}
+
+func natPortsFromMappings(mappings []NATPortMappingResponse) []int {
+	if len(mappings) == 0 {
+		return nil
+	}
+	ports := make([]int, 0, len(mappings))
+	for _, mapping := range mappings {
+		if mapping.HostPort > 0 {
+			ports = append(ports, mapping.HostPort)
+		}
+	}
+	return ports
 }
 
 // classifyInstanceError maps instance domain errors to an error code.

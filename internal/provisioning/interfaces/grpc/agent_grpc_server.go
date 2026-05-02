@@ -120,6 +120,7 @@ func specToProto(s contracts.ProvisionSpec) *agentpb.ProvisionSpec {
 		NetworkMode:     string(s.NetworkMode),
 		NatPort:         int32(s.NATPort),
 		InitialPassword: s.InitialPassword,
+		NatForwards:     natForwardsToProto(s.NATForwards),
 	}
 }
 
@@ -130,6 +131,8 @@ func natForwardsToProto(rules []contracts.NATForwardRule) []*agentpb.NATForwardR
 			InstanceId: rule.InstanceID,
 			HostPort:   int32(rule.HostPort),
 			GuestIp:    rule.GuestIP,
+			GuestPort:  int32(rule.GuestPort),
+			Protocol:   rule.Protocol,
 		}
 	}
 	return out

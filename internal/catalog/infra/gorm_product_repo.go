@@ -27,6 +27,7 @@ type ProductPO struct {
 	TotalSlots     int    `gorm:"column:total_slots;default:0"`
 	SoldSlots      int    `gorm:"column:sold_slots;default:0"`
 	NetworkMode    string `gorm:"column:network_mode;default:dedicated"` // "dedicated" or "nat"
+	NATPortCount   int    `gorm:"column:nat_port_count;default:1"`       // NAT mode: ports allocated per instance
 }
 
 func (ProductPO) TableName() string { return "products" }
@@ -130,7 +131,7 @@ func productToDomain(po ProductPO) *domain.Product {
 		po.CPU, po.MemoryMB, po.DiskGB, po.BandwidthGB,
 		po.PriceAmount, po.Currency, domain.BillingCycle(po.BillingCycle),
 		po.Enabled, po.SortOrder, po.TotalSlots, po.SoldSlots,
-		po.NetworkMode,
+		po.NetworkMode, po.NATPortCount,
 	)
 }
 
@@ -142,6 +143,6 @@ func productFromDomain(p *domain.Product) ProductPO {
 		PriceAmount: p.PriceAmount(), Currency: p.Currency(),
 		BillingCycle: string(p.BillingCycle()), Enabled: p.Enabled(), SortOrder: p.SortOrder(),
 		TotalSlots: p.TotalSlots(), SoldSlots: p.SoldSlots(),
-		NetworkMode: p.NetworkMode(),
+		NetworkMode: p.NetworkMode(), NATPortCount: p.NATPortCount(),
 	}
 }

@@ -41,7 +41,7 @@ func TestIPTablesForwarder_EnsureForwardInstallsRules(t *testing.T) {
 	})
 	forwarder.runner = runner
 
-	if err := forwarder.EnsureForward("inst-1", 20001, "10.0.0.15"); err != nil {
+	if err := forwarder.EnsureForward("inst-1", 20001, "10.0.0.15", 22); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 

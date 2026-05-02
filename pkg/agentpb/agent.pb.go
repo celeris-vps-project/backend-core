@@ -306,6 +306,8 @@ type NATForwardRule struct {
 	InstanceId    string                 `protobuf:"bytes,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
 	HostPort      int32                  `protobuf:"varint,2,opt,name=host_port,json=hostPort,proto3" json:"host_port,omitempty"`
 	GuestIp       string                 `protobuf:"bytes,3,opt,name=guest_ip,json=guestIp,proto3" json:"guest_ip,omitempty"`
+	GuestPort     int32                  `protobuf:"varint,4,opt,name=guest_port,json=guestPort,proto3" json:"guest_port,omitempty"`
+	Protocol      string                 `protobuf:"bytes,5,opt,name=protocol,proto3" json:"protocol,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -357,6 +359,20 @@ func (x *NATForwardRule) GetHostPort() int32 {
 func (x *NATForwardRule) GetGuestIp() string {
 	if x != nil {
 		return x.GuestIp
+	}
+	return ""
+}
+
+func (x *NATForwardRule) GetGuestPort() int32 {
+	if x != nil {
+		return x.GuestPort
+	}
+	return 0
+}
+
+func (x *NATForwardRule) GetProtocol() string {
+	if x != nil {
+		return x.Protocol
 	}
 	return ""
 }
@@ -478,6 +494,7 @@ type ProvisionSpec struct {
 	NetworkMode     string                 `protobuf:"bytes,13,opt,name=network_mode,json=networkMode,proto3" json:"network_mode,omitempty"`
 	NatPort         int32                  `protobuf:"varint,14,opt,name=nat_port,json=natPort,proto3" json:"nat_port,omitempty"`
 	InitialPassword string                 `protobuf:"bytes,15,opt,name=initial_password,json=initialPassword,proto3" json:"initial_password,omitempty"`
+	NatForwards     []*NATForwardRule      `protobuf:"bytes,16,rep,name=nat_forwards,json=natForwards,proto3" json:"nat_forwards,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -615,6 +632,13 @@ func (x *ProvisionSpec) GetInitialPassword() string {
 		return x.InitialPassword
 	}
 	return ""
+}
+
+func (x *ProvisionSpec) GetNatForwards() []*NATForwardRule {
+	if x != nil {
+		return x.NatForwards
+	}
+	return nil
 }
 
 type TaskResultRequest struct {
@@ -781,12 +805,15 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x11HeartbeatResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12$\n" +
 	"\x05tasks\x18\x02 \x03(\v2\x0e.agent.v1.TaskR\x05tasks\x12;\n" +
-	"\fnat_forwards\x18\x03 \x03(\v2\x18.agent.v1.NATForwardRuleR\vnatForwards\"i\n" +
+	"\fnat_forwards\x18\x03 \x03(\v2\x18.agent.v1.NATForwardRuleR\vnatForwards\"\xa4\x01\n" +
 	"\x0eNATForwardRule\x12\x1f\n" +
 	"\vinstance_id\x18\x01 \x01(\tR\n" +
 	"instanceId\x12\x1b\n" +
 	"\thost_port\x18\x02 \x01(\x05R\bhostPort\x12\x19\n" +
-	"\bguest_ip\x18\x03 \x01(\tR\aguestIp\"\xde\x01\n" +
+	"\bguest_ip\x18\x03 \x01(\tR\aguestIp\x12\x1d\n" +
+	"\n" +
+	"guest_port\x18\x04 \x01(\x05R\tguestPort\x12\x1a\n" +
+	"\bprotocol\x18\x05 \x01(\tR\bprotocol\"\xde\x01\n" +
 	"\x04Task\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12\x12\n" +
@@ -797,7 +824,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\a \x01(\tR\tcreatedAt\x12\x1f\n" +
 	"\vfinished_at\x18\b \x01(\tR\n" +
-	"finishedAt\"\xb3\x03\n" +
+	"finishedAt\"\xf0\x03\n" +
 	"\rProvisionSpec\x12\x1f\n" +
 	"\vinstance_id\x18\x01 \x01(\tR\n" +
 	"instanceId\x12\x1a\n" +
@@ -815,7 +842,8 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\bssh_keys\x18\f \x03(\tR\asshKeys\x12!\n" +
 	"\fnetwork_mode\x18\r \x01(\tR\vnetworkMode\x12\x19\n" +
 	"\bnat_port\x18\x0e \x01(\x05R\anatPort\x12)\n" +
-	"\x10initial_password\x18\x0f \x01(\tR\x0finitialPassword\"\xbe\x01\n" +
+	"\x10initial_password\x18\x0f \x01(\tR\x0finitialPassword\x12;\n" +
+	"\fnat_forwards\x18\x10 \x03(\v2\x18.agent.v1.NATForwardRuleR\vnatForwards\"\xbe\x01\n" +
 	"\x11TaskResultRequest\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x14\n" +
@@ -860,17 +888,18 @@ var file_agent_v1_agent_proto_depIdxs = []int32{
 	5, // 0: agent.v1.HeartbeatResponse.tasks:type_name -> agent.v1.Task
 	4, // 1: agent.v1.HeartbeatResponse.nat_forwards:type_name -> agent.v1.NATForwardRule
 	6, // 2: agent.v1.Task.spec:type_name -> agent.v1.ProvisionSpec
-	0, // 3: agent.v1.AgentService.Register:input_type -> agent.v1.RegisterRequest
-	2, // 4: agent.v1.AgentService.Heartbeat:input_type -> agent.v1.HeartbeatRequest
-	7, // 5: agent.v1.AgentService.ReportTaskResult:input_type -> agent.v1.TaskResultRequest
-	1, // 6: agent.v1.AgentService.Register:output_type -> agent.v1.RegisterResponse
-	3, // 7: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
-	8, // 8: agent.v1.AgentService.ReportTaskResult:output_type -> agent.v1.TaskResultResponse
-	6, // [6:9] is the sub-list for method output_type
-	3, // [3:6] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	4, // 3: agent.v1.ProvisionSpec.nat_forwards:type_name -> agent.v1.NATForwardRule
+	0, // 4: agent.v1.AgentService.Register:input_type -> agent.v1.RegisterRequest
+	2, // 5: agent.v1.AgentService.Heartbeat:input_type -> agent.v1.HeartbeatRequest
+	7, // 6: agent.v1.AgentService.ReportTaskResult:input_type -> agent.v1.TaskResultRequest
+	1, // 7: agent.v1.AgentService.Register:output_type -> agent.v1.RegisterResponse
+	3, // 8: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
+	8, // 9: agent.v1.AgentService.ReportTaskResult:output_type -> agent.v1.TaskResultResponse
+	7, // [7:10] is the sub-list for method output_type
+	4, // [4:7] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_agent_v1_agent_proto_init() }

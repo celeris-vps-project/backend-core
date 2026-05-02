@@ -25,6 +25,7 @@ type ProductPurchasedEvent struct {
 	MemoryMB        int
 	DiskGB          int
 	NetworkMode     string // "dedicated" or "nat"; empty = dedicated
+	NATPortCount    int    // NAT mode: external ports allocated per instance
 }
 
 func (ProductPurchasedEvent) EventName() string { return "product.purchased" }
@@ -57,6 +58,7 @@ type ProvisioningCompletedEvent struct {
 	VMState     string // "running", "boot_timeout", etc.
 	NetworkMode string // "dedicated" or "nat"
 	NATPort     int    // NAT mode: the high port on the host mapped to VM SSH
+	NATForwards []NATForwardRule
 	HostIP      string // NAT mode: the host's public IP for external access
 }
 
@@ -131,6 +133,7 @@ type InstanceStateUpdatedEvent struct {
 	Status          string  `json:"status"`
 	NetworkMode     string  `json:"network_mode,omitempty"`
 	NATPort         int     `json:"nat_port,omitempty"`
+	NATPorts        []int   `json:"nat_ports,omitempty"`
 	InitialPassword string  `json:"initial_password,omitempty"`
 	CreatedAt       string  `json:"created_at"`
 	StartedAt       *string `json:"started_at,omitempty"`
@@ -140,3 +143,10 @@ type InstanceStateUpdatedEvent struct {
 }
 
 func (InstanceStateUpdatedEvent) EventName() string { return "instance.state_updated" }
+
+type NATForwardRule struct {
+	HostPort  int    `json:"host_port"`
+	GuestIP   string `json:"guest_ip"`
+	GuestPort int    `json:"guest_port"`
+	Protocol  string `json:"protocol,omitempty"`
+}

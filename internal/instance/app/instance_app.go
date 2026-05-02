@@ -20,6 +20,7 @@ type InstanceAppService struct {
 	bus          domain.ProvisioningBus // nil = no async dispatch
 	lifecycle    LifecycleTaskScheduler
 	events       EventPublisher
+	natPorts     NATPortMappingReader
 }
 
 type EventPublisher interface {
@@ -28,6 +29,10 @@ type EventPublisher interface {
 
 type LifecycleTaskScheduler interface {
 	Enqueue(nodeID string, taskType contracts.TaskType, spec contracts.ProvisionSpec) error
+}
+
+type NATPortMappingReader interface {
+	ListForwardRulesByInstanceID(instanceID string) ([]contracts.NATForwardRule, error)
 }
 
 func NewInstanceAppService(
@@ -45,6 +50,10 @@ func (s *InstanceAppService) SetLifecycleScheduler(scheduler LifecycleTaskSchedu
 
 func (s *InstanceAppService) SetEventPublisher(publisher EventPublisher) {
 	s.events = publisher
+}
+
+func (s *InstanceAppService) SetNATPortMappingReader(reader NATPortMappingReader) {
+	s.natPorts = reader
 }
 
 // ---- Instance purchase ----
@@ -152,6 +161,13 @@ func (s *InstanceAppService) ListByCustomer(customerID string) ([]*domain.Instan
 
 func (s *InstanceAppService) ListByNode(nodeID string) ([]*domain.Instance, error) {
 	return s.instanceRepo.ListByNodeID(nodeID)
+}
+
+func (s *InstanceAppService) ListNATPortMappings(instanceID string) ([]contracts.NATForwardRule, error) {
+	if s.natPorts == nil {
+		return nil, nil
+	}
+	return s.natPorts.ListForwardRulesByInstanceID(instanceID)
 }
 
 // ---- Instance lifecycle ----
@@ -464,6 +480,7 @@ func (s *InstanceAppService) enqueueLifecycleTask(inst *domain.Instance, taskTyp
 	if inst.NetworkMode() == "nat" {
 		spec.NetworkMode = contracts.NetworkModeNAT
 		spec.NATPort = inst.NATPort()
+		spec.NATForwards, _ = s.ListNATPortMappings(inst.ID())
 	}
 	return s.lifecycle.Enqueue(inst.NodeID(), taskType, spec)
 }
@@ -472,10 +489,10 @@ func (s *InstanceAppService) publishState(inst *domain.Instance) {
 	if s.events == nil || inst == nil {
 		return
 	}
-	s.events.Publish(toInstanceStateEvent(inst))
+	s.events.Publish(s.toInstanceStateEvent(inst))
 }
 
-func toInstanceStateEvent(inst *domain.Instance) events.InstanceStateUpdatedEvent {
+func (s *InstanceAppService) toInstanceStateEvent(inst *domain.Instance) events.InstanceStateUpdatedEvent {
 	return events.InstanceStateUpdatedEvent{
 		InstanceID:      inst.ID(),
 		CustomerID:      inst.CustomerID(),
@@ -493,6 +510,7 @@ func toInstanceStateEvent(inst *domain.Instance) events.InstanceStateUpdatedEven
 		Status:          inst.Status(),
 		NetworkMode:     inst.NetworkMode(),
 		NATPort:         inst.NATPort(),
+		NATPorts:        natPortsFromRules(s.mustListNATPortMappings(inst.ID())),
 		InitialPassword: inst.InitialPassword(),
 		CreatedAt:       inst.CreatedAt().Format(time.RFC3339),
 		StartedAt:       formatOptionalTime(inst.StartedAt()),
@@ -500,6 +518,27 @@ func toInstanceStateEvent(inst *domain.Instance) events.InstanceStateUpdatedEven
 		SuspendedAt:     formatOptionalTime(inst.SuspendedAt()),
 		TerminatedAt:    formatOptionalTime(inst.TerminatedAt()),
 	}
+}
+
+func (s *InstanceAppService) mustListNATPortMappings(instanceID string) []contracts.NATForwardRule {
+	rules, err := s.ListNATPortMappings(instanceID)
+	if err != nil {
+		return nil
+	}
+	return rules
+}
+
+func natPortsFromRules(rules []contracts.NATForwardRule) []int {
+	if len(rules) == 0 {
+		return nil
+	}
+	ports := make([]int, 0, len(rules))
+	for _, rule := range rules {
+		if rule.HostPort > 0 {
+			ports = append(ports, rule.HostPort)
+		}
+	}
+	return ports
 }
 
 func formatOptionalTime(ts *time.Time) *string {

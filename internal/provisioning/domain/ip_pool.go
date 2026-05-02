@@ -114,3 +114,11 @@ func (ip *IPAddress) SetAddress(address string) error {
 	ip.address = address
 	return nil
 }
+
+func (ip *IPAddress) SetPort(port int) error {
+	if port <= 0 || port > 65535 {
+		return errors.New("domain_error: port must be between 1 and 65535")
+	}
+	ip.port = port
+	return nil
+}

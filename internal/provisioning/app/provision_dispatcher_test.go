@@ -306,6 +306,50 @@ func (r *memProvisionIPRepo) FindAvailableNAT(nodeID string) (*domain.IPAddress,
 	return nil, errors.New("not found")
 }
 
+type memProvisionNATPortRepo struct {
+	items map[string]*domain.NATPortAllocation
+}
+
+func newMemProvisionNATPortRepo() *memProvisionNATPortRepo {
+	return &memProvisionNATPortRepo{items: map[string]*domain.NATPortAllocation{}}
+}
+
+func (r *memProvisionNATPortRepo) ListByNodeID(nodeID string) ([]*domain.NATPortAllocation, error) {
+	var out []*domain.NATPortAllocation
+	for _, item := range r.items {
+		if item.NodeID() == nodeID {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
+func (r *memProvisionNATPortRepo) ListByInstanceID(instanceID string) ([]*domain.NATPortAllocation, error) {
+	var out []*domain.NATPortAllocation
+	for _, item := range r.items {
+		if item.InstanceID() == instanceID {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
+func (r *memProvisionNATPortRepo) SaveMany(allocations []*domain.NATPortAllocation) error {
+	for _, allocation := range allocations {
+		r.items[allocation.ID()] = allocation
+	}
+	return nil
+}
+
+func (r *memProvisionNATPortRepo) DeleteByInstanceID(instanceID string) error {
+	for id, item := range r.items {
+		if item.InstanceID() == instanceID {
+			delete(r.items, id)
+		}
+	}
+	return nil
+}
+
 type memProvisionTaskRepo struct {
 	items    map[string]*contracts.Task
 	lastTask *contracts.Task
@@ -370,7 +414,7 @@ func TestProvisioningAppService_CreateHostDefaultsNATPortRange(t *testing.T) {
 	hostRepo := newMemProvisionHostRepo()
 	regionRepo := newMemProvisionRegionRepo()
 	idGen := &seqProvisionIDGen{}
-	svc := NewProvisioningAppService(hostRepo, nil, nil, regionRepo, nil, nil, nil, idGen, nil)
+	svc := NewProvisioningAppService(hostRepo, nil, nil, nil, regionRepo, nil, nil, nil, idGen, nil)
 
 	node, err := svc.CreateHost("DE-fra-01", "DE-fra", "Frankfurt #1", "secret", 10, 0, 0, "", "")
 	if err != nil {
@@ -403,7 +447,7 @@ func TestProvisioningAppService_ResolveHostIPPrefersNATEntryHost(t *testing.T) {
 	hostRepo := newMemProvisionHostRepo()
 	stateCache := newMemProvisionStateCache()
 	idGen := &seqProvisionIDGen{}
-	svc := NewProvisioningAppService(hostRepo, nil, nil, newMemProvisionRegionRepo(), nil, nil, stateCache, idGen, nil)
+	svc := NewProvisioningAppService(hostRepo, nil, nil, nil, newMemProvisionRegionRepo(), nil, nil, stateCache, idGen, nil)
 
 	node, err := svc.CreateHost("DE-fra-01", "DE-fra", "Frankfurt #1", "secret", 10, 20000, 20010, "vmbr2", "nat.example.com")
 	if err != nil {
@@ -422,7 +466,7 @@ func TestProvisioningAppService_ResolveHostIPFallsBackToAgentIP(t *testing.T) {
 	hostRepo := newMemProvisionHostRepo()
 	stateCache := newMemProvisionStateCache()
 	idGen := &seqProvisionIDGen{}
-	svc := NewProvisioningAppService(hostRepo, nil, nil, newMemProvisionRegionRepo(), nil, nil, stateCache, idGen, nil)
+	svc := NewProvisioningAppService(hostRepo, nil, nil, nil, newMemProvisionRegionRepo(), nil, nil, stateCache, idGen, nil)
 
 	node, err := svc.CreateHost("DE-fra-01", "DE-fra", "Frankfurt #1", "secret", 10, 20000, 20010, "vmbr2", "")
 	if err != nil {
@@ -442,6 +486,7 @@ func TestVPSProvisioner_ProvisionAssignsNATPortToTask(t *testing.T) {
 	poolRepo := newMemProvisionPoolRepo()
 	taskRepo := newMemProvisionTaskRepo()
 	ipRepo := newMemProvisionIPRepo()
+	natPortRepo := newMemProvisionNATPortRepo()
 	idGen := &seqProvisionIDGen{}
 
 	host, err := domain.NewHostNode("node-1", "DE-fra-01", "DE-fra", "Frankfurt #1", "secret")
@@ -468,6 +513,7 @@ func TestVPSProvisioner_ProvisionAssignsNATPortToTask(t *testing.T) {
 		taskRepo,
 		idGen,
 		WithIPRepo(ipRepo),
+		WithNATPortRepo(natPortRepo),
 	)
 
 	result, err := provisioner.Provision(ProvisionCommand{
@@ -482,6 +528,7 @@ func TestVPSProvisioner_ProvisionAssignsNATPortToTask(t *testing.T) {
 		MemoryMB:       2048,
 		DiskGB:         40,
 		NetworkMode:    "nat",
+		NATPortCount:   3,
 	})
 	if err != nil {
 		t.Fatalf("unexpected provision error: %v", err)
@@ -508,6 +555,12 @@ func TestVPSProvisioner_ProvisionAssignsNATPortToTask(t *testing.T) {
 	if taskRepo.lastTask.Spec.NATPort != 20000 {
 		t.Fatalf("expected NAT port 20000, got %d", taskRepo.lastTask.Spec.NATPort)
 	}
+	if len(taskRepo.lastTask.Spec.NATForwards) != 3 {
+		t.Fatalf("expected 3 NAT forwards, got %d", len(taskRepo.lastTask.Spec.NATForwards))
+	}
+	if taskRepo.lastTask.Spec.NATForwards[0].GuestPort != 22 || taskRepo.lastTask.Spec.NATForwards[2].GuestPort != 20002 {
+		t.Fatalf("unexpected NAT forwards: %#v", taskRepo.lastTask.Spec.NATForwards)
+	}
 	if taskRepo.lastTask.Spec.IPv4 != "10.0.0.10" {
 		t.Fatalf("expected NAT guest IPv4 10.0.0.10, got %s", taskRepo.lastTask.Spec.IPv4)
 	}
@@ -529,6 +582,13 @@ func TestVPSProvisioner_ProvisionAssignsNATPortToTask(t *testing.T) {
 	}
 	if len(ports) != 1 || ports[0] != 20000 {
 		t.Fatalf("expected allocated NAT port [20000], got %v", ports)
+	}
+	natPorts, err := natPortRepo.ListByNodeID("node-1")
+	if err != nil {
+		t.Fatalf("unexpected NAT allocation list error: %v", err)
+	}
+	if len(natPorts) != 3 {
+		t.Fatalf("expected 3 NAT port allocation rows, got %d", len(natPorts))
 	}
 
 	var allocation *domain.IPAddress
@@ -552,6 +612,7 @@ func TestVPSProvisioner_ProvisionAssignsNATPortToTask(t *testing.T) {
 
 func TestVPSProvisioner_AllocateNATPortIncrementsGuestIPv4(t *testing.T) {
 	ipRepo := newMemProvisionIPRepo()
+	natPortRepo := newMemProvisionNATPortRepo()
 	idGen := &seqProvisionIDGen{}
 
 	host, err := domain.NewHostNode("node-2", "DE-fra-02", "DE-fra", "Frankfurt #2", "secret")
@@ -568,13 +629,14 @@ func TestVPSProvisioner_AllocateNATPortIncrementsGuestIPv4(t *testing.T) {
 		newMemProvisionTaskRepo(),
 		idGen,
 		WithIPRepo(ipRepo),
+		WithNATPortRepo(natPortRepo),
 	)
 
-	first, err := provisioner.allocateNATPort(host, "inst-1")
+	first, firstForwards, err := provisioner.allocateNATPorts(host, "inst-1", 1)
 	if err != nil {
 		t.Fatalf("unexpected first NAT allocation error: %v", err)
 	}
-	second, err := provisioner.allocateNATPort(host, "inst-2")
+	second, secondForwards, err := provisioner.allocateNATPorts(host, "inst-2", 1)
 	if err != nil {
 		t.Fatalf("unexpected second NAT allocation error: %v", err)
 	}
@@ -584,6 +646,96 @@ func TestVPSProvisioner_AllocateNATPortIncrementsGuestIPv4(t *testing.T) {
 	}
 	if second.Port() != 20001 || second.Address() != "10.0.0.11" {
 		t.Fatalf("unexpected second allocation: port=%d address=%s", second.Port(), second.Address())
+	}
+	if len(firstForwards) != 1 || firstForwards[0].HostPort != 20000 {
+		t.Fatalf("unexpected first forwards: %#v", firstForwards)
+	}
+	if len(secondForwards) != 1 || secondForwards[0].HostPort != 20001 {
+		t.Fatalf("unexpected second forwards: %#v", secondForwards)
+	}
+}
+
+func TestVPSProvisioner_AllocateNATPortsSkipsLegacyAllocatedPort(t *testing.T) {
+	ipRepo := newMemProvisionIPRepo()
+	natPortRepo := newMemProvisionNATPortRepo()
+	idGen := &seqProvisionIDGen{}
+
+	host, err := domain.NewHostNode("node-legacy", "DE-fra-legacy", "DE-fra", "Frankfurt legacy", "secret")
+	if err != nil {
+		t.Fatalf("unexpected host error: %v", err)
+	}
+	if err := host.SetNATPortRange(20000, 20005); err != nil {
+		t.Fatalf("unexpected NAT port range error: %v", err)
+	}
+
+	legacy, err := domain.NewNATPortAllocation("legacy-ip", host.ID(), "10.0.0.10", 20000)
+	if err != nil {
+		t.Fatalf("unexpected legacy allocation error: %v", err)
+	}
+	if err := legacy.Assign("old-inst"); err != nil {
+		t.Fatalf("unexpected legacy assignment error: %v", err)
+	}
+	ipRepo.items[legacy.ID()] = legacy
+
+	provisioner := NewVPSProvisioner(
+		newMemProvisionHostRepo(),
+		newMemProvisionPoolRepo(),
+		newMemProvisionTaskRepo(),
+		idGen,
+		WithIPRepo(ipRepo),
+		WithNATPortRepo(natPortRepo),
+	)
+
+	allocation, forwards, err := provisioner.allocateNATPorts(host, "new-inst", 2)
+	if err != nil {
+		t.Fatalf("unexpected NAT allocation error: %v", err)
+	}
+
+	if allocation.Port() != 20001 || allocation.Address() != "10.0.0.11" {
+		t.Fatalf("expected allocation to skip legacy port, got port=%d address=%s", allocation.Port(), allocation.Address())
+	}
+	if len(forwards) != 2 || forwards[0].HostPort != 20001 || forwards[1].HostPort != 20002 {
+		t.Fatalf("expected contiguous forwards [20001,20002], got %#v", forwards)
+	}
+}
+
+func TestProvisioningAppService_ActiveNATForwardsIncludesLegacyAllocations(t *testing.T) {
+	ipRepo := newMemProvisionIPRepo()
+	natPortRepo := newMemProvisionNATPortRepo()
+
+	legacy, err := domain.NewNATPortAllocation("legacy-ip", "node-legacy", "10.0.0.10", 20000)
+	if err != nil {
+		t.Fatalf("unexpected legacy allocation error: %v", err)
+	}
+	if err := legacy.Assign("old-inst"); err != nil {
+		t.Fatalf("unexpected legacy assignment error: %v", err)
+	}
+	ipRepo.items[legacy.ID()] = legacy
+
+	allocation, err := domain.NewNATPortForwardAllocation(
+		"nat-1",
+		"group-1",
+		"node-legacy",
+		"new-inst",
+		"10.0.0.11",
+		domain.NATProtocolTCP,
+		20001,
+		domain.DefaultSSHPort,
+	)
+	if err != nil {
+		t.Fatalf("unexpected NAT port allocation error: %v", err)
+	}
+	if err := natPortRepo.SaveMany([]*domain.NATPortAllocation{allocation}); err != nil {
+		t.Fatalf("unexpected NAT port save error: %v", err)
+	}
+
+	service := &ProvisioningAppService{ipRepo: ipRepo, natPortRepo: natPortRepo}
+	forwards := service.activeNATForwards("node-legacy")
+	if len(forwards) != 2 {
+		t.Fatalf("expected new and legacy forwards, got %#v", forwards)
+	}
+	if forwards[0].HostPort != 20001 || forwards[1].HostPort != 20000 {
+		t.Fatalf("unexpected forwards: %#v", forwards)
 	}
 }
 
@@ -662,6 +814,7 @@ func TestVPSProvisioner_ReleaseFreesSlotAndNATAllocation(t *testing.T) {
 	poolRepo := newMemProvisionPoolRepo()
 	taskRepo := newMemProvisionTaskRepo()
 	ipRepo := newMemProvisionIPRepo()
+	natPortRepo := newMemProvisionNATPortRepo()
 	idGen := &seqProvisionIDGen{}
 
 	host, err := domain.NewHostNode("node-2", "DE-fra-02", "DE-fra", "Frankfurt #2", "secret")
@@ -684,6 +837,11 @@ func TestVPSProvisioner_ReleaseFreesSlotAndNATAllocation(t *testing.T) {
 		t.Fatalf("unexpected assign error: %v", err)
 	}
 	ipRepo.items[alloc.ID()] = alloc
+	forward, err := domain.NewNATPortForwardAllocation("nat-1", "block-1", host.ID(), "inst-rel-1", "10.0.0.15", domain.NATProtocolTCP, 20005, domain.DefaultSSHPort)
+	if err != nil {
+		t.Fatalf("unexpected NAT port allocation error: %v", err)
+	}
+	natPortRepo.items[forward.ID()] = forward
 
 	provisioner := NewVPSProvisioner(
 		hostRepo,
@@ -691,6 +849,7 @@ func TestVPSProvisioner_ReleaseFreesSlotAndNATAllocation(t *testing.T) {
 		taskRepo,
 		idGen,
 		WithIPRepo(ipRepo),
+		WithNATPortRepo(natPortRepo),
 	)
 
 	if err := provisioner.Release(ProvisionCommand{
@@ -714,5 +873,12 @@ func TestVPSProvisioner_ReleaseFreesSlotAndNATAllocation(t *testing.T) {
 	}
 	if !storedAlloc.IsAvailable() {
 		t.Fatalf("expected NAT allocation to be released, got instance=%s", storedAlloc.InstanceID())
+	}
+	remaining, err := natPortRepo.ListByInstanceID("inst-rel-1")
+	if err != nil {
+		t.Fatalf("unexpected NAT port allocation lookup error: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("expected NAT port allocation rows to be deleted, got %d", len(remaining))
 	}
 }

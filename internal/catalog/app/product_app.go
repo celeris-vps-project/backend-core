@@ -49,6 +49,10 @@ func NewProductAppService(
 
 // CreateProduct creates a new VPS product in the catalog.
 func (s *ProductAppService) CreateProduct(ctx context.Context, name, slug, location, regionID, resourcePoolID, networkMode string, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle domain.BillingCycle, totalSlots int) (*domain.Product, error) {
+	return s.CreateProductWithNATPortCount(ctx, name, slug, location, regionID, resourcePoolID, networkMode, 1, cpu, memoryMB, diskGB, bandwidthGB, priceAmount, currency, cycle, totalSlots)
+}
+
+func (s *ProductAppService) CreateProductWithNATPortCount(ctx context.Context, name, slug, location, regionID, resourcePoolID, networkMode string, natPortCount int, cpu, memoryMB, diskGB, bandwidthGB int, priceAmount int64, currency string, cycle domain.BillingCycle, totalSlots int) (*domain.Product, error) {
 	id := s.ids.NewID()
 	p, err := domain.NewProduct(id, name, slug, location, cpu, memoryMB, diskGB, bandwidthGB, priceAmount, currency, cycle, totalSlots)
 	if err != nil {
@@ -65,6 +69,9 @@ func (s *ProductAppService) CreateProduct(ctx context.Context, name, slug, locat
 		p.SetResourcePoolID(resourcePoolID)
 	}
 	p.SetNetworkMode(mode)
+	if err := p.SetNATPortCount(normalizeNATPortCount(natPortCount)); err != nil {
+		return nil, err
+	}
 	if err := s.repo.Save(ctx, p); err != nil {
 		return nil, err
 	}
@@ -121,6 +128,7 @@ func (s *ProductAppService) PurchaseProduct(
 		MemoryMB:        p.MemoryMB(),
 		DiskGB:          p.DiskGB(),
 		NetworkMode:     mode,
+		NATPortCount:    p.NATPortCount(),
 	})
 
 	// Publish collected domain events
@@ -189,6 +197,17 @@ func (s *ProductAppService) UpdateNetworkMode(ctx context.Context, id, mode stri
 		return err
 	}
 	p.SetNetworkMode(normalized)
+	return s.repo.Save(ctx, p)
+}
+
+func (s *ProductAppService) UpdateNATPortCount(ctx context.Context, id string, count int) error {
+	p, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := p.SetNATPortCount(normalizeNATPortCount(count)); err != nil {
+		return err
+	}
 	return s.repo.Save(ctx, p)
 }
 
@@ -286,4 +305,11 @@ func normalizeNetworkMode(mode string) (string, error) {
 	default:
 		return "", fmt.Errorf("domain_error: invalid network mode %q", mode)
 	}
+}
+
+func normalizeNATPortCount(count int) int {
+	if count <= 0 {
+		return 1
+	}
+	return count
 }

@@ -45,6 +45,7 @@ type ProvisionCommand struct {
 	StoragePool     string // e.g. "default", "zfs-pool"
 	NetworkName     string // e.g. "incusbr0", "br0"
 	NetworkMode     string // "dedicated" or "nat"; empty = dedicated
+	NATPortCount    int    // NAT mode: number of external ports to allocate
 }
 
 // ProvisionResult contains the outcome of a provisioning operation.
@@ -117,7 +118,8 @@ type VPSProvisioner struct {
 	poolRepo       domain.ResourcePoolRepository
 	taskRepo       domain.TaskRepository
 	ipRepo         domain.IPAddressRepository // for NAT port allocation
-	stateCache     domain.NodeStateCache      // for resolving host IP in NAT mode
+	natPortRepo    domain.NATPortAllocationRepository
+	stateCache     domain.NodeStateCache // for resolving host IP in NAT mode
 	ids            IDGenerator
 	delayPublisher delayed.Publisher // async boot confirmation queue (nil = skip)
 	bootCheckDelay time.Duration     // how long to wait before checking boot status
@@ -177,6 +179,13 @@ func WithMockMode(mock bool) VPSProvisionerOption {
 func WithIPRepo(repo domain.IPAddressRepository) VPSProvisionerOption {
 	return func(p *VPSProvisioner) {
 		p.ipRepo = repo
+	}
+}
+
+// WithNATPortRepo sets the NAT port allocation repository.
+func WithNATPortRepo(repo domain.NATPortAllocationRepository) VPSProvisionerOption {
+	return func(p *VPSProvisioner) {
+		p.natPortRepo = repo
 	}
 }
 
@@ -252,7 +261,7 @@ func (p *VPSProvisioner) Provision(cmd ProvisionCommand) (*ProvisionResult, erro
 
 	// 4a. Network resource allocation. Do not enqueue no-IP provisioning when
 	// the controller already owns an IP/NAT pool; PVE cloud-init depends on it.
-	if err := p.allocateNetworkResource(node, instanceID, cmd.NetworkMode, &spec); err != nil {
+	if err := p.allocateNetworkResource(node, instanceID, cmd.NetworkMode, cmd.NATPortCount, &spec); err != nil {
 		log.Printf("[vps-provisioner] ERROR: network allocation failed on %s: %v", node.Code(), err)
 		p.releaseSlot(node.ID())
 		return nil, err
@@ -313,6 +322,11 @@ func (p *VPSProvisioner) Release(cmd ProvisionCommand) error {
 			if saveErr := p.ipRepo.Save(ip); saveErr != nil {
 				return saveErr
 			}
+		}
+	}
+	if p.natPortRepo != nil && cmd.InstanceID != "" {
+		if err := p.natPortRepo.DeleteByInstanceID(cmd.InstanceID); err != nil {
+			return err
 		}
 	}
 
@@ -382,9 +396,9 @@ func (p *VPSProvisioner) enqueuePendingTask(cmd ProvisionCommand, nodeID string)
 	}
 }
 
-func (p *VPSProvisioner) allocateNetworkResource(node *domain.HostNode, instanceID, networkMode string, spec *contracts.ProvisionSpec) error {
+func (p *VPSProvisioner) allocateNetworkResource(node *domain.HostNode, instanceID, networkMode string, natPortCount int, spec *contracts.ProvisionSpec) error {
 	if networkMode == "nat" {
-		allocation, err := p.allocateNATPort(node, instanceID)
+		allocation, forwards, err := p.allocateNATPorts(node, instanceID, normalizeNATPortCount(natPortCount))
 		if err != nil {
 			return err
 		}
@@ -393,9 +407,10 @@ func (p *VPSProvisioner) allocateNetworkResource(node *domain.HostNode, instance
 		}
 		spec.NetworkMode = contracts.NetworkModeNAT
 		spec.NATPort = allocation.Port()
+		spec.NATForwards = forwards
 		spec.IPv4 = allocation.Address()
-		log.Printf("[vps-provisioner] NAT port %d allocated on node %s for instance %s guest_ip=%s",
-			allocation.Port(), node.Code(), instanceID, allocation.Address())
+		log.Printf("[vps-provisioner] NAT ports allocated on node %s for instance %s guest_ip=%s count=%d ssh_port=%d",
+			node.Code(), instanceID, allocation.Address(), len(forwards), allocation.Port())
 		return nil
 	}
 
@@ -420,16 +435,20 @@ func (p *VPSProvisioner) allocateNetworkResource(node *domain.HostNode, instance
 	return nil
 }
 
-// allocateNATPort finds a free port on the node's NAT port range, creates an
+// allocateNATPorts finds a free port range on the node's NAT port range, creates an
 // IPAddress record (mode=nat) in the ip_pool, assigns it to the instance, and
 // stores the guest/internal IPv4 used by cloud-init and DNAT.
-func (p *VPSProvisioner) allocateNATPort(node *domain.HostNode, instanceID string) (*domain.IPAddress, error) {
+func (p *VPSProvisioner) allocateNATPorts(node *domain.HostNode, instanceID string, count int) (*domain.IPAddress, []contracts.NATForwardRule, error) {
 	if p.ipRepo == nil {
-		return nil, errors.New("provisioning: ipRepo not configured for NAT allocation")
+		return nil, nil, errors.New("provisioning: ipRepo not configured for NAT allocation")
+	}
+	if p.natPortRepo == nil {
+		return nil, nil, errors.New("provisioning: natPortRepo not configured for NAT allocation")
 	}
 	if !node.HasNATPortPool() {
-		return nil, errors.New("provisioning: node " + node.Code() + " has no NAT port pool configured")
+		return nil, nil, errors.New("provisioning: node " + node.Code() + " has no NAT port pool configured")
 	}
+	count = normalizeNATPortCount(count)
 
 	// 1. Try to reuse a previously released (available) NAT port allocation
 	existing, err := p.ipRepo.FindAvailableNAT(node.ID())
@@ -437,63 +456,178 @@ func (p *VPSProvisioner) allocateNATPort(node *domain.HostNode, instanceID strin
 		if existing.Address() == "" {
 			allocations, err := p.ipRepo.ListByNodeID(node.ID())
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			guestIP, err := nextNATGuestIPv4(node, allocations)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if err := existing.SetAddress(guestIP); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		if err := existing.Assign(instanceID); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if err := p.ipRepo.Save(existing); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return existing, nil
+		forwards, err := p.createNATPortAllocations(node, instanceID, existing.Address(), count)
+		if err != nil {
+			existing.Release()
+			_ = p.ipRepo.Save(existing)
+			return nil, nil, err
+		}
+		if err := existing.SetPort(forwards[0].HostPort); err != nil {
+			existing.Release()
+			_ = p.ipRepo.Save(existing)
+			_ = p.natPortRepo.DeleteByInstanceID(instanceID)
+			return nil, nil, err
+		}
+		if err := p.ipRepo.Save(existing); err != nil {
+			_ = p.natPortRepo.DeleteByInstanceID(instanceID)
+			return nil, nil, err
+		}
+		return existing, forwards, nil
 	}
 
-	// 2. No reusable allocation: find a free port and internal guest IP.
+	// 2. No reusable guest allocation: find an internal guest IP.
 	allocations, err := p.ipRepo.ListByNodeID(node.ID())
 	if err != nil {
-		return nil, err
-	}
-	usedSet := usedNATPorts(allocations)
-	freePort, err := node.FindFreeNATPort(usedSet)
-	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	guestIP, err := nextNATGuestIPv4(node, allocations)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	forwards, err := p.createNATPortAllocations(node, instanceID, guestIP, count)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// 3. Create a new IPAddress record (mode=nat) and assign it
-	alloc, err := domain.NewNATPortAllocation(p.ids.NewID(), node.ID(), guestIP, freePort)
+	alloc, err := domain.NewNATPortAllocation(p.ids.NewID(), node.ID(), guestIP, forwards[0].HostPort)
+	if err != nil {
+		_ = p.natPortRepo.DeleteByInstanceID(instanceID)
+		return nil, nil, err
+	}
+	if err := alloc.Assign(instanceID); err != nil {
+		_ = p.natPortRepo.DeleteByInstanceID(instanceID)
+		return nil, nil, err
+	}
+	if err := p.ipRepo.Save(alloc); err != nil {
+		_ = p.natPortRepo.DeleteByInstanceID(instanceID)
+		return nil, nil, err
+	}
+	return alloc, forwards, nil
+}
+
+func (p *VPSProvisioner) createNATPortAllocations(node *domain.HostNode, instanceID, guestIP string, count int) ([]contracts.NATForwardRule, error) {
+	used, err := p.usedNATAllocationPorts(node.ID())
 	if err != nil {
 		return nil, err
 	}
-	if err := alloc.Assign(instanceID); err != nil {
+	start, err := findFreeNATPortRange(node, used, count)
+	if err != nil {
 		return nil, err
 	}
-	if err := p.ipRepo.Save(alloc); err != nil {
+	allocationID := p.ids.NewID()
+	allocations := make([]*domain.NATPortAllocation, 0, count)
+	for i := 0; i < count; i++ {
+		hostPort := start + i
+		guestPort := domain.DefaultSSHPort
+		if i > 0 {
+			guestPort = hostPort
+		}
+		allocation, err := domain.NewNATPortForwardAllocation(
+			p.ids.NewID(),
+			allocationID,
+			node.ID(),
+			instanceID,
+			guestIP,
+			domain.NATProtocolTCP,
+			hostPort,
+			guestPort,
+		)
+		if err != nil {
+			return nil, err
+		}
+		allocations = append(allocations, allocation)
+	}
+	if err := p.natPortRepo.SaveMany(allocations); err != nil {
 		return nil, err
 	}
-	return alloc, nil
+	return natAllocationsToForwardRules(allocations), nil
 }
 
-func usedNATPorts(allocations []*domain.IPAddress) map[int]struct{} {
+func (p *VPSProvisioner) usedNATAllocationPorts(nodeID string) (map[int]struct{}, error) {
+	allocations, err := p.natPortRepo.ListByNodeID(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	used := usedNATAllocationPorts(allocations)
+	if p.ipRepo != nil {
+		legacy, err := p.ipRepo.ListByNodeID(nodeID)
+		if err != nil {
+			return nil, err
+		}
+		mergeUsedPorts(used, usedLegacyNATPorts(legacy))
+	}
+	return used, nil
+}
+
+func usedNATAllocationPorts(allocations []*domain.NATPortAllocation) map[int]struct{} {
 	used := make(map[int]struct{}, len(allocations))
-	for _, ip := range allocations {
-		if ip == nil || !ip.IsNAT() || ip.Port() <= 0 {
+	for _, allocation := range allocations {
+		if allocation == nil || allocation.HostPort() <= 0 {
 			continue
 		}
-		used[ip.Port()] = struct{}{}
+		used[allocation.HostPort()] = struct{}{}
 	}
 	return used
+}
+
+func findFreeNATPortRange(node *domain.HostNode, used map[int]struct{}, count int) (int, error) {
+	if !node.HasNATPortPool() {
+		return 0, errors.New("domain_error: node has no NAT port pool configured")
+	}
+	for start := node.NATPortStart(); start+count-1 <= node.NATPortEnd(); start++ {
+		free := true
+		for p := start; p < start+count; p++ {
+			if _, exists := used[p]; exists {
+				free = false
+				break
+			}
+		}
+		if free {
+			return start, nil
+		}
+	}
+	return 0, errors.New("domain_error: no contiguous free NAT port range available on node " + node.Code())
+}
+
+func natAllocationsToForwardRules(allocations []*domain.NATPortAllocation) []contracts.NATForwardRule {
+	rules := make([]contracts.NATForwardRule, 0, len(allocations))
+	for _, allocation := range allocations {
+		if allocation == nil {
+			continue
+		}
+		rules = append(rules, contracts.NATForwardRule{
+			InstanceID: allocation.InstanceID(),
+			HostPort:   allocation.HostPort(),
+			GuestIP:    allocation.GuestIP(),
+			GuestPort:  allocation.GuestPort(),
+			Protocol:   allocation.Protocol(),
+		})
+	}
+	return rules
+}
+
+func normalizeNATPortCount(count int) int {
+	if count <= 0 {
+		return 1
+	}
+	return count
 }
 
 func nextNATGuestIPv4(node *domain.HostNode, allocations []*domain.IPAddress) (string, error) {
@@ -538,15 +672,24 @@ func (p *VPSProvisioner) releaseSlot(nodeID string) {
 
 func (p *VPSProvisioner) releaseNetworkAllocation(instanceID string) {
 	if p.ipRepo == nil || instanceID == "" {
+		if p.natPortRepo != nil && instanceID != "" {
+			if err := p.natPortRepo.DeleteByInstanceID(instanceID); err != nil {
+				log.Printf("[vps-provisioner] WARNING: failed to roll back NAT port allocations for instance %s: %v", instanceID, err)
+			}
+		}
 		return
 	}
 	ip, err := p.ipRepo.FindByInstanceID(instanceID)
-	if err != nil || ip == nil {
-		return
+	if err == nil && ip != nil {
+		ip.Release()
+		if err := p.ipRepo.Save(ip); err != nil {
+			log.Printf("[vps-provisioner] WARNING: failed to roll back network allocation for instance %s: %v", instanceID, err)
+		}
 	}
-	ip.Release()
-	if err := p.ipRepo.Save(ip); err != nil {
-		log.Printf("[vps-provisioner] WARNING: failed to roll back network allocation for instance %s: %v", instanceID, err)
+	if p.natPortRepo != nil {
+		if err := p.natPortRepo.DeleteByInstanceID(instanceID); err != nil {
+			log.Printf("[vps-provisioner] WARNING: failed to roll back NAT port allocations for instance %s: %v", instanceID, err)
+		}
 	}
 }
 
@@ -628,6 +771,7 @@ func (d *ProvisionDispatcher) onProductPurchased(evt eventbus.Event) {
 		DiskGB:          e.DiskGB,
 		InitialPassword: e.InitialPassword,
 		NetworkMode:     e.NetworkMode,
+		NATPortCount:    e.NATPortCount,
 	}
 
 	if _, err := d.Dispatch(cmd); err != nil {

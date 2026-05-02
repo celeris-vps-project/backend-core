@@ -20,9 +20,6 @@ func NewRootHandler(config apiConfig.ServerConfig) *RootHandler {
 }
 
 func (h RootHandler) Handle(ctx context.Context, c *app.RequestContext) {
-	if h.UseEmbed {
-
-	}
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	_html := fmt.Sprintf(`
 	<html>
