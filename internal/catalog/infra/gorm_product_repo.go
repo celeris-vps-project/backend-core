@@ -2,6 +2,7 @@ package infra
 
 import (
 	"backend-core/internal/catalog/domain"
+	"backend-core/pkg/database"
 	"context"
 	"errors"
 
@@ -86,7 +87,7 @@ func (r *GormProductRepo) ListByRegionID(ctx context.Context, regionID string) (
 
 func (r *GormProductRepo) Save(ctx context.Context, p *domain.Product) error {
 	po := productFromDomain(p)
-	return r.db.WithContext(ctx).Save(&po).Error
+	return database.UpsertByPrimaryKey(r.db.WithContext(ctx), &po, productUpsertColumns)
 }
 
 // ConsumeSlotAtomic atomically increments sold_slots using a conditional UPDATE.
@@ -123,6 +124,27 @@ func mapProducts(pos []ProductPO) []*domain.Product {
 		out[i] = productToDomain(po)
 	}
 	return out
+}
+
+var productUpsertColumns = []string{
+	"name",
+	"slug",
+	"location",
+	"region_id",
+	"resource_pool_id",
+	"cpu",
+	"memory_mb",
+	"disk_gb",
+	"bandwidth_gb",
+	"price_amount",
+	"currency",
+	"billing_cycle",
+	"enabled",
+	"sort_order",
+	"total_slots",
+	"sold_slots",
+	"network_mode",
+	"nat_port_count",
 }
 
 func productToDomain(po ProductPO) *domain.Product {

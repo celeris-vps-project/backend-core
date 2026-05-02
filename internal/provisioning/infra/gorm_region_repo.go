@@ -2,6 +2,7 @@ package infra
 
 import (
 	"backend-core/internal/provisioning/domain"
+	"backend-core/pkg/database"
 	"errors"
 
 	"gorm.io/gorm"
@@ -70,10 +71,17 @@ func (r *GormRegionRepo) ListActive() ([]*domain.Region, error) {
 
 func (r *GormRegionRepo) Save(region *domain.Region) error {
 	po := regionFromDomain(region)
-	return r.db.Save(&po).Error
+	return database.UpsertByPrimaryKey(r.db, &po, regionUpsertColumns)
 }
 
 // ---- Mapping helpers ----
+
+var regionUpsertColumns = []string{
+	"code",
+	"name",
+	"flag_icon",
+	"status",
+}
 
 func regionToDomain(po RegionPO) *domain.Region {
 	return domain.ReconstituteRegion(po.ID, po.Code, po.Name, po.FlagIcon, po.Status)

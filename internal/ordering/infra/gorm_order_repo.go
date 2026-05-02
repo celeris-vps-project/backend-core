@@ -2,6 +2,7 @@ package infra
 
 import (
 	"backend-core/internal/ordering/domain"
+	"backend-core/pkg/database"
 	"errors"
 	"time"
 
@@ -86,10 +87,34 @@ func (r *GormOrderRepo) ListByCustomerID(customerID string) ([]*domain.Order, er
 
 func (r *GormOrderRepo) Save(order *domain.Order) error {
 	po := orderFromDomain(order)
-	return r.db.Save(&po).Error
+	return database.UpsertByPrimaryKey(r.db, &po, orderUpsertColumns)
 }
 
 // ---- Mapping helpers ----
+
+var orderUpsertColumns = []string{
+	"customer_id",
+	"product_id",
+	"invoice_id",
+	"billing_cycle",
+	"status",
+	"currency",
+	"price_amount",
+	"hostname",
+	"plan",
+	"region",
+	"os",
+	"network_mode",
+	"cpu",
+	"memory_mb",
+	"disk_gb",
+	"created_at",
+	"activated_at",
+	"suspended_at",
+	"cancelled_at",
+	"terminated_at",
+	"cancel_reason",
+}
 
 func orderToDomain(po OrderPO) *domain.Order {
 	cfg, _ := domain.NewVPSConfig(

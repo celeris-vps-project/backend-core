@@ -2,6 +2,7 @@ package infra
 
 import (
 	"backend-core/internal/provisioning/domain"
+	"backend-core/pkg/database"
 	"errors"
 	"time"
 
@@ -70,7 +71,7 @@ func (r *GormBootstrapTokenRepo) ListAll() ([]*domain.BootstrapToken, error) {
 
 func (r *GormBootstrapTokenRepo) Save(bt *domain.BootstrapToken) error {
 	po := btFromDomain(bt)
-	return r.db.Save(&po).Error
+	return database.UpsertByPrimaryKey(r.db, &po, bootstrapTokenUpsertColumns)
 }
 
 func (r *GormBootstrapTokenRepo) Delete(id string) error {
@@ -78,6 +79,17 @@ func (r *GormBootstrapTokenRepo) Delete(id string) error {
 }
 
 // ---- Mapping helpers ----
+
+var bootstrapTokenUpsertColumns = []string{
+	"node_id",
+	"token",
+	"expires_at",
+	"used",
+	"used_by_node_id",
+	"used_at",
+	"created_at",
+	"description",
+}
 
 func btToDomain(po BootstrapTokenPO) *domain.BootstrapToken {
 	return domain.ReconstituteBootstrapToken(

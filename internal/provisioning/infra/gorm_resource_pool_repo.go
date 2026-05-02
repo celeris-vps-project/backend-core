@@ -2,6 +2,7 @@ package infra
 
 import (
 	"backend-core/internal/provisioning/domain"
+	"backend-core/pkg/database"
 	"errors"
 
 	"gorm.io/gorm"
@@ -66,7 +67,7 @@ func (r *GormResourcePoolRepo) ListActive() ([]*domain.ResourcePool, error) {
 
 func (r *GormResourcePoolRepo) Save(pool *domain.ResourcePool) error {
 	po := poolFromDomain(pool)
-	return r.db.Save(&po).Error
+	return database.UpsertByPrimaryKey(r.db, &po, resourcePoolUpsertColumns)
 }
 
 func (r *GormResourcePoolRepo) Delete(id string) error {
@@ -74,6 +75,12 @@ func (r *GormResourcePoolRepo) Delete(id string) error {
 }
 
 // ---- Mapping helpers ----
+
+var resourcePoolUpsertColumns = []string{
+	"name",
+	"region_id",
+	"status",
+}
 
 func poolToDomain(po ResourcePoolPO) *domain.ResourcePool {
 	return domain.ReconstituteResourcePool(po.ID, po.Name, po.RegionID, po.Status)

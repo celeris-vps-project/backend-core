@@ -116,15 +116,22 @@ func main() {
 		log.Fatalf("failed to connect to database: %v", err)
 	}
 
-	// Auto-migrate table schemas
-	db.AutoMigrate(&infra.UserPO{})
-	db.AutoMigrate(&billingInfra.InvoicePO{}, &billingInfra.LineItemPO{})
-	db.AutoMigrate(&orderingInfra.OrderPO{})
-	db.AutoMigrate(&instanceInfra.InstancePO{})
-	db.AutoMigrate(&catalogInfra.ProductPO{})
-	db.AutoMigrate(&provisioningInfra.RegionPO{}, &provisioningInfra.HostNodePO{}, &provisioningInfra.IPAddressPO{}, &provisioningInfra.NATPortAllocationPO{}, &provisioningInfra.TaskPO{}, &provisioningInfra.ResourcePoolPO{}, &provisioningInfra.BootstrapTokenPO{})
-	db.AutoMigrate(&paymentInfra.PaymentProviderPO{})
-	db.AutoMigrate(&mailInfra.MailSettingsPO{}, &mailInfra.MailVerificationCodePO{})
+	// Auto-migrate table schemas. Fail fast so PostgreSQL schema errors do not
+	// surface later as confusing CRUD failures.
+	if err := db.AutoMigrate(
+		&infra.UserPO{},
+		&billingInfra.InvoicePO{}, &billingInfra.LineItemPO{},
+		&orderingInfra.OrderPO{},
+		&instanceInfra.InstancePO{},
+		&catalogInfra.ProductPO{},
+		&provisioningInfra.RegionPO{}, &provisioningInfra.ResourcePoolPO{}, &provisioningInfra.HostNodePO{},
+		&provisioningInfra.IPAddressPO{}, &provisioningInfra.NATPortAllocationPO{}, &provisioningInfra.TaskPO{},
+		&provisioningInfra.BootstrapTokenPO{},
+		&paymentInfra.PaymentProviderPO{},
+		&mailInfra.MailSettingsPO{}, &mailInfra.MailVerificationCodePO{},
+	); err != nil {
+		log.Fatalf("failed to migrate database schema: %v", err)
+	}
 
 	// 2. Wire up infrastructure
 	pwdHasher := infra.NewBcryptPasswordService(bcrypt.DefaultCost)

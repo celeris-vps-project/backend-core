@@ -3,6 +3,7 @@ package infra
 import (
 	"backend-core/internal/provisioning/domain"
 	"backend-core/pkg/contracts"
+	"backend-core/pkg/database"
 	"encoding/json"
 	"errors"
 	"time"
@@ -191,7 +192,7 @@ func (r *GormHostNodeRepo) ListEnabledByResourcePoolID(poolID string) ([]*domain
 
 func (r *GormHostNodeRepo) Save(n *domain.HostNode) error {
 	po := hostFromDomain(n)
-	return r.db.Save(&po).Error
+	return database.UpsertByPrimaryKey(r.db, &po, hostNodeUpsertColumns)
 }
 
 // AllocateSlotAtomic atomically increments used_slots using a conditional UPDATE.
@@ -283,7 +284,7 @@ func (r *GormIPAddressRepo) FindAvailable(nodeID string, version int) (*domain.I
 
 func (r *GormIPAddressRepo) Save(ip *domain.IPAddress) error {
 	po := ipFromDomain(ip)
-	return r.db.Save(&po).Error
+	return database.UpsertByPrimaryKey(r.db, &po, ipAddressUpsertColumns)
 }
 
 // ListNATPortsByNodeID returns all allocated NAT ports on a node.
@@ -424,10 +425,47 @@ func (r *GormTaskRepo) Save(t *contracts.Task) error {
 	if err != nil {
 		return err
 	}
-	return r.db.Save(&po).Error
+	return database.UpsertByPrimaryKey(r.db, &po, taskUpsertColumns)
 }
 
 // ---- Mapping helpers ----
+
+var hostNodeUpsertColumns = []string{
+	"code",
+	"location",
+	"region_id",
+	"resource_pool_id",
+	"name",
+	"secret",
+	"node_token",
+	"created_at",
+	"total_slots",
+	"used_slots",
+	"enabled",
+	"nat_port_start",
+	"nat_port_end",
+	"nat_bridge",
+	"nat_entry_host",
+}
+
+var ipAddressUpsertColumns = []string{
+	"node_id",
+	"address",
+	"version",
+	"mode",
+	"port",
+	"instance_id",
+}
+
+var taskUpsertColumns = []string{
+	"node_id",
+	"type",
+	"status",
+	"spec",
+	"error",
+	"created_at",
+	"finished_at",
+}
 
 func hostToDomain(po HostNodePO) *domain.HostNode {
 	poolID := ""

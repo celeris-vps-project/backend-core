@@ -2,6 +2,7 @@ package infra
 
 import (
 	"backend-core/internal/billing/domain"
+	"backend-core/pkg/database"
 	"errors"
 	"time"
 
@@ -90,7 +91,7 @@ func (r *GormInvoiceRepo) Save(invoice *domain.Invoice) error {
 
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		// Upsert the invoice header
-		if err := tx.Save(&po).Error; err != nil {
+		if err := database.UpsertByPrimaryKey(tx.Omit("LineItems"), &po, invoiceUpsertColumns); err != nil {
 			return err
 		}
 		// Replace line items: delete old, insert new
@@ -107,6 +108,23 @@ func (r *GormInvoiceRepo) Save(invoice *domain.Invoice) error {
 }
 
 // ---- Mapping helpers ----
+
+var invoiceUpsertColumns = []string{
+	"customer_id",
+	"currency",
+	"status",
+	"billing_cycle",
+	"period_start",
+	"period_end",
+	"subtotal",
+	"tax",
+	"total",
+	"amount_paid",
+	"issued_at",
+	"due_at",
+	"paid_at",
+	"void_reason",
+}
 
 func toDomain(po InvoicePO) *domain.Invoice {
 	items := make([]domain.LineItem, len(po.LineItems))

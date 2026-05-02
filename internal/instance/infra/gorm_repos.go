@@ -3,6 +3,7 @@ package infra
 import (
 	"backend-core/internal/instance/domain"
 	nodeDomain "backend-core/internal/provisioning/domain"
+	"backend-core/pkg/database"
 	"errors"
 	"time"
 
@@ -166,10 +167,34 @@ func (r *GormInstanceRepo) ListByNodeID(nodeID string) ([]*domain.Instance, erro
 
 func (r *GormInstanceRepo) Save(inst *domain.Instance) error {
 	po := instanceFromDomain(inst)
-	return r.db.Save(&po).Error
+	return database.UpsertByPrimaryKey(r.db, &po, instanceUpsertColumns)
 }
 
 // ---- Mapping ----
+
+var instanceUpsertColumns = []string{
+	"customer_id",
+	"order_id",
+	"node_id",
+	"hostname",
+	"plan",
+	"os",
+	"cpu",
+	"memory_mb",
+	"disk_gb",
+	"ipv4",
+	"ipv6",
+	"host_ip",
+	"status",
+	"initial_password",
+	"network_mode",
+	"nat_port",
+	"created_at",
+	"started_at",
+	"stopped_at",
+	"suspended_at",
+	"terminated_at",
+}
 
 func instanceToDomain(po InstancePO) *domain.Instance {
 	return domain.ReconstituteInstanceFull(
