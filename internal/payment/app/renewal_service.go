@@ -149,23 +149,29 @@ func (s *RenewalService) RunCycle(now time.Time, leadDays int) error {
 			}
 
 		case "issued":
-			if order.Status != "active" || now.Before(*invoice.PeriodEnd) {
+			if now.Before(*invoice.PeriodEnd) {
 				continue
 			}
-			if err := s.orders.SuspendOrder(order.ID); err != nil {
-				continue
+			if order.Status == "active" {
+				if err := s.orders.SuspendOrder(order.ID); err != nil {
+					continue
+				}
 			}
-			if s.instances == nil {
-				continue
-			}
-			instance, err := s.instances.GetByOrderID(order.ID)
-			if err != nil {
-				continue
-			}
-			_ = s.instances.SuspendInstance(instance.ID)
+			s.suspendInstanceForOverdueOrder(order.ID)
 		}
 	}
 	return nil
+}
+
+func (s *RenewalService) suspendInstanceForOverdueOrder(orderID string) {
+	if s.instances == nil {
+		return
+	}
+	instance, err := s.instances.GetByOrderID(orderID)
+	if err != nil || instance.Status == "suspended" {
+		return
+	}
+	_ = s.instances.SuspendInstance(instance.ID)
 }
 
 func isRenewableOrder(order PayableOrder) bool {

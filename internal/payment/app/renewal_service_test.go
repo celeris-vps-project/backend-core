@@ -156,6 +156,40 @@ func TestRenewalService_RunCycleSuspendsExpiredActiveOrder(t *testing.T) {
 	}
 }
 
+func TestRenewalService_RunCycleRetriesInstanceSuspensionForExpiredSuspendedOrder(t *testing.T) {
+	now := time.Date(2026, 4, 2, 0, 0, 0, 0, time.UTC)
+	periodEnd := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	orderMgr := &stubRenewalOrderManager{
+		orders: []PayableOrder{{
+			ID:           "ord-2",
+			InvoiceID:    "inv-issued",
+			BillingCycle: "monthly",
+			Status:       "suspended",
+		}},
+	}
+	invoiceMgr := &stubRenewalInvoiceManager{
+		invoices: map[string]RenewalInvoice{
+			"inv-issued": {ID: "inv-issued", Status: "issued", PeriodEnd: &periodEnd},
+		},
+	}
+	instanceMgr := &stubRenewalInstanceManager{
+		instances: map[string]RenewalInstance{
+			"ord-2": {ID: "inst-2", Status: "running"},
+		},
+	}
+	service := NewRenewalService(orderMgr, invoiceMgr, instanceMgr)
+
+	if err := service.RunCycle(now, 7); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(orderMgr.suspendedOrders) != 0 {
+		t.Fatalf("expected already-suspended order to avoid duplicate suspension, got %v", orderMgr.suspendedOrders)
+	}
+	if len(instanceMgr.suspendedInstances) != 1 || instanceMgr.suspendedInstances[0] != "inst-2" {
+		t.Fatalf("expected instance suspension retry, got %v", instanceMgr.suspendedInstances)
+	}
+}
+
 func TestRenewalService_HandlePaidOrderRecoversSuspendedInstanceToStopped(t *testing.T) {
 	periodEnd := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	orderMgr := &stubRenewalOrderManager{}
