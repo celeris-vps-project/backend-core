@@ -96,6 +96,7 @@ func (c *AgentClient) Heartbeat(ctx context.Context, hb contracts.Heartbeat) (*c
 		Uptime:     hb.Uptime,
 		VmCount:    int32(hb.VMCount),
 		ReportedAt: hb.ReportedAt,
+		VmStates:   runtimeStatesToProto(hb.VMStates),
 	})
 	if err != nil {
 		return nil, err
@@ -137,6 +138,23 @@ func protoToTasks(pts []*agentpb.Task) []contracts.Task {
 			CreatedAt:  pt.GetCreatedAt(),
 			FinishedAt: pt.GetFinishedAt(),
 		}
+	}
+	return out
+}
+
+func runtimeStatesToProto(states []contracts.InstanceRuntimeState) []*agentpb.VMState {
+	out := make([]*agentpb.VMState, 0, len(states))
+	for _, state := range states {
+		if state.InstanceID == "" {
+			continue
+		}
+		out = append(out, &agentpb.VMState{
+			InstanceId: state.InstanceID,
+			State:      state.State,
+			Ipv4:       state.IPv4,
+			Ipv6:       state.IPv6,
+			ReportedAt: state.ReportedAt,
+		})
 	}
 	return out
 }

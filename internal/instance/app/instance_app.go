@@ -21,6 +21,7 @@ type InstanceAppService struct {
 	lifecycle    LifecycleTaskScheduler
 	events       EventPublisher
 	natPorts     NATPortMappingReader
+	runtime      InstanceRuntimeStateReader
 }
 
 type EventPublisher interface {
@@ -33,6 +34,10 @@ type LifecycleTaskScheduler interface {
 
 type NATPortMappingReader interface {
 	ListForwardRulesByInstanceID(instanceID string) ([]contracts.NATForwardRule, error)
+}
+
+type InstanceRuntimeStateReader interface {
+	GetInstanceRuntimeState(instanceID, nodeID string) (contracts.InstanceRuntimeState, bool)
 }
 
 func NewInstanceAppService(
@@ -54,6 +59,10 @@ func (s *InstanceAppService) SetEventPublisher(publisher EventPublisher) {
 
 func (s *InstanceAppService) SetNATPortMappingReader(reader NATPortMappingReader) {
 	s.natPorts = reader
+}
+
+func (s *InstanceAppService) SetRuntimeStateReader(reader InstanceRuntimeStateReader) {
+	s.runtime = reader
 }
 
 // ---- Instance purchase ----
@@ -170,6 +179,42 @@ func (s *InstanceAppService) ListNATPortMappings(instanceID string) ([]contracts
 	return s.natPorts.ListForwardRulesByInstanceID(instanceID)
 }
 
+func (s *InstanceAppService) InstanceStatus(inst *domain.Instance) string {
+	if inst == nil {
+		return "unknown"
+	}
+	switch inst.ControlStatus() {
+	case domain.InstanceControlStatusProvisioning,
+		domain.InstanceControlStatusSuspended,
+		domain.InstanceControlStatusTerminated:
+		return inst.ControlStatus()
+	}
+	if state := s.InstanceRuntimeState(inst); state != "" {
+		return state
+	}
+	return domain.InstanceControlStatusActive
+}
+
+func (s *InstanceAppService) InstanceRuntimeState(inst *domain.Instance) string {
+	state, ok := s.instanceRuntimeState(inst)
+	if !ok {
+		return ""
+	}
+	return normalizeRuntimeState(state.State)
+}
+
+func (s *InstanceAppService) instanceRuntimeState(inst *domain.Instance) (contracts.InstanceRuntimeState, bool) {
+	if s.runtime == nil || inst == nil {
+		return contracts.InstanceRuntimeState{}, false
+	}
+	state, ok := s.runtime.GetInstanceRuntimeState(inst.ID(), inst.NodeID())
+	if !ok || state.State == "" {
+		return contracts.InstanceRuntimeState{}, false
+	}
+	state.State = normalizeRuntimeState(state.State)
+	return state, true
+}
+
 // ---- Instance lifecycle ----
 
 func (s *InstanceAppService) StartInstance(instanceID string) error {
@@ -177,10 +222,10 @@ func (s *InstanceAppService) StartInstance(instanceID string) error {
 	if err != nil {
 		return err
 	}
+	if inst.ControlStatus() != domain.InstanceControlStatusActive {
+		return fmt.Errorf("domain_error: only active instances can be started")
+	}
 	if s.lifecycle != nil && inst.NodeID() != "" {
-		if inst.Status() != domain.InstanceStatusPending && inst.Status() != domain.InstanceStatusStopped {
-			return fmt.Errorf("domain_error: can only start from pending or stopped")
-		}
 		return s.enqueueLifecycleTask(inst, contracts.TaskStart)
 	}
 	if err := inst.Start(time.Now()); err != nil {
@@ -198,10 +243,10 @@ func (s *InstanceAppService) StopInstance(instanceID string) error {
 	if err != nil {
 		return err
 	}
+	if inst.ControlStatus() != domain.InstanceControlStatusActive {
+		return fmt.Errorf("domain_error: only active instances can be stopped")
+	}
 	if s.lifecycle != nil && inst.NodeID() != "" {
-		if inst.Status() != domain.InstanceStatusRunning {
-			return fmt.Errorf("domain_error: only running instances can be stopped")
-		}
 		return s.enqueueLifecycleTask(inst, contracts.TaskStop)
 	}
 	if err := inst.Stop(time.Now()); err != nil {
@@ -219,7 +264,13 @@ func (s *InstanceAppService) SuspendInstance(instanceID string) error {
 	if err != nil {
 		return err
 	}
-	if s.lifecycle != nil && inst.NodeID() != "" && inst.Status() == domain.InstanceStatusRunning {
+	if inst.ControlStatus() != domain.InstanceControlStatusActive {
+		return fmt.Errorf("domain_error: only active instances can be suspended")
+	}
+	if s.lifecycle != nil && inst.NodeID() != "" {
+		if s.InstanceRuntimeState(inst) == domain.InstanceStatusStopped {
+			return s.ConfirmSuspended(inst.ID())
+		}
 		return s.enqueueLifecycleTask(inst, contracts.TaskSuspend)
 	}
 	if err := inst.Suspend(time.Now()); err != nil {
@@ -237,10 +288,10 @@ func (s *InstanceAppService) UnsuspendInstance(instanceID string) error {
 	if err != nil {
 		return err
 	}
+	if inst.ControlStatus() != domain.InstanceControlStatusSuspended {
+		return fmt.Errorf("domain_error: only suspended instances can be unsuspended")
+	}
 	if s.lifecycle != nil && inst.NodeID() != "" {
-		if inst.Status() != domain.InstanceStatusSuspended {
-			return fmt.Errorf("domain_error: only suspended instances can be unsuspended")
-		}
 		return s.enqueueLifecycleTask(inst, contracts.TaskUnsuspend)
 	}
 	if err := inst.Unsuspend(time.Now()); err != nil {
@@ -259,7 +310,7 @@ func (s *InstanceAppService) TerminateInstance(instanceID string) error {
 		return err
 	}
 	if s.lifecycle != nil && inst.NodeID() != "" {
-		if inst.Status() == domain.InstanceStatusTerminated {
+		if inst.ControlStatus() == domain.InstanceControlStatusTerminated {
 			return fmt.Errorf("domain_error: instance already terminated")
 		}
 		return s.enqueueLifecycleTask(inst, contracts.TaskDeprovision)
@@ -337,10 +388,9 @@ func (s *InstanceAppService) ConfirmProvisioning(instanceID, nodeID, ipv4, ipv6,
 		}
 	}
 
-	// Transition to running state
-	if inst.Status() == domain.InstanceStatusPending {
-		if startErr := inst.Start(time.Now()); startErr != nil {
-			fmt.Printf("[InstanceAppService] WARNING: failed to start instance %s: %v\n", instanceID, startErr)
+	if inst.ControlStatus() == domain.InstanceControlStatusProvisioning {
+		if activeErr := inst.MarkProvisioned(time.Now()); activeErr != nil {
+			fmt.Printf("[InstanceAppService] WARNING: failed to mark instance %s provisioned: %v\n", instanceID, activeErr)
 		}
 	}
 
@@ -349,8 +399,8 @@ func (s *InstanceAppService) ConfirmProvisioning(instanceID, nodeID, ipv4, ipv6,
 	}
 	s.publishState(inst)
 
-	fmt.Printf("[InstanceAppService] provisioning confirmed: instance=%s status=%s ipv4=%s nat=%s:%d\n",
-		instanceID, inst.Status(), ipv4, networkMode, natPort)
+	fmt.Printf("[InstanceAppService] provisioning confirmed: instance=%s control_status=%s ipv4=%s nat=%s:%d\n",
+		instanceID, inst.ControlStatus(), ipv4, networkMode, natPort)
 	return nil
 }
 
@@ -358,9 +408,6 @@ func (s *InstanceAppService) ConfirmStarted(instanceID string) error {
 	inst, err := s.instanceRepo.GetByID(instanceID)
 	if err != nil {
 		return err
-	}
-	if inst.Status() == domain.InstanceStatusRunning {
-		return nil
 	}
 	if err := inst.Start(time.Now()); err != nil {
 		return err
@@ -377,9 +424,6 @@ func (s *InstanceAppService) ConfirmStopped(instanceID string) error {
 	if err != nil {
 		return err
 	}
-	if inst.Status() == domain.InstanceStatusStopped {
-		return nil
-	}
 	if err := inst.Stop(time.Now()); err != nil {
 		return err
 	}
@@ -395,7 +439,7 @@ func (s *InstanceAppService) ConfirmSuspended(instanceID string) error {
 	if err != nil {
 		return err
 	}
-	if inst.Status() == domain.InstanceStatusSuspended {
+	if inst.ControlStatus() == domain.InstanceControlStatusSuspended {
 		return nil
 	}
 	if err := inst.Suspend(time.Now()); err != nil {
@@ -413,7 +457,7 @@ func (s *InstanceAppService) ConfirmUnsuspended(instanceID string) error {
 	if err != nil {
 		return err
 	}
-	if inst.Status() == domain.InstanceStatusRunning {
+	if inst.ControlStatus() == domain.InstanceControlStatusActive {
 		return nil
 	}
 	if err := inst.Unsuspend(time.Now()); err != nil {
@@ -431,7 +475,7 @@ func (s *InstanceAppService) ConfirmTerminated(instanceID string) error {
 	if err != nil {
 		return err
 	}
-	if inst.Status() == domain.InstanceStatusTerminated {
+	if inst.ControlStatus() == domain.InstanceControlStatusTerminated {
 		return nil
 	}
 	if err := inst.Terminate(time.Now()); err != nil {
@@ -449,7 +493,7 @@ func (s *InstanceAppService) RecoverFromBillingSuspension(instanceID string) err
 	if err != nil {
 		return err
 	}
-	if inst.Status() == domain.InstanceStatusStopped {
+	if inst.ControlStatus() == domain.InstanceControlStatusActive {
 		return nil
 	}
 	if err := inst.RecoverFromBillingSuspension(time.Now()); err != nil {
@@ -492,7 +536,17 @@ func (s *InstanceAppService) publishState(inst *domain.Instance) {
 	s.events.Publish(s.toInstanceStateEvent(inst))
 }
 
+func (s *InstanceAppService) PublishInstanceState(instanceID string) error {
+	inst, err := s.instanceRepo.GetByID(instanceID)
+	if err != nil {
+		return err
+	}
+	s.publishState(inst)
+	return nil
+}
+
 func (s *InstanceAppService) toInstanceStateEvent(inst *domain.Instance) events.InstanceStateUpdatedEvent {
+	runtimeState := s.InstanceRuntimeState(inst)
 	return events.InstanceStateUpdatedEvent{
 		InstanceID:      inst.ID(),
 		CustomerID:      inst.CustomerID(),
@@ -507,7 +561,9 @@ func (s *InstanceAppService) toInstanceStateEvent(inst *domain.Instance) events.
 		IPv4:            inst.IPv4(),
 		IPv6:            inst.IPv6(),
 		HostIP:          inst.HostIP(),
-		Status:          inst.Status(),
+		Status:          s.InstanceStatus(inst),
+		ControlStatus:   inst.ControlStatus(),
+		RuntimeState:    runtimeState,
 		NetworkMode:     inst.NetworkMode(),
 		NATPort:         inst.NATPort(),
 		NATPorts:        natPortsFromRules(s.mustListNATPortMappings(inst.ID())),
@@ -547,4 +603,13 @@ func formatOptionalTime(ts *time.Time) *string {
 	}
 	formatted := ts.Format(time.RFC3339)
 	return &formatted
+}
+
+func normalizeRuntimeState(state string) string {
+	switch state {
+	case domain.InstanceStatusRunning, domain.InstanceStatusStopped, "paused":
+		return state
+	default:
+		return ""
+	}
 }

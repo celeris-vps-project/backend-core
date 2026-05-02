@@ -61,6 +61,30 @@ func (s *ProvisioningAppService) StateCache() domain.NodeStateCache {
 	return s.stateCache
 }
 
+func (s *ProvisioningAppService) GetInstanceRuntimeState(instanceID, nodeID string) (contracts.InstanceRuntimeState, bool) {
+	if s.stateCache == nil || instanceID == "" {
+		return contracts.InstanceRuntimeState{}, false
+	}
+	if nodeID != "" {
+		state, _ := s.stateCache.GetNodeState(nodeID)
+		if state != nil {
+			runtime, ok := state.VMStates[instanceID]
+			return runtime, ok
+		}
+		return contracts.InstanceRuntimeState{}, false
+	}
+	states, _ := s.stateCache.GetAllNodeStates()
+	for _, state := range states {
+		if state == nil {
+			continue
+		}
+		if runtime, ok := state.VMStates[instanceID]; ok {
+			return runtime, true
+		}
+	}
+	return contracts.InstanceRuntimeState{}, false
+}
+
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 // Host CRUD
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -302,6 +326,7 @@ func (s *ProvisioningAppService) Heartbeat(hb contracts.Heartbeat) (*contracts.H
 
 	now := time.Now()
 	existing, _ := s.stateCache.GetNodeState(hb.NodeID)
+	vmStates := runtimeStateMap(hb.VMStates, now)
 	state := &domain.NodeState{
 		Status:     domain.HostStatusOnline,
 		CPUUsage:   hb.CPUUsage,
@@ -309,6 +334,7 @@ func (s *ProvisioningAppService) Heartbeat(hb contracts.Heartbeat) (*contracts.H
 		DiskUsage:  hb.DiskUsage,
 		VMCount:    hb.VMCount,
 		LastSeenAt: now,
+		VMStates:   vmStates,
 	}
 	if existing != nil {
 		state.IP = existing.IP
@@ -330,6 +356,7 @@ func (s *ProvisioningAppService) Heartbeat(hb contracts.Heartbeat) (*contracts.H
 			VMCount:   state.VMCount,
 			LastSeen:  now.Format(time.RFC3339),
 		})
+		s.publishRuntimeStateChanges(hb.NodeID, existing, vmStates, now)
 	}
 
 	tasks, err := s.taskRepo.ListPendingByNodeID(hb.NodeID)
@@ -404,6 +431,7 @@ func (s *ProvisioningAppService) ReportTaskResult(result contracts.TaskResult) e
 	if err := s.taskRepo.Save(task); err != nil {
 		return err
 	}
+	s.recordTaskRuntimeState(task, result)
 
 	// Emit provisioning events based on task outcome.
 	// The Instance domain subscribes to these events to update instance state.
@@ -877,6 +905,136 @@ func (s *ProvisioningAppService) resolveHostIP(nodeID string) string {
 		return ""
 	}
 	return state.IP
+}
+
+func runtimeStateMap(states []contracts.InstanceRuntimeState, reportedAt time.Time) map[string]contracts.InstanceRuntimeState {
+	out := make(map[string]contracts.InstanceRuntimeState, len(states))
+	for _, state := range states {
+		if state.InstanceID == "" {
+			continue
+		}
+		state.State = normalizeRuntimeState(state.State)
+		if state.ReportedAt == "" {
+			state.ReportedAt = reportedAt.Format(time.RFC3339)
+		}
+		out[state.InstanceID] = state
+	}
+	return out
+}
+
+func (s *ProvisioningAppService) recordTaskRuntimeState(task *contracts.Task, result contracts.TaskResult) {
+	if s.stateCache == nil || task == nil || task.NodeID == "" || task.Spec.InstanceID == "" {
+		return
+	}
+	runtime, ok := runtimeStateFromTaskResult(task, result)
+	if !ok {
+		return
+	}
+	state, _ := s.stateCache.GetNodeState(task.NodeID)
+	if state == nil {
+		state = &domain.NodeState{
+			Status:     domain.HostStatusOnline,
+			LastSeenAt: time.Now(),
+			VMStates:   map[string]contracts.InstanceRuntimeState{},
+		}
+	}
+	if state.VMStates == nil {
+		state.VMStates = map[string]contracts.InstanceRuntimeState{}
+	}
+	state.VMStates[runtime.InstanceID] = runtime
+	if err := s.stateCache.SetNodeState(task.NodeID, state); err != nil {
+		return
+	}
+	s.publishRuntimeState(runtime, task.NodeID)
+}
+
+func runtimeStateFromTaskResult(task *contracts.Task, result contracts.TaskResult) (contracts.InstanceRuntimeState, bool) {
+	if result.Status != contracts.TaskStatusCompleted {
+		return contracts.InstanceRuntimeState{}, false
+	}
+	state := normalizeRuntimeState(result.VMState)
+	if state == "unknown" {
+		switch task.Type {
+		case contracts.TaskProvision, contracts.TaskStart, contracts.TaskReboot, contracts.TaskUnsuspend:
+			state = "running"
+		case contracts.TaskStop, contracts.TaskSuspend:
+			state = "stopped"
+		case contracts.TaskDeprovision:
+			state = "unknown"
+		default:
+			return contracts.InstanceRuntimeState{}, false
+		}
+	}
+	reportedAt := result.FinishedAt
+	if reportedAt == "" {
+		reportedAt = time.Now().Format(time.RFC3339)
+	}
+	return contracts.InstanceRuntimeState{
+		InstanceID: task.Spec.InstanceID,
+		State:      state,
+		IPv4:       firstNonEmpty(result.IPv4, task.Spec.IPv4),
+		IPv6:       firstNonEmpty(result.IPv6, task.Spec.IPv6),
+		ReportedAt: reportedAt,
+	}, true
+}
+
+func (s *ProvisioningAppService) publishRuntimeStateChanges(
+	nodeID string,
+	previous *domain.NodeState,
+	current map[string]contracts.InstanceRuntimeState,
+	reportedAt time.Time,
+) {
+	if s.bus == nil {
+		return
+	}
+	for _, state := range current {
+		s.publishRuntimeState(state, nodeID)
+	}
+	if previous == nil {
+		return
+	}
+	for instanceID := range previous.VMStates {
+		if _, ok := current[instanceID]; ok {
+			continue
+		}
+		s.publishRuntimeState(contracts.InstanceRuntimeState{
+			InstanceID: instanceID,
+			State:      "unknown",
+			ReportedAt: reportedAt.Format(time.RFC3339),
+		}, nodeID)
+	}
+}
+
+func (s *ProvisioningAppService) publishRuntimeState(state contracts.InstanceRuntimeState, nodeID string) {
+	if s.bus == nil || state.InstanceID == "" {
+		return
+	}
+	s.bus.Publish(events.InstanceRuntimeStateUpdatedEvent{
+		InstanceID: state.InstanceID,
+		NodeID:     nodeID,
+		State:      state.State,
+		IPv4:       state.IPv4,
+		IPv6:       state.IPv6,
+		ReportedAt: state.ReportedAt,
+	})
+}
+
+func normalizeRuntimeState(state string) string {
+	switch state {
+	case "running", "stopped", "paused":
+		return state
+	default:
+		return "unknown"
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

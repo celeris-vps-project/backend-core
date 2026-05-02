@@ -42,6 +42,7 @@ message HeartbeatRequest {
   int64  uptime      = 5;
   int32  vm_count    = 6;
   string reported_at = 7;
+  repeated VMState vm_states = 8;
 }
 
 message HeartbeatResponse {
@@ -56,6 +57,14 @@ message NATForwardRule {
   string guest_ip    = 3;
   int32  guest_port  = 4;
   string protocol    = 5;
+}
+
+message VMState {
+  string instance_id = 1;
+  string state       = 2;
+  string ipv4        = 3;
+  string ipv6        = 4;
+  string reported_at = 5;
 }
 
 // ---- Task ----

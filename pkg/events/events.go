@@ -96,6 +96,19 @@ type InstanceTaskFailedEvent struct {
 
 func (InstanceTaskFailedEvent) EventName() string { return "node.instance_task_failed" }
 
+type InstanceRuntimeStateUpdatedEvent struct {
+	InstanceID string
+	NodeID     string
+	State      string
+	IPv4       string
+	IPv6       string
+	ReportedAt string
+}
+
+func (InstanceRuntimeStateUpdatedEvent) EventName() string {
+	return "node.instance_runtime_state_updated"
+}
+
 // NodeStateUpdatedEvent is emitted whenever a node's runtime state changes
 // (agent registration or heartbeat). The WebSocket hub listens to this event
 // to push real-time updates to connected admin clients.
@@ -131,6 +144,8 @@ type InstanceStateUpdatedEvent struct {
 	IPv6            string  `json:"ipv6,omitempty"`
 	HostIP          string  `json:"host_ip,omitempty"`
 	Status          string  `json:"status"`
+	ControlStatus   string  `json:"control_status,omitempty"`
+	RuntimeState    string  `json:"runtime_state,omitempty"`
 	NetworkMode     string  `json:"network_mode,omitempty"`
 	NATPort         int     `json:"nat_port,omitempty"`
 	NATPorts        []int   `json:"nat_ports,omitempty"`

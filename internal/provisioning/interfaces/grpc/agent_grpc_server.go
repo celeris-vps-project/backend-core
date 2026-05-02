@@ -51,6 +51,7 @@ func (s *AgentGRPCServer) Heartbeat(ctx context.Context, req *agentpb.HeartbeatR
 		Uptime:     req.GetUptime(),
 		VMCount:    int(req.GetVmCount()),
 		ReportedAt: req.GetReportedAt(),
+		VMStates:   protoToRuntimeStates(req.GetVmStates()),
 	}
 	ack, err := s.svc.Heartbeat(hb)
 	if err != nil {
@@ -99,6 +100,23 @@ func tasksToProto(tasks []contracts.Task) []*agentpb.Task {
 			CreatedAt:  t.CreatedAt,
 			FinishedAt: t.FinishedAt,
 		}
+	}
+	return out
+}
+
+func protoToRuntimeStates(states []*agentpb.VMState) []contracts.InstanceRuntimeState {
+	out := make([]contracts.InstanceRuntimeState, 0, len(states))
+	for _, state := range states {
+		if state == nil || state.GetInstanceId() == "" {
+			continue
+		}
+		out = append(out, contracts.InstanceRuntimeState{
+			InstanceID: state.GetInstanceId(),
+			State:      state.GetState(),
+			IPv4:       state.GetIpv4(),
+			IPv6:       state.GetIpv6(),
+			ReportedAt: state.GetReportedAt(),
+		})
 	}
 	return out
 }

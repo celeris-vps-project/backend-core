@@ -6,11 +6,18 @@ import (
 )
 
 const (
-	InstanceStatusPending    = "pending"
+	InstanceControlStatusProvisioning = "provisioning"
+	InstanceControlStatusActive       = "active"
+	InstanceControlStatusSuspended    = "suspended"
+	InstanceControlStatusTerminated   = "terminated"
+
+	// Legacy aliases kept for older callers and DB rows. Runtime states
+	// "running" and "stopped" are no longer persisted as instance status.
+	InstanceStatusPending    = InstanceControlStatusProvisioning
+	InstanceStatusSuspended  = InstanceControlStatusSuspended
+	InstanceStatusTerminated = InstanceControlStatusTerminated
 	InstanceStatusRunning    = "running"
 	InstanceStatusStopped    = "stopped"
-	InstanceStatusSuspended  = "suspended"
-	InstanceStatusTerminated = "terminated"
 )
 
 type Instance struct {
@@ -27,7 +34,7 @@ type Instance struct {
 	ipv4            string
 	ipv6            string
 	hostIP          string
-	status          string
+	controlStatus   string
 	initialPassword string
 
 	// NAT mode fields
@@ -73,7 +80,7 @@ func NewInstance(id, customerID, orderID, nodeID, hostname, plan, os, networkMod
 		id: id, customerID: customerID, orderID: orderID, nodeID: nodeID,
 		hostname: hostname, plan: plan, os: os,
 		cpu: cpu, memoryMB: memoryMB, diskGB: diskGB,
-		status: InstanceStatusPending, createdAt: time.Now(),
+		controlStatus: InstanceControlStatusProvisioning, createdAt: time.Now(),
 		networkMode: networkMode,
 	}, nil
 }
@@ -89,7 +96,7 @@ func ReconstituteInstance(
 		id: id, customerID: customerID, orderID: orderID, nodeID: nodeID,
 		hostname: hostname, plan: plan, os: os,
 		cpu: cpu, memoryMB: memoryMB, diskGB: diskGB,
-		ipv4: ipv4, ipv6: ipv6, status: status,
+		ipv4: ipv4, ipv6: ipv6, controlStatus: normalizeControlStatus(status),
 		createdAt: createdAt, startedAt: startedAt, stoppedAt: stoppedAt,
 		suspendedAt: suspendedAt, terminatedAt: terminatedAt,
 	}
@@ -108,7 +115,7 @@ func ReconstituteInstanceFull(
 		id: id, customerID: customerID, orderID: orderID, nodeID: nodeID,
 		hostname: hostname, plan: plan, os: os,
 		cpu: cpu, memoryMB: memoryMB, diskGB: diskGB,
-		ipv4: ipv4, ipv6: ipv6, hostIP: hostIP, status: status,
+		ipv4: ipv4, ipv6: ipv6, hostIP: hostIP, controlStatus: normalizeControlStatus(status),
 		initialPassword: initialPassword,
 		networkMode:     networkMode, natPort: natPort,
 		createdAt: createdAt, startedAt: startedAt, stoppedAt: stoppedAt,
@@ -129,7 +136,8 @@ func (i *Instance) DiskGB() int              { return i.diskGB }
 func (i *Instance) IPv4() string             { return i.ipv4 }
 func (i *Instance) IPv6() string             { return i.ipv6 }
 func (i *Instance) HostIP() string           { return i.hostIP }
-func (i *Instance) Status() string           { return i.status }
+func (i *Instance) Status() string           { return i.ControlStatus() }
+func (i *Instance) ControlStatus() string    { return normalizeControlStatus(i.controlStatus) }
 func (i *Instance) InitialPassword() string  { return i.initialPassword }
 func (i *Instance) CreatedAt() time.Time     { return i.createdAt }
 func (i *Instance) StartedAt() *time.Time    { return i.startedAt }
@@ -183,64 +191,100 @@ func (i *Instance) AssignIP(ipv4, ipv6 string) error {
 	return nil
 }
 
-func (i *Instance) Start(at time.Time) error {
-	if i.status != InstanceStatusPending && i.status != InstanceStatusStopped {
-		return errors.New("domain_error: can only start from pending or stopped")
+func (i *Instance) MarkProvisioned(at time.Time) error {
+	if i.ControlStatus() == InstanceControlStatusTerminated {
+		return errors.New("domain_error: terminated instances cannot be provisioned")
 	}
-	i.status = InstanceStatusRunning
+	i.controlStatus = InstanceControlStatusActive
+	i.startedAt = &at
+	i.stoppedAt = nil
+	return nil
+}
+
+func (i *Instance) Start(at time.Time) error {
+	switch i.ControlStatus() {
+	case InstanceControlStatusTerminated:
+		return errors.New("domain_error: terminated instances cannot be started")
+	case InstanceControlStatusSuspended:
+		return errors.New("domain_error: suspended instances must be unsuspended first")
+	case InstanceControlStatusProvisioning:
+		return errors.New("domain_error: provisioning instances cannot be started")
+	}
 	i.startedAt = &at
 	i.stoppedAt = nil
 	return nil
 }
 
 func (i *Instance) Stop(at time.Time) error {
-	if i.status != InstanceStatusRunning {
-		return errors.New("domain_error: only running instances can be stopped")
+	switch i.ControlStatus() {
+	case InstanceControlStatusTerminated:
+		return errors.New("domain_error: terminated instances cannot be stopped")
+	case InstanceControlStatusSuspended:
+		return errors.New("domain_error: suspended instances cannot be stopped")
+	case InstanceControlStatusProvisioning:
+		return errors.New("domain_error: provisioning instances cannot be stopped")
 	}
-	i.status = InstanceStatusStopped
 	i.stoppedAt = &at
 	return nil
 }
 
 func (i *Instance) Suspend(at time.Time) error {
-	if i.status == InstanceStatusTerminated {
+	if i.ControlStatus() == InstanceControlStatusTerminated {
 		return errors.New("domain_error: terminated instances cannot be suspended")
 	}
-	if i.status == InstanceStatusSuspended {
+	if i.ControlStatus() == InstanceControlStatusSuspended {
 		return errors.New("domain_error: instance already suspended")
 	}
-	i.status = InstanceStatusSuspended
+	if i.ControlStatus() == InstanceControlStatusProvisioning {
+		return errors.New("domain_error: provisioning instances cannot be suspended")
+	}
+	i.controlStatus = InstanceControlStatusSuspended
 	i.suspendedAt = &at
 	return nil
 }
 
 func (i *Instance) Unsuspend(at time.Time) error {
-	if i.status != InstanceStatusSuspended {
+	if i.ControlStatus() != InstanceControlStatusSuspended {
 		return errors.New("domain_error: only suspended instances can be unsuspended")
 	}
-	i.status = InstanceStatusRunning
+	i.controlStatus = InstanceControlStatusActive
 	i.startedAt = &at
 	i.suspendedAt = nil
 	return nil
 }
 
-// RecoverFromBillingSuspension returns a suspended instance to stopped state
-// after overdue payment is received. The user must start it manually.
+// RecoverFromBillingSuspension clears the control suspension after overdue
+// payment is received. The runtime VM remains stopped until the user starts it.
 func (i *Instance) RecoverFromBillingSuspension(at time.Time) error {
-	if i.status != InstanceStatusSuspended {
-		return errors.New("domain_error: only suspended instances can recover to stopped")
+	if i.ControlStatus() != InstanceControlStatusSuspended {
+		return errors.New("domain_error: only suspended instances can recover")
 	}
-	i.status = InstanceStatusStopped
+	i.controlStatus = InstanceControlStatusActive
 	i.stoppedAt = &at
 	i.suspendedAt = nil
 	return nil
 }
 
 func (i *Instance) Terminate(at time.Time) error {
-	if i.status == InstanceStatusTerminated {
+	if i.ControlStatus() == InstanceControlStatusTerminated {
 		return errors.New("domain_error: instance already terminated")
 	}
-	i.status = InstanceStatusTerminated
+	i.controlStatus = InstanceControlStatusTerminated
 	i.terminatedAt = &at
 	return nil
+}
+
+func normalizeControlStatus(status string) string {
+	switch status {
+	case InstanceControlStatusProvisioning, "pending", "":
+		return InstanceControlStatusProvisioning
+	case InstanceControlStatusActive, InstanceStatusRunning, InstanceStatusStopped:
+		return InstanceControlStatusActive
+	case InstanceControlStatusSuspended:
+		return InstanceControlStatusSuspended
+	case InstanceControlStatusTerminated:
+		return InstanceControlStatusTerminated
+	default:
+		return status
+	}
 }

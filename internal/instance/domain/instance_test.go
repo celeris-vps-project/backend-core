@@ -10,63 +10,70 @@ func TestInstanceLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if inst.Status() != InstanceStatusPending {
-		t.Fatalf("expected pending, got %s", inst.Status())
+	if inst.ControlStatus() != InstanceControlStatusProvisioning {
+		t.Fatalf("expected provisioning, got %s", inst.ControlStatus())
 	}
 
 	now := time.Now()
-	if err := inst.Start(now); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err := inst.MarkProvisioned(now); err != nil {
+		t.Fatalf("unexpected provisioned error: %v", err)
 	}
-	if inst.Status() != InstanceStatusRunning {
-		t.Fatalf("expected running, got %s", inst.Status())
+	if inst.ControlStatus() != InstanceControlStatusActive {
+		t.Fatalf("expected active, got %s", inst.ControlStatus())
+	}
+
+	if err := inst.Start(now); err != nil {
+		t.Fatalf("unexpected start error: %v", err)
+	}
+	if inst.ControlStatus() != InstanceControlStatusActive {
+		t.Fatalf("expected control status to remain active, got %s", inst.ControlStatus())
 	}
 
 	if err := inst.Stop(now); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if inst.Status() != InstanceStatusStopped {
-		t.Fatalf("expected stopped, got %s", inst.Status())
+	if inst.ControlStatus() != InstanceControlStatusActive {
+		t.Fatalf("expected control status to remain active after stop, got %s", inst.ControlStatus())
 	}
 
 	if err := inst.Start(now); err != nil {
 		t.Fatalf("unexpected error restarting: %v", err)
 	}
-	if inst.Status() != InstanceStatusRunning {
-		t.Fatalf("expected running, got %s", inst.Status())
+	if inst.StartedAt() == nil {
+		t.Fatal("expected started timestamp")
 	}
 }
 
 func TestInstanceSuspendUnsuspend(t *testing.T) {
 	inst, _ := NewInstance("ins-2", "cust-1", "ord-1", "node-1", "db-01", "vps-pro", "debian-12", "", 4, 8192, 100)
 	now := time.Now()
-	_ = inst.Start(now)
+	_ = inst.MarkProvisioned(now)
 
 	if err := inst.Suspend(now); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if inst.Status() != InstanceStatusSuspended {
-		t.Fatalf("expected suspended, got %s", inst.Status())
+	if inst.ControlStatus() != InstanceControlStatusSuspended {
+		t.Fatalf("expected suspended, got %s", inst.ControlStatus())
 	}
 
 	if err := inst.Unsuspend(now); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if inst.Status() != InstanceStatusRunning {
-		t.Fatalf("expected running, got %s", inst.Status())
+	if inst.ControlStatus() != InstanceControlStatusActive {
+		t.Fatalf("expected active, got %s", inst.ControlStatus())
 	}
 }
 
 func TestInstanceTerminate(t *testing.T) {
 	inst, _ := NewInstance("ins-3", "cust-1", "ord-1", "node-1", "app-01", "vps-starter", "centos-9", "", 1, 1024, 20)
 	now := time.Now()
-	_ = inst.Start(now)
+	_ = inst.MarkProvisioned(now)
 
 	if err := inst.Terminate(now); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if inst.Status() != InstanceStatusTerminated {
-		t.Fatalf("expected terminated, got %s", inst.Status())
+	if inst.ControlStatus() != InstanceControlStatusTerminated {
+		t.Fatalf("expected terminated, got %s", inst.ControlStatus())
 	}
 
 	if err := inst.Start(now); err == nil {

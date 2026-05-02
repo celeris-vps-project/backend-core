@@ -318,6 +318,7 @@ func main() {
 	nodeAllocatorRepo := instanceInfra.NewHostNodeAllocatorAdapter(hostRepo)
 	instRepo := instanceInfra.NewGormInstanceRepo(db)
 	instanceWSHub := instanceWs.NewHub(instRepo)
+	instanceWSHub.SetRuntimeStateReader(provSvc)
 	instanceWSHub.Register(bus)
 
 	// Provisioning Bus — in-memory channel-based queue that throttles concurrent
@@ -337,6 +338,7 @@ func main() {
 	instApp.SetLifecycleScheduler(instanceInfra.NewProvisioningTaskScheduler(provSvc))
 	instApp.SetEventPublisher(bus)
 	instApp.SetNATPortMappingReader(natPortRepo)
+	instApp.SetRuntimeStateReader(provSvc)
 	instHandler := instanceHttp.NewInstanceHandler(instApp)
 
 	// ── Provisioning → Instance Event Bridge ───────────────────────────────
@@ -433,6 +435,16 @@ func main() {
 	log.Printf("[api] provisioning → instance event bridge enabled")
 
 	// ── Provision Poller (background worker) ───────────────────────────────
+	bus.Subscribe(events.InstanceRuntimeStateUpdatedEvent{}.EventName(), func(evt eventbus.Event) {
+		e, ok := evt.(events.InstanceRuntimeStateUpdatedEvent)
+		if !ok {
+			return
+		}
+		if err := instApp.PublishInstanceState(e.InstanceID); err != nil {
+			log.Printf("[event-bridge] WARNING: failed to publish runtime state for instance %s: %v", e.InstanceID, err)
+		}
+	})
+
 	// Periodically checks pending/running tasks and marks stale ones as failed.
 	// Acts as a safety net in case agent callbacks are lost.
 	provPollerCtx, provPollerCancel := context.WithCancel(context.Background())

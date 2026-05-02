@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"backend-core/pkg/contracts"
+	"time"
+)
 
 // NodeState holds runtime state reported by an agent (heartbeat / register).
 // This data is ephemeral and lives in the cache layer, NOT in the database.
@@ -13,6 +16,7 @@ type NodeState struct {
 	DiskUsage  float64   // 0-100
 	VMCount    int       // number of running VMs
 	LastSeenAt time.Time // last heartbeat timestamp
+	VMStates   map[string]contracts.InstanceRuntimeState
 }
 
 // NodeStateCache abstracts the storage of node runtime state.

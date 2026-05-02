@@ -4,6 +4,7 @@ package ws
 import (
 	"backend-core/internal/instance/domain"
 	"backend-core/pkg/authn"
+	"backend-core/pkg/contracts"
 	"backend-core/pkg/eventbus"
 	"backend-core/pkg/events"
 	"context"
@@ -32,6 +33,10 @@ type client struct {
 type outboundMessage struct {
 	userID string
 	data   []byte
+}
+
+type RuntimeStateReader interface {
+	GetInstanceRuntimeState(instanceID, nodeID string) (contracts.InstanceRuntimeState, bool)
 }
 
 var errClientClosed = errors.New("websocket client closed")
@@ -91,6 +96,7 @@ type Hub struct {
 	broadcast  chan outboundMessage
 	tickets    *TicketStore
 	repo       domain.InstanceRepository
+	runtime    RuntimeStateReader
 }
 
 func NewHub(repo domain.InstanceRepository) *Hub {
@@ -104,6 +110,10 @@ func NewHub(repo domain.InstanceRepository) *Hub {
 	}
 	go h.run()
 	return h
+}
+
+func (h *Hub) SetRuntimeStateReader(reader RuntimeStateReader) {
+	h.runtime = reader
 }
 
 func (h *Hub) requestUnregister(c *client) {
@@ -259,7 +269,7 @@ func (h *Hub) sendInitialSnapshots(cl *client) {
 		return
 	}
 	for _, inst := range instances {
-		data, err := json.Marshal(toInstanceStateEvent(inst))
+		data, err := json.Marshal(h.toInstanceStateEvent(inst))
 		if err != nil {
 			log.Printf("[instance-ws] failed to marshal initial snapshot for instance %s: %v", inst.ID(), err)
 			continue
@@ -271,7 +281,8 @@ func (h *Hub) sendInitialSnapshots(cl *client) {
 	}
 }
 
-func toInstanceStateEvent(inst *domain.Instance) events.InstanceStateUpdatedEvent {
+func (h *Hub) toInstanceStateEvent(inst *domain.Instance) events.InstanceStateUpdatedEvent {
+	runtimeState := h.instanceRuntimeState(inst)
 	return events.InstanceStateUpdatedEvent{
 		InstanceID:      inst.ID(),
 		CustomerID:      inst.CustomerID(),
@@ -286,7 +297,9 @@ func toInstanceStateEvent(inst *domain.Instance) events.InstanceStateUpdatedEven
 		IPv4:            inst.IPv4(),
 		IPv6:            inst.IPv6(),
 		HostIP:          inst.HostIP(),
-		Status:          inst.Status(),
+		Status:          h.instanceStatus(inst),
+		ControlStatus:   inst.ControlStatus(),
+		RuntimeState:    runtimeState,
 		NetworkMode:     inst.NetworkMode(),
 		NATPort:         inst.NATPort(),
 		InitialPassword: inst.InitialPassword(),
@@ -295,6 +308,38 @@ func toInstanceStateEvent(inst *domain.Instance) events.InstanceStateUpdatedEven
 		StoppedAt:       formatOptionalTime(inst.StoppedAt()),
 		SuspendedAt:     formatOptionalTime(inst.SuspendedAt()),
 		TerminatedAt:    formatOptionalTime(inst.TerminatedAt()),
+	}
+}
+
+func (h *Hub) instanceStatus(inst *domain.Instance) string {
+	if inst == nil {
+		return "unknown"
+	}
+	switch inst.ControlStatus() {
+	case domain.InstanceControlStatusProvisioning,
+		domain.InstanceControlStatusSuspended,
+		domain.InstanceControlStatusTerminated:
+		return inst.ControlStatus()
+	}
+	if state := h.instanceRuntimeState(inst); state != "" {
+		return state
+	}
+	return domain.InstanceControlStatusActive
+}
+
+func (h *Hub) instanceRuntimeState(inst *domain.Instance) string {
+	if h.runtime == nil || inst == nil {
+		return ""
+	}
+	state, ok := h.runtime.GetInstanceRuntimeState(inst.ID(), inst.NodeID())
+	if !ok {
+		return ""
+	}
+	switch state.State {
+	case domain.InstanceStatusRunning, domain.InstanceStatusStopped, "paused":
+		return state.State
+	default:
+		return ""
 	}
 }
 

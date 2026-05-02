@@ -81,6 +81,16 @@ func ProcessTasks(tasks []contracts.Task, driver vm.Hypervisor, natForwarder NAT
 			}
 		}
 
+		if result.Status == contracts.TaskStatusCompleted && !needsBootWait(task.Type) && task.Type != contracts.TaskDeprovision {
+			if info, infoErr := driver.Info(task.Spec.InstanceID); infoErr == nil {
+				result.IPv4 = info.IPv4
+				result.IPv6 = info.IPv6
+				result.VMState = info.State
+				log.Printf("[agent] task %s: runtime state after %s is %s",
+					task.ID, task.Type, info.State)
+			}
+		}
+
 		if natErr := ensureNATForward(task, result, natForwarder); natErr != nil {
 			result.Status = contracts.TaskStatusFailed
 			result.Error = natErr.Error()

@@ -19,13 +19,24 @@ type RegistrationResult struct {
 
 // Heartbeat is sent periodically by the agent to report health.
 type Heartbeat struct {
-	NodeID     string  `json:"node_id"`
-	CPUUsage   float64 `json:"cpu_usage"`
-	MemUsage   float64 `json:"mem_usage"`
-	DiskUsage  float64 `json:"disk_usage"`
-	Uptime     int64   `json:"uptime"`
-	VMCount    int     `json:"vm_count"`
-	ReportedAt string  `json:"reported_at"`
+	NodeID     string                 `json:"node_id"`
+	CPUUsage   float64                `json:"cpu_usage"`
+	MemUsage   float64                `json:"mem_usage"`
+	DiskUsage  float64                `json:"disk_usage"`
+	Uptime     int64                  `json:"uptime"`
+	VMCount    int                    `json:"vm_count"`
+	ReportedAt string                 `json:"reported_at"`
+	VMStates   []InstanceRuntimeState `json:"vm_states,omitempty"`
+}
+
+// InstanceRuntimeState is agent-reported hypervisor state for a single guest.
+// It is runtime telemetry and should live in caches, not in the instances table.
+type InstanceRuntimeState struct {
+	InstanceID string `json:"instance_id"`
+	State      string `json:"state"` // "running", "stopped", "paused", "unknown"
+	IPv4       string `json:"ipv4,omitempty"`
+	IPv6       string `json:"ipv6,omitempty"`
+	ReportedAt string `json:"reported_at,omitempty"`
 }
 
 // HeartbeatAck is the controller's response, optionally including queued tasks.

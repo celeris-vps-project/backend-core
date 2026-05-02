@@ -137,8 +137,8 @@ func TestPurchaseInstance_AllocatesSlot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if inst1.Status() != domain.InstanceStatusPending {
-		t.Fatalf("expected pending, got %s", inst1.Status())
+	if inst1.ControlStatus() != domain.InstanceControlStatusProvisioning {
+		t.Fatalf("expected provisioning, got %s", inst1.ControlStatus())
 	}
 
 	// Purchase second instance
@@ -242,8 +242,8 @@ func TestConfirmProvisioning_AssignsNodeAndNetworkDetails(t *testing.T) {
 	if stored.NATPort() != 22001 {
 		t.Fatalf("expected NAT port 22001, got %d", stored.NATPort())
 	}
-	if stored.Status() != domain.InstanceStatusRunning {
-		t.Fatalf("expected running status, got %s", stored.Status())
+	if stored.ControlStatus() != domain.InstanceControlStatusActive {
+		t.Fatalf("expected active control status, got %s", stored.ControlStatus())
 	}
 }
 
@@ -260,6 +260,9 @@ func TestStartInstance_WithLifecycleSchedulerEnqueuesTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected purchase error: %v", err)
 	}
+	if err := svc.ConfirmProvisioning(inst.ID(), inst.NodeID(), "10.0.0.11", "", "", "dedicated", 0); err != nil {
+		t.Fatalf("unexpected provisioning confirm error: %v", err)
+	}
 
 	if err := svc.StartInstance(inst.ID()); err != nil {
 		t.Fatalf("unexpected start error: %v", err)
@@ -271,8 +274,8 @@ func TestStartInstance_WithLifecycleSchedulerEnqueuesTask(t *testing.T) {
 		t.Fatalf("expected start task, got %s", scheduler.tasks[0].taskType)
 	}
 	stored, _ := svc.GetInstance(inst.ID())
-	if stored.Status() != domain.InstanceStatusPending {
-		t.Fatalf("expected status to remain pending until task completion, got %s", stored.Status())
+	if stored.ControlStatus() != domain.InstanceControlStatusActive {
+		t.Fatalf("expected control status to remain active while task runs, got %s", stored.ControlStatus())
 	}
 }
 
@@ -288,8 +291,8 @@ func TestStopInstance_WithLifecycleSchedulerEnqueuesTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected purchase error: %v", err)
 	}
-	if err := svc.StartInstance(inst.ID()); err != nil {
-		t.Fatalf("unexpected local start error: %v", err)
+	if err := svc.ConfirmProvisioning(inst.ID(), inst.NodeID(), "10.0.0.12", "", "", "dedicated", 0); err != nil {
+		t.Fatalf("unexpected provisioning confirm error: %v", err)
 	}
 	svc.SetLifecycleScheduler(scheduler)
 
@@ -303,8 +306,8 @@ func TestStopInstance_WithLifecycleSchedulerEnqueuesTask(t *testing.T) {
 		t.Fatalf("expected stop task, got %s", scheduler.tasks[0].taskType)
 	}
 	stored, _ := svc.GetInstance(inst.ID())
-	if stored.Status() != domain.InstanceStatusRunning {
-		t.Fatalf("expected status to remain running until task completion, got %s", stored.Status())
+	if stored.ControlStatus() != domain.InstanceControlStatusActive {
+		t.Fatalf("expected control status to remain active until task completion, got %s", stored.ControlStatus())
 	}
 }
 
@@ -319,9 +322,6 @@ func TestTerminateInstance_WithLifecycleSchedulerEnqueuesDeprovision(t *testing.
 	inst, err := svc.PurchaseInstance("cust-1", "ord-1", "SG-sin", "web-01", "vps-basic", "ubuntu-24.04", 2, 2048, 40)
 	if err != nil {
 		t.Fatalf("unexpected purchase error: %v", err)
-	}
-	if err := svc.StartInstance(inst.ID()); err != nil {
-		t.Fatalf("unexpected local start error: %v", err)
 	}
 	if err := svc.ConfirmProvisioning(inst.ID(), inst.NodeID(), "10.0.0.20", "", "198.51.100.20", "nat", 22010); err != nil {
 		t.Fatalf("unexpected provisioning confirm error: %v", err)
@@ -341,7 +341,7 @@ func TestTerminateInstance_WithLifecycleSchedulerEnqueuesDeprovision(t *testing.
 		t.Fatalf("expected NAT details to be propagated, got mode=%s port=%d", scheduler.tasks[0].spec.NetworkMode, scheduler.tasks[0].spec.NATPort)
 	}
 	stored, _ := svc.GetInstance(inst.ID())
-	if stored.Status() != domain.InstanceStatusRunning {
-		t.Fatalf("expected status to remain running until deprovision completes, got %s", stored.Status())
+	if stored.ControlStatus() != domain.InstanceControlStatusActive {
+		t.Fatalf("expected control status to remain active until deprovision completes, got %s", stored.ControlStatus())
 	}
 }

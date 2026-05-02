@@ -158,6 +158,7 @@ type HeartbeatRequest struct {
 	Uptime        int64                  `protobuf:"varint,5,opt,name=uptime,proto3" json:"uptime,omitempty"`
 	VmCount       int32                  `protobuf:"varint,6,opt,name=vm_count,json=vmCount,proto3" json:"vm_count,omitempty"`
 	ReportedAt    string                 `protobuf:"bytes,7,opt,name=reported_at,json=reportedAt,proto3" json:"reported_at,omitempty"`
+	VmStates      []*VMState             `protobuf:"bytes,8,rep,name=vm_states,json=vmStates,proto3" json:"vm_states,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -239,6 +240,13 @@ func (x *HeartbeatRequest) GetReportedAt() string {
 		return x.ReportedAt
 	}
 	return ""
+}
+
+func (x *HeartbeatRequest) GetVmStates() []*VMState {
+	if x != nil {
+		return x.VmStates
+	}
+	return nil
 }
 
 type HeartbeatResponse struct {
@@ -377,6 +385,82 @@ func (x *NATForwardRule) GetProtocol() string {
 	return ""
 }
 
+type VMState struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InstanceId    string                 `protobuf:"bytes,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	State         string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
+	Ipv4          string                 `protobuf:"bytes,3,opt,name=ipv4,proto3" json:"ipv4,omitempty"`
+	Ipv6          string                 `protobuf:"bytes,4,opt,name=ipv6,proto3" json:"ipv6,omitempty"`
+	ReportedAt    string                 `protobuf:"bytes,5,opt,name=reported_at,json=reportedAt,proto3" json:"reported_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VMState) Reset() {
+	*x = VMState{}
+	mi := &file_agent_v1_agent_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VMState) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VMState) ProtoMessage() {}
+
+func (x *VMState) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VMState.ProtoReflect.Descriptor instead.
+func (*VMState) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *VMState) GetInstanceId() string {
+	if x != nil {
+		return x.InstanceId
+	}
+	return ""
+}
+
+func (x *VMState) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *VMState) GetIpv4() string {
+	if x != nil {
+		return x.Ipv4
+	}
+	return ""
+}
+
+func (x *VMState) GetIpv6() string {
+	if x != nil {
+		return x.Ipv6
+	}
+	return ""
+}
+
+func (x *VMState) GetReportedAt() string {
+	if x != nil {
+		return x.ReportedAt
+	}
+	return ""
+}
+
 type Task struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -393,7 +477,7 @@ type Task struct {
 
 func (x *Task) Reset() {
 	*x = Task{}
-	mi := &file_agent_v1_agent_proto_msgTypes[5]
+	mi := &file_agent_v1_agent_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -405,7 +489,7 @@ func (x *Task) String() string {
 func (*Task) ProtoMessage() {}
 
 func (x *Task) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[5]
+	mi := &file_agent_v1_agent_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -418,7 +502,7 @@ func (x *Task) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Task.ProtoReflect.Descriptor instead.
 func (*Task) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{5}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Task) GetId() string {
@@ -501,7 +585,7 @@ type ProvisionSpec struct {
 
 func (x *ProvisionSpec) Reset() {
 	*x = ProvisionSpec{}
-	mi := &file_agent_v1_agent_proto_msgTypes[6]
+	mi := &file_agent_v1_agent_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -513,7 +597,7 @@ func (x *ProvisionSpec) String() string {
 func (*ProvisionSpec) ProtoMessage() {}
 
 func (x *ProvisionSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[6]
+	mi := &file_agent_v1_agent_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -526,7 +610,7 @@ func (x *ProvisionSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProvisionSpec.ProtoReflect.Descriptor instead.
 func (*ProvisionSpec) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{6}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ProvisionSpec) GetInstanceId() string {
@@ -656,7 +740,7 @@ type TaskResultRequest struct {
 
 func (x *TaskResultRequest) Reset() {
 	*x = TaskResultRequest{}
-	mi := &file_agent_v1_agent_proto_msgTypes[7]
+	mi := &file_agent_v1_agent_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -668,7 +752,7 @@ func (x *TaskResultRequest) String() string {
 func (*TaskResultRequest) ProtoMessage() {}
 
 func (x *TaskResultRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[7]
+	mi := &file_agent_v1_agent_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -681,7 +765,7 @@ func (x *TaskResultRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskResultRequest.ProtoReflect.Descriptor instead.
 func (*TaskResultRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{7}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *TaskResultRequest) GetTaskId() string {
@@ -742,7 +826,7 @@ type TaskResultResponse struct {
 
 func (x *TaskResultResponse) Reset() {
 	*x = TaskResultResponse{}
-	mi := &file_agent_v1_agent_proto_msgTypes[8]
+	mi := &file_agent_v1_agent_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -754,7 +838,7 @@ func (x *TaskResultResponse) String() string {
 func (*TaskResultResponse) ProtoMessage() {}
 
 func (x *TaskResultResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[8]
+	mi := &file_agent_v1_agent_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -767,7 +851,7 @@ func (x *TaskResultResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskResultResponse.ProtoReflect.Descriptor instead.
 func (*TaskResultResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{8}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *TaskResultResponse) GetOk() bool {
@@ -791,7 +875,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x1d\n" +
 	"\n" +
 	"node_token\x18\x02 \x01(\tR\tnodeToken\x12\x17\n" +
-	"\anode_id\x18\x03 \x01(\tR\x06nodeId\"\xd8\x01\n" +
+	"\anode_id\x18\x03 \x01(\tR\x06nodeId\"\x88\x02\n" +
 	"\x10HeartbeatRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1b\n" +
 	"\tcpu_usage\x18\x02 \x01(\x01R\bcpuUsage\x12\x1b\n" +
@@ -801,7 +885,8 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x06uptime\x18\x05 \x01(\x03R\x06uptime\x12\x19\n" +
 	"\bvm_count\x18\x06 \x01(\x05R\avmCount\x12\x1f\n" +
 	"\vreported_at\x18\a \x01(\tR\n" +
-	"reportedAt\"\x86\x01\n" +
+	"reportedAt\x12.\n" +
+	"\tvm_states\x18\b \x03(\v2\x11.agent.v1.VMStateR\bvmStates\"\x86\x01\n" +
 	"\x11HeartbeatResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12$\n" +
 	"\x05tasks\x18\x02 \x03(\v2\x0e.agent.v1.TaskR\x05tasks\x12;\n" +
@@ -813,7 +898,15 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\bguest_ip\x18\x03 \x01(\tR\aguestIp\x12\x1d\n" +
 	"\n" +
 	"guest_port\x18\x04 \x01(\x05R\tguestPort\x12\x1a\n" +
-	"\bprotocol\x18\x05 \x01(\tR\bprotocol\"\xde\x01\n" +
+	"\bprotocol\x18\x05 \x01(\tR\bprotocol\"\x89\x01\n" +
+	"\aVMState\x12\x1f\n" +
+	"\vinstance_id\x18\x01 \x01(\tR\n" +
+	"instanceId\x12\x14\n" +
+	"\x05state\x18\x02 \x01(\tR\x05state\x12\x12\n" +
+	"\x04ipv4\x18\x03 \x01(\tR\x04ipv4\x12\x12\n" +
+	"\x04ipv6\x18\x04 \x01(\tR\x04ipv6\x12\x1f\n" +
+	"\vreported_at\x18\x05 \x01(\tR\n" +
+	"reportedAt\"\xde\x01\n" +
 	"\x04Task\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12\x12\n" +
@@ -872,34 +965,36 @@ func file_agent_v1_agent_proto_rawDescGZIP() []byte {
 	return file_agent_v1_agent_proto_rawDescData
 }
 
-var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_agent_v1_agent_proto_goTypes = []any{
 	(*RegisterRequest)(nil),    // 0: agent.v1.RegisterRequest
 	(*RegisterResponse)(nil),   // 1: agent.v1.RegisterResponse
 	(*HeartbeatRequest)(nil),   // 2: agent.v1.HeartbeatRequest
 	(*HeartbeatResponse)(nil),  // 3: agent.v1.HeartbeatResponse
 	(*NATForwardRule)(nil),     // 4: agent.v1.NATForwardRule
-	(*Task)(nil),               // 5: agent.v1.Task
-	(*ProvisionSpec)(nil),      // 6: agent.v1.ProvisionSpec
-	(*TaskResultRequest)(nil),  // 7: agent.v1.TaskResultRequest
-	(*TaskResultResponse)(nil), // 8: agent.v1.TaskResultResponse
+	(*VMState)(nil),            // 5: agent.v1.VMState
+	(*Task)(nil),               // 6: agent.v1.Task
+	(*ProvisionSpec)(nil),      // 7: agent.v1.ProvisionSpec
+	(*TaskResultRequest)(nil),  // 8: agent.v1.TaskResultRequest
+	(*TaskResultResponse)(nil), // 9: agent.v1.TaskResultResponse
 }
 var file_agent_v1_agent_proto_depIdxs = []int32{
-	5, // 0: agent.v1.HeartbeatResponse.tasks:type_name -> agent.v1.Task
-	4, // 1: agent.v1.HeartbeatResponse.nat_forwards:type_name -> agent.v1.NATForwardRule
-	6, // 2: agent.v1.Task.spec:type_name -> agent.v1.ProvisionSpec
-	4, // 3: agent.v1.ProvisionSpec.nat_forwards:type_name -> agent.v1.NATForwardRule
-	0, // 4: agent.v1.AgentService.Register:input_type -> agent.v1.RegisterRequest
-	2, // 5: agent.v1.AgentService.Heartbeat:input_type -> agent.v1.HeartbeatRequest
-	7, // 6: agent.v1.AgentService.ReportTaskResult:input_type -> agent.v1.TaskResultRequest
-	1, // 7: agent.v1.AgentService.Register:output_type -> agent.v1.RegisterResponse
-	3, // 8: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
-	8, // 9: agent.v1.AgentService.ReportTaskResult:output_type -> agent.v1.TaskResultResponse
-	7, // [7:10] is the sub-list for method output_type
-	4, // [4:7] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	5, // 0: agent.v1.HeartbeatRequest.vm_states:type_name -> agent.v1.VMState
+	6, // 1: agent.v1.HeartbeatResponse.tasks:type_name -> agent.v1.Task
+	4, // 2: agent.v1.HeartbeatResponse.nat_forwards:type_name -> agent.v1.NATForwardRule
+	7, // 3: agent.v1.Task.spec:type_name -> agent.v1.ProvisionSpec
+	4, // 4: agent.v1.ProvisionSpec.nat_forwards:type_name -> agent.v1.NATForwardRule
+	0, // 5: agent.v1.AgentService.Register:input_type -> agent.v1.RegisterRequest
+	2, // 6: agent.v1.AgentService.Heartbeat:input_type -> agent.v1.HeartbeatRequest
+	8, // 7: agent.v1.AgentService.ReportTaskResult:input_type -> agent.v1.TaskResultRequest
+	1, // 8: agent.v1.AgentService.Register:output_type -> agent.v1.RegisterResponse
+	3, // 9: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
+	9, // 10: agent.v1.AgentService.ReportTaskResult:output_type -> agent.v1.TaskResultResponse
+	8, // [8:11] is the sub-list for method output_type
+	5, // [5:8] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_agent_v1_agent_proto_init() }
@@ -913,7 +1008,7 @@ func file_agent_v1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_v1_agent_proto_rawDesc), len(file_agent_v1_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

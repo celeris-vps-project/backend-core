@@ -50,6 +50,8 @@ type InstanceResponse struct {
 	IPv6            string                   `json:"ipv6,omitempty"`
 	HostIP          string                   `json:"host_ip,omitempty"`
 	Status          string                   `json:"status"`
+	ControlStatus   string                   `json:"control_status,omitempty"`
+	RuntimeState    string                   `json:"runtime_state,omitempty"`
 	NetworkMode     string                   `json:"network_mode,omitempty"` // "dedicated" or "nat"
 	NATPort         int                      `json:"nat_port,omitempty"`     // NAT mode: SSH port on host
 	NATPorts        []int                    `json:"nat_ports,omitempty"`
@@ -210,8 +212,11 @@ func (h *InstanceHandler) toInstResp(i *domain.Instance) InstanceResponse {
 		ID: i.ID(), CustomerID: i.CustomerID(), OrderID: i.OrderID(), NodeID: i.NodeID(),
 		Hostname: i.Hostname(), Plan: i.Plan(), OS: i.OS(),
 		CPU: i.CPU(), MemoryMB: i.MemoryMB(), DiskGB: i.DiskGB(),
-		IPv4: i.IPv4(), IPv6: i.IPv6(), HostIP: i.HostIP(), Status: i.Status(),
-		NetworkMode: i.NetworkMode(), NATPort: i.NATPort(), InitialPassword: i.InitialPassword(),
+		IPv4: i.IPv4(), IPv6: i.IPv6(), HostIP: i.HostIP(),
+		Status:        h.svc.InstanceStatus(i),
+		ControlStatus: i.ControlStatus(),
+		RuntimeState:  h.svc.InstanceRuntimeState(i),
+		NetworkMode:   i.NetworkMode(), NATPort: i.NATPort(), InitialPassword: i.InitialPassword(),
 		CreatedAt: i.CreatedAt().Format(time.RFC3339),
 	}
 	if mappings, err := h.instanceNATPortMappings(i); err == nil {
