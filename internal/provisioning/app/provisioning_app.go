@@ -7,6 +7,7 @@ import (
 	"backend-core/pkg/events"
 	"errors"
 	"log"
+	"strings"
 	"time"
 )
 
@@ -15,6 +16,7 @@ type IDGenerator interface{ NewID() string }
 const (
 	DefaultNATPortStart = 20000
 	DefaultNATPortEnd   = 65535
+	DefaultNATBridge    = "vmbr2"
 )
 
 // ProvisioningAppService manages all provisioning-layer concerns:
@@ -60,7 +62,7 @@ func (s *ProvisioningAppService) StateCache() domain.NodeStateCache {
 // Host CRUD
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-func (s *ProvisioningAppService) CreateHost(code, location, name, secret string, totalSlots, natPortStart, natPortEnd int) (*domain.HostNode, error) {
+func (s *ProvisioningAppService) CreateHost(code, location, name, secret string, totalSlots, natPortStart, natPortEnd int, natBridge string) (*domain.HostNode, error) {
 	id := s.ids.NewID()
 	h, err := domain.NewHostNode(id, code, location, name, secret)
 	if err != nil {
@@ -74,6 +76,9 @@ func (s *ProvisioningAppService) CreateHost(code, location, name, secret string,
 	}
 	natPortStart, natPortEnd = defaultNATPortRange(natPortStart, natPortEnd)
 	if err := h.SetNATPortRange(natPortStart, natPortEnd); err != nil {
+		return nil, err
+	}
+	if err := h.SetNATBridge(defaultNATBridge(natBridge)); err != nil {
 		return nil, err
 	}
 	if err := s.hostRepo.Save(h); err != nil {
@@ -90,6 +95,14 @@ func defaultNATPortRange(start, end int) (int, int) {
 		end = DefaultNATPortEnd
 	}
 	return start, end
+}
+
+func defaultNATBridge(bridge string) string {
+	bridge = strings.TrimSpace(bridge)
+	if bridge == "" {
+		return DefaultNATBridge
+	}
+	return bridge
 }
 
 func (s *ProvisioningAppService) GetHost(id string) (*domain.HostNode, error) {
@@ -522,7 +535,11 @@ func (s *ProvisioningAppService) AllocateNATPort(nodeID, instanceID string) (hos
 	existing, findErr := s.ipRepo.FindAvailableNAT(nodeID)
 	if findErr == nil && existing != nil {
 		if existing.Address() == "" {
-			guestIP, err := defaultNATGuestIPv4(node, existing.Port())
+			allocations, err := s.ipRepo.ListByNodeID(nodeID)
+			if err != nil {
+				return "", 0, err
+			}
+			guestIP, err := nextNATGuestIPv4(node, allocations)
 			if err != nil {
 				return "", 0, err
 			}
@@ -540,20 +557,17 @@ func (s *ProvisioningAppService) AllocateNATPort(nodeID, instanceID string) (hos
 		return hostIP, existing.Port(), nil
 	}
 
-	// 2. Find a free port from the node's range
-	usedPorts, err := s.ipRepo.ListNATPortsByNodeID(nodeID)
+	// 2. Find a free port and internal guest IP from existing allocations.
+	allocations, err := s.ipRepo.ListByNodeID(nodeID)
 	if err != nil {
 		return "", 0, err
 	}
-	usedSet := make(map[int]struct{}, len(usedPorts))
-	for _, p := range usedPorts {
-		usedSet[p] = struct{}{}
-	}
+	usedSet := usedNATPorts(allocations)
 	freePort, err := node.FindFreeNATPort(usedSet)
 	if err != nil {
 		return "", 0, err
 	}
-	guestIP, err := defaultNATGuestIPv4(node, freePort)
+	guestIP, err := nextNATGuestIPv4(node, allocations)
 	if err != nil {
 		return "", 0, err
 	}

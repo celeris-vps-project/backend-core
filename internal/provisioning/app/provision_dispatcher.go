@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -386,6 +388,9 @@ func (p *VPSProvisioner) allocateNetworkResource(node *domain.HostNode, instance
 		if err != nil {
 			return err
 		}
+		if spec.NetworkName == "" {
+			spec.NetworkName = defaultNATBridge(node.NATBridge())
+		}
 		spec.NetworkMode = contracts.NetworkModeNAT
 		spec.NATPort = allocation.Port()
 		spec.IPv4 = allocation.Address()
@@ -430,7 +435,11 @@ func (p *VPSProvisioner) allocateNATPort(node *domain.HostNode, instanceID strin
 	existing, err := p.ipRepo.FindAvailableNAT(node.ID())
 	if err == nil && existing != nil {
 		if existing.Address() == "" {
-			guestIP, err := defaultNATGuestIPv4(node, existing.Port())
+			allocations, err := p.ipRepo.ListByNodeID(node.ID())
+			if err != nil {
+				return nil, err
+			}
+			guestIP, err := nextNATGuestIPv4(node, allocations)
 			if err != nil {
 				return nil, err
 			}
@@ -447,20 +456,17 @@ func (p *VPSProvisioner) allocateNATPort(node *domain.HostNode, instanceID strin
 		return existing, nil
 	}
 
-	// 2. No reusable allocation — find a free port from the node's range
-	usedPorts, err := p.ipRepo.ListNATPortsByNodeID(node.ID())
+	// 2. No reusable allocation: find a free port and internal guest IP.
+	allocations, err := p.ipRepo.ListByNodeID(node.ID())
 	if err != nil {
 		return nil, err
 	}
-	usedSet := make(map[int]struct{}, len(usedPorts))
-	for _, port := range usedPorts {
-		usedSet[port] = struct{}{}
-	}
+	usedSet := usedNATPorts(allocations)
 	freePort, err := node.FindFreeNATPort(usedSet)
 	if err != nil {
 		return nil, err
 	}
-	guestIP, err := defaultNATGuestIPv4(node, freePort)
+	guestIP, err := nextNATGuestIPv4(node, allocations)
 	if err != nil {
 		return nil, err
 	}
@@ -479,12 +485,46 @@ func (p *VPSProvisioner) allocateNATPort(node *domain.HostNode, instanceID strin
 	return alloc, nil
 }
 
-func defaultNATGuestIPv4(node *domain.HostNode, port int) (string, error) {
-	offset := port - node.NATPortStart() + 10
-	if offset < 2 || offset > 254 {
-		return "", fmt.Errorf("provisioning: NAT guest IPv4 exhausted for default 10.0.0.0/24 range on node %s", node.Code())
+func usedNATPorts(allocations []*domain.IPAddress) map[int]struct{} {
+	used := make(map[int]struct{}, len(allocations))
+	for _, ip := range allocations {
+		if ip == nil || !ip.IsNAT() || ip.Port() <= 0 {
+			continue
+		}
+		used[ip.Port()] = struct{}{}
 	}
-	return fmt.Sprintf("10.0.0.%d", offset), nil
+	return used
+}
+
+func nextNATGuestIPv4(node *domain.HostNode, allocations []*domain.IPAddress) (string, error) {
+	used := make(map[int]struct{}, len(allocations))
+	for _, ip := range allocations {
+		if ip == nil || !ip.IsNAT() {
+			continue
+		}
+		octet, ok := natGuestLastOctet(ip.Address())
+		if ok {
+			used[octet] = struct{}{}
+		}
+	}
+	for octet := 10; octet <= 254; octet++ {
+		if _, exists := used[octet]; !exists {
+			return fmt.Sprintf("10.0.0.%d", octet), nil
+		}
+	}
+	return "", fmt.Errorf("provisioning: NAT guest IPv4 exhausted for default 10.0.0.0/24 range on node %s", node.Code())
+}
+
+func natGuestLastOctet(address string) (int, bool) {
+	parts := strings.Split(address, ".")
+	if len(parts) != 4 || parts[0] != "10" || parts[1] != "0" || parts[2] != "0" {
+		return 0, false
+	}
+	octet, err := strconv.Atoi(parts[3])
+	if err != nil || octet < 2 || octet > 254 {
+		return 0, false
+	}
+	return octet, true
 }
 
 func (p *VPSProvisioner) releaseSlot(nodeID string) {

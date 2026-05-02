@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -33,6 +34,7 @@ type HostNode struct {
 	// NAT port pool configuration
 	natPortStart int // NAT port range start (e.g. 20000); 0 = NAT not configured
 	natPortEnd   int // NAT port range end (e.g. 60000)
+	natBridge    string
 }
 
 func NewHostNode(id, code, location, name, secret string) (*HostNode, error) {
@@ -73,7 +75,7 @@ func ReconstituteHostNodeFull(
 	id, code, location, regionID, resourcePoolID, name, secret, nodeToken string,
 	createdAt time.Time,
 	totalSlots, usedSlots int, enabled bool,
-	natPortStart, natPortEnd int,
+	natPortStart, natPortEnd int, natBridge string,
 ) *HostNode {
 	return &HostNode{
 		id: id, code: code, location: location, regionID: regionID, resourcePoolID: resourcePoolID,
@@ -81,6 +83,7 @@ func ReconstituteHostNodeFull(
 		createdAt:  createdAt,
 		totalSlots: totalSlots, usedSlots: usedSlots, enabled: enabled,
 		natPortStart: natPortStart, natPortEnd: natPortEnd,
+		natBridge: natBridge,
 	}
 }
 
@@ -155,6 +158,7 @@ func (n *HostNode) ValidateNodeToken(t string) bool {
 
 func (n *HostNode) NATPortStart() int { return n.natPortStart }
 func (n *HostNode) NATPortEnd() int   { return n.natPortEnd }
+func (n *HostNode) NATBridge() string { return n.natBridge }
 
 // HasNATPortPool returns true if the node has a NAT port range configured.
 func (n *HostNode) HasNATPortPool() bool {
@@ -185,6 +189,22 @@ func (n *HostNode) SetNATPortRange(start, end int) error {
 	}
 	n.natPortStart = start
 	n.natPortEnd = end
+	return nil
+}
+
+// SetNATBridge configures the PVE bridge used for NAT-mode guests.
+func (n *HostNode) SetNATBridge(bridge string) error {
+	bridge = strings.TrimSpace(bridge)
+	if bridge == "" {
+		return errors.New("domain_error: NAT bridge is required")
+	}
+	if len(bridge) > 15 {
+		return errors.New("domain_error: NAT bridge name must not exceed 15 characters")
+	}
+	if strings.ContainsAny(bridge, " \t\r\n") {
+		return errors.New("domain_error: NAT bridge name must not contain whitespace")
+	}
+	n.natBridge = bridge
 	return nil
 }
 

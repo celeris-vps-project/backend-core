@@ -26,6 +26,7 @@ type CreateHostRequest struct {
 	TotalSlots       int    `json:"total_slots"`
 	NATPortStart     int    `json:"nat_port_start"`
 	NATPortEnd       int    `json:"nat_port_end"`
+	NATBridge        string `json:"nat_bridge"`
 	TokenTTLMinutes  int    `json:"token_ttl_minutes"` // TTL for the auto-created bootstrap token (default 24h)
 	TokenDescription string `json:"token_description"` // optional description for the bootstrap token
 }
@@ -75,6 +76,7 @@ type HostNodeResponse struct {
 	NATPortStart    int     `json:"nat_port_start"`
 	NATPortEnd      int     `json:"nat_port_end"`
 	NATPortPoolSize int     `json:"nat_port_pool_size"`
+	NATBridge       string  `json:"nat_bridge"`
 	Enabled         bool    `json:"enabled"`
 	LastSeen        *string `json:"last_seen_at,omitempty"`
 	CreatedAt       string  `json:"created_at"`
@@ -150,7 +152,7 @@ func (h *NodeHandler) CreateHost(ctx context.Context, c *hz_app.RequestContext) 
 		return
 	}
 
-	node, err := h.svc.CreateHost(code, req.Location, name, autoSecret, req.TotalSlots, req.NATPortStart, req.NATPortEnd)
+	node, err := h.svc.CreateHost(code, req.Location, name, autoSecret, req.TotalSlots, req.NATPortStart, req.NATPortEnd, req.NATBridge)
 	if err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
 		return
@@ -534,6 +536,10 @@ func (h *NodeHandler) RemoveNodeFromPool(ctx context.Context, c *hz_app.RequestC
 // toHostResp merges persistent config data (from DB) with runtime state (from cache).
 // If state is nil, the node is considered offline.
 func toHostResp(n *domain.HostNode, state *domain.NodeState) HostNodeResponse {
+	natBridge := n.NATBridge()
+	if natBridge == "" {
+		natBridge = app.DefaultNATBridge
+	}
 	resp := HostNodeResponse{
 		ID: n.ID(), Code: n.Code(), Location: n.Location(),
 		ResourcePoolID: n.ResourcePoolID(), Name: n.Name(),
@@ -543,6 +549,7 @@ func toHostResp(n *domain.HostNode, state *domain.NodeState) HostNodeResponse {
 		AvailableSlots: n.AvailableSlots(), Enabled: n.Enabled(),
 		NATPortStart: n.NATPortStart(), NATPortEnd: n.NATPortEnd(),
 		NATPortPoolSize: n.NATPortPoolSize(),
+		NATBridge:       natBridge,
 	}
 	if state != nil {
 		resp.Status = state.Status

@@ -346,7 +346,7 @@ func TestProvisioningAppService_CreateHostDefaultsNATPortRange(t *testing.T) {
 	idGen := &seqProvisionIDGen{}
 	svc := NewProvisioningAppService(hostRepo, nil, nil, regionRepo, nil, nil, nil, idGen, nil)
 
-	node, err := svc.CreateHost("DE-fra-01", "DE-fra", "Frankfurt #1", "secret", 10, 0, 0)
+	node, err := svc.CreateHost("DE-fra-01", "DE-fra", "Frankfurt #1", "secret", 10, 0, 0, "")
 	if err != nil {
 		t.Fatalf("unexpected create host error: %v", err)
 	}
@@ -357,6 +357,9 @@ func TestProvisioningAppService_CreateHostDefaultsNATPortRange(t *testing.T) {
 	if node.NATPortPoolSize() != DefaultNATPortEnd-DefaultNATPortStart+1 {
 		t.Fatalf("unexpected NAT pool size: %d", node.NATPortPoolSize())
 	}
+	if node.NATBridge() != DefaultNATBridge {
+		t.Fatalf("expected default NAT bridge %s, got %s", DefaultNATBridge, node.NATBridge())
+	}
 
 	stored, err := hostRepo.GetByID(node.ID())
 	if err != nil {
@@ -364,6 +367,9 @@ func TestProvisioningAppService_CreateHostDefaultsNATPortRange(t *testing.T) {
 	}
 	if stored.NATPortStart() != DefaultNATPortStart || stored.NATPortEnd() != DefaultNATPortEnd {
 		t.Fatalf("stored node lost default NAT range: %d-%d", stored.NATPortStart(), stored.NATPortEnd())
+	}
+	if stored.NATBridge() != DefaultNATBridge {
+		t.Fatalf("stored node lost default NAT bridge: %s", stored.NATBridge())
 	}
 }
 
@@ -441,6 +447,9 @@ func TestVPSProvisioner_ProvisionAssignsNATPortToTask(t *testing.T) {
 	if taskRepo.lastTask.Spec.IPv4 != "10.0.0.10" {
 		t.Fatalf("expected NAT guest IPv4 10.0.0.10, got %s", taskRepo.lastTask.Spec.IPv4)
 	}
+	if taskRepo.lastTask.Spec.NetworkName != DefaultNATBridge {
+		t.Fatalf("expected NAT network bridge %s, got %s", DefaultNATBridge, taskRepo.lastTask.Spec.NetworkName)
+	}
 
 	storedHost, err := hostRepo.GetByID("node-1")
 	if err != nil {
@@ -474,6 +483,43 @@ func TestVPSProvisioner_ProvisionAssignsNATPortToTask(t *testing.T) {
 	}
 	if allocation.Address() != "10.0.0.10" {
 		t.Fatalf("expected allocation guest ip 10.0.0.10, got %s", allocation.Address())
+	}
+}
+
+func TestVPSProvisioner_AllocateNATPortIncrementsGuestIPv4(t *testing.T) {
+	ipRepo := newMemProvisionIPRepo()
+	idGen := &seqProvisionIDGen{}
+
+	host, err := domain.NewHostNode("node-2", "DE-fra-02", "DE-fra", "Frankfurt #2", "secret")
+	if err != nil {
+		t.Fatalf("unexpected host error: %v", err)
+	}
+	if err := host.SetNATPortRange(20000, 20010); err != nil {
+		t.Fatalf("unexpected NAT port range error: %v", err)
+	}
+
+	provisioner := NewVPSProvisioner(
+		newMemProvisionHostRepo(),
+		newMemProvisionPoolRepo(),
+		newMemProvisionTaskRepo(),
+		idGen,
+		WithIPRepo(ipRepo),
+	)
+
+	first, err := provisioner.allocateNATPort(host, "inst-1")
+	if err != nil {
+		t.Fatalf("unexpected first NAT allocation error: %v", err)
+	}
+	second, err := provisioner.allocateNATPort(host, "inst-2")
+	if err != nil {
+		t.Fatalf("unexpected second NAT allocation error: %v", err)
+	}
+
+	if first.Port() != 20000 || first.Address() != "10.0.0.10" {
+		t.Fatalf("unexpected first allocation: port=%d address=%s", first.Port(), first.Address())
+	}
+	if second.Port() != 20001 || second.Address() != "10.0.0.11" {
+		t.Fatalf("unexpected second allocation: port=%d address=%s", second.Port(), second.Address())
 	}
 }
 
