@@ -24,6 +24,8 @@ type CreateHostRequest struct {
 	Location         string `json:"location" vd:"len($)>0"` // required
 	Name             string `json:"name"`                   // optional ---?falls back to code if empty
 	TotalSlots       int    `json:"total_slots"`
+	NATPortStart     int    `json:"nat_port_start"`
+	NATPortEnd       int    `json:"nat_port_end"`
 	TokenTTLMinutes  int    `json:"token_ttl_minutes"` // TTL for the auto-created bootstrap token (default 24h)
 	TokenDescription string `json:"token_description"` // optional description for the bootstrap token
 }
@@ -55,24 +57,27 @@ type AssignNodeRequest struct {
 // ---- Response DTOs ----
 
 type HostNodeResponse struct {
-	ID             string  `json:"id"`
-	Code           string  `json:"code"`
-	Location       string  `json:"location"`
-	ResourcePoolID string  `json:"resource_pool_id,omitempty"`
-	Name           string  `json:"name"`
-	IP             string  `json:"ip,omitempty"`
-	Status         string  `json:"status"`
-	AgentVer       string  `json:"agent_ver,omitempty"`
-	CPUUsage       float64 `json:"cpu_usage"`
-	MemUsage       float64 `json:"mem_usage"`
-	DiskUsage      float64 `json:"disk_usage"`
-	VMCount        int     `json:"vm_count"`
-	TotalSlots     int     `json:"total_slots"`
-	UsedSlots      int     `json:"used_slots"`
-	AvailableSlots int     `json:"available_slots"`
-	Enabled        bool    `json:"enabled"`
-	LastSeen       *string `json:"last_seen_at,omitempty"`
-	CreatedAt      string  `json:"created_at"`
+	ID              string  `json:"id"`
+	Code            string  `json:"code"`
+	Location        string  `json:"location"`
+	ResourcePoolID  string  `json:"resource_pool_id,omitempty"`
+	Name            string  `json:"name"`
+	IP              string  `json:"ip,omitempty"`
+	Status          string  `json:"status"`
+	AgentVer        string  `json:"agent_ver,omitempty"`
+	CPUUsage        float64 `json:"cpu_usage"`
+	MemUsage        float64 `json:"mem_usage"`
+	DiskUsage       float64 `json:"disk_usage"`
+	VMCount         int     `json:"vm_count"`
+	TotalSlots      int     `json:"total_slots"`
+	UsedSlots       int     `json:"used_slots"`
+	AvailableSlots  int     `json:"available_slots"`
+	NATPortStart    int     `json:"nat_port_start"`
+	NATPortEnd      int     `json:"nat_port_end"`
+	NATPortPoolSize int     `json:"nat_port_pool_size"`
+	Enabled         bool    `json:"enabled"`
+	LastSeen        *string `json:"last_seen_at,omitempty"`
+	CreatedAt       string  `json:"created_at"`
 }
 
 type IPResponse struct {
@@ -145,7 +150,7 @@ func (h *NodeHandler) CreateHost(ctx context.Context, c *hz_app.RequestContext) 
 		return
 	}
 
-	node, err := h.svc.CreateHost(code, req.Location, name, autoSecret, req.TotalSlots)
+	node, err := h.svc.CreateHost(code, req.Location, name, autoSecret, req.TotalSlots, req.NATPortStart, req.NATPortEnd)
 	if err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
 		return
@@ -536,6 +541,8 @@ func toHostResp(n *domain.HostNode, state *domain.NodeState) HostNodeResponse {
 		CreatedAt:  n.CreatedAt().Format(time.RFC3339),
 		TotalSlots: n.TotalSlots(), UsedSlots: n.UsedSlots(),
 		AvailableSlots: n.AvailableSlots(), Enabled: n.Enabled(),
+		NATPortStart: n.NATPortStart(), NATPortEnd: n.NATPortEnd(),
+		NATPortPoolSize: n.NATPortPoolSize(),
 	}
 	if state != nil {
 		resp.Status = state.Status

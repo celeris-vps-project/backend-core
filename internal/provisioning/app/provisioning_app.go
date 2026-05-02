@@ -12,6 +12,11 @@ import (
 
 type IDGenerator interface{ NewID() string }
 
+const (
+	DefaultNATPortStart = 20000
+	DefaultNATPortEnd   = 65535
+)
+
 // ProvisioningAppService manages all provisioning-layer concerns:
 // host nodes, IP pools, resource pools, regions, agent registration,
 // bootstrap tokens, tasks, and capacity queries.
@@ -55,7 +60,7 @@ func (s *ProvisioningAppService) StateCache() domain.NodeStateCache {
 // Host CRUD
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-func (s *ProvisioningAppService) CreateHost(code, location, name, secret string, totalSlots int) (*domain.HostNode, error) {
+func (s *ProvisioningAppService) CreateHost(code, location, name, secret string, totalSlots, natPortStart, natPortEnd int) (*domain.HostNode, error) {
 	id := s.ids.NewID()
 	h, err := domain.NewHostNode(id, code, location, name, secret)
 	if err != nil {
@@ -67,10 +72,24 @@ func (s *ProvisioningAppService) CreateHost(code, location, name, secret string,
 	if regionID := s.ensureRegion(location); regionID != "" {
 		h.SetRegionID(regionID)
 	}
+	natPortStart, natPortEnd = defaultNATPortRange(natPortStart, natPortEnd)
+	if err := h.SetNATPortRange(natPortStart, natPortEnd); err != nil {
+		return nil, err
+	}
 	if err := s.hostRepo.Save(h); err != nil {
 		return nil, err
 	}
 	return h, nil
+}
+
+func defaultNATPortRange(start, end int) (int, int) {
+	if start == 0 {
+		start = DefaultNATPortStart
+	}
+	if end == 0 {
+		end = DefaultNATPortEnd
+	}
+	return start, end
 }
 
 func (s *ProvisioningAppService) GetHost(id string) (*domain.HostNode, error) {

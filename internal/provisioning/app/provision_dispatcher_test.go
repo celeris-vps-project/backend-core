@@ -190,6 +190,54 @@ func (r *memProvisionPoolRepo) Delete(id string) error {
 	return nil
 }
 
+type memProvisionRegionRepo struct {
+	items map[string]*domain.Region
+}
+
+func newMemProvisionRegionRepo() *memProvisionRegionRepo {
+	return &memProvisionRegionRepo{items: map[string]*domain.Region{}}
+}
+
+func (r *memProvisionRegionRepo) GetByID(id string) (*domain.Region, error) {
+	region, ok := r.items[id]
+	if !ok {
+		return nil, errors.New("not found")
+	}
+	return region, nil
+}
+
+func (r *memProvisionRegionRepo) GetByCode(code string) (*domain.Region, error) {
+	for _, region := range r.items {
+		if region.Code() == code {
+			return region, nil
+		}
+	}
+	return nil, errors.New("not found")
+}
+
+func (r *memProvisionRegionRepo) ListAll() ([]*domain.Region, error) {
+	out := make([]*domain.Region, 0, len(r.items))
+	for _, region := range r.items {
+		out = append(out, region)
+	}
+	return out, nil
+}
+
+func (r *memProvisionRegionRepo) ListActive() ([]*domain.Region, error) {
+	var out []*domain.Region
+	for _, region := range r.items {
+		if region.IsActive() {
+			out = append(out, region)
+		}
+	}
+	return out, nil
+}
+
+func (r *memProvisionRegionRepo) Save(region *domain.Region) error {
+	r.items[region.ID()] = region
+	return nil
+}
+
 type memProvisionIPRepo struct {
 	items map[string]*domain.IPAddress
 }
@@ -290,6 +338,33 @@ func (r *memProvisionTaskRepo) Save(task *contracts.Task) error {
 	r.items[task.ID] = &copyTask
 	r.lastTask = &copyTask
 	return nil
+}
+
+func TestProvisioningAppService_CreateHostDefaultsNATPortRange(t *testing.T) {
+	hostRepo := newMemProvisionHostRepo()
+	regionRepo := newMemProvisionRegionRepo()
+	idGen := &seqProvisionIDGen{}
+	svc := NewProvisioningAppService(hostRepo, nil, nil, regionRepo, nil, nil, nil, idGen, nil)
+
+	node, err := svc.CreateHost("DE-fra-01", "DE-fra", "Frankfurt #1", "secret", 10, 0, 0)
+	if err != nil {
+		t.Fatalf("unexpected create host error: %v", err)
+	}
+	if node.NATPortStart() != DefaultNATPortStart || node.NATPortEnd() != DefaultNATPortEnd {
+		t.Fatalf("expected default NAT range %d-%d, got %d-%d",
+			DefaultNATPortStart, DefaultNATPortEnd, node.NATPortStart(), node.NATPortEnd())
+	}
+	if node.NATPortPoolSize() != DefaultNATPortEnd-DefaultNATPortStart+1 {
+		t.Fatalf("unexpected NAT pool size: %d", node.NATPortPoolSize())
+	}
+
+	stored, err := hostRepo.GetByID(node.ID())
+	if err != nil {
+		t.Fatalf("expected stored node: %v", err)
+	}
+	if stored.NATPortStart() != DefaultNATPortStart || stored.NATPortEnd() != DefaultNATPortEnd {
+		t.Fatalf("stored node lost default NAT range: %d-%d", stored.NATPortStart(), stored.NATPortEnd())
+	}
 }
 
 func TestVPSProvisioner_ProvisionAssignsNATPortToTask(t *testing.T) {
