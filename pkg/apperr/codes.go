@@ -37,6 +37,7 @@ const (
 	CodeIPNotFound       = "IP_NOT_FOUND"
 	CodeTaskNotFound     = "TASK_NOT_FOUND"
 	CodeProviderNotFound = "PROVIDER_NOT_FOUND"
+	CodeCouponNotFound   = "COUPON_NOT_FOUND"
 )
 
 // ── Business logic ──
@@ -57,6 +58,8 @@ const (
 	CodeCryptoNotConfigured    = "CRYPTO_NOT_CONFIGURED"
 	CodeSMTPNotEnabled         = "SMTP_NOT_ENABLED"
 	CodeMailSendFailed         = "MAIL_SEND_FAILED"
+	CodeCouponInvalid          = "COUPON_INVALID"
+	CodeCouponExhausted        = "COUPON_EXHAUSTED"
 )
 
 // ── Generic ──

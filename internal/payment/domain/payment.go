@@ -25,6 +25,10 @@ type WebhookPayload struct {
 	Signature string // signature header from the gateway
 }
 
+// WebhookHeaders contains HTTP headers from a gateway callback.
+// Keys should be normalised to lower-case by the HTTP adapter.
+type WebhookHeaders map[string]string
+
 // PaymentProvider abstracts an external payment gateway (Stripe, Alipay, WeChat …).
 // Implement this interface for each real gateway; during the thesis stage a Mock
 // is the only implementation.
@@ -37,7 +41,7 @@ type PaymentProvider interface {
 	// VerifyWebhook validates the authenticity of an incoming webhook callback
 	// and returns the normalised payload. Returns an error if the signature is
 	// invalid or the body cannot be parsed.
-	VerifyWebhook(rawBody []byte, signature string) (*WebhookPayload, error)
+	VerifyWebhook(rawBody []byte, headers WebhookHeaders) (*WebhookPayload, error)
 }
 
 // CryptoPaymentProvider extends PaymentProvider with crypto-specific operations.

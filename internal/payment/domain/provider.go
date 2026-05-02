@@ -7,8 +7,8 @@ import "time"
 // (e.g. crypto wallets, Stripe, PayPal) and users choose at checkout time.
 type PaymentProviderConfig struct {
 	ID        string                 `json:"id"`
-	Type      string                 `json:"type"`       // "crypto_usdt", "stripe", "paypal", "alipay", etc.
-	Name      string                 `json:"name"`       // Display name, e.g. "USDT (Multi-Chain)"
+	Type      string                 `json:"type"` // "crypto_usdt", "stripe", "paypal", "alipay", etc.
+	Name      string                 `json:"name"` // Display name, e.g. "USDT (Multi-Chain)"
 	Enabled   bool                   `json:"enabled"`
 	SortOrder int                    `json:"sort_order"` // Lower = higher priority in display
 	Config    map[string]interface{} `json:"config"`     // Provider-specific configuration (JSON)
@@ -37,7 +37,7 @@ type ProviderTypeInfo struct {
 type ProviderFieldInfo struct {
 	Key         string `json:"key"`
 	Label       string `json:"label"`
-	Type        string `json:"type"`        // "string", "bool", "number", "wallets" (special map type)
+	Type        string `json:"type"` // "string", "bool", "number", "wallets" (special map type)
 	Required    bool   `json:"required"`
 	Placeholder string `json:"placeholder"`
 	HelpText    string `json:"help_text"`
@@ -106,6 +106,9 @@ func SupportedProviderTypes() []ProviderTypeInfo {
 				{Key: "merchant_private_key", Label: "Merchant Private Key (V2 RSA)", Type: "string", Required: false, HelpText: "RSA private key (PEM) for V2 API signing. Required if api_version=v2"},
 				{Key: "platform_public_key", Label: "Platform Public Key (V2 RSA)", Type: "string", Required: false, HelpText: "EPay platform RSA public key (PEM) for verifying V2 responses & webhooks. Required if api_version=v2"},
 				{Key: "pay_type", Label: "Default Payment Type", Type: "string", Required: false, Placeholder: "alipay", HelpText: "Default payment channel: alipay, wxpay, qqpay, etc. Leave empty for cashier page"},
+				{Key: "webhook_secret", Label: "Webhook Secret", Type: "string", Required: true, HelpText: "Secret used to verify POST webhooks with HMAC-SHA256(timestamp + '.' + body)"},
+				{Key: "timestamp_header", Label: "Webhook Timestamp Header", Type: "string", Required: false, Placeholder: "timestamp", HelpText: "Optional. Defaults to timestamp. For v1-style webhook verification, change this only when the gateway uses a non-standard timestamp header name (for example x-my-timestamp)."},
+				{Key: "signature_header", Label: "Webhook Signature Header", Type: "string", Required: false, Placeholder: "signature", HelpText: "Optional. Defaults to signature. For v1-style webhook verification, change this only when the gateway uses a non-standard signature header name (for example x-my-signature)."},
 				{Key: "notify_url", Label: "Notify URL", Type: "string", Required: false, Placeholder: "Auto-generated after creation", HelpText: "Async callback URL for EPay gateway. Auto-filled: /api/v1/payments/webhook/epay/{id}"},
 				{Key: "return_url", Label: "Return URL", Type: "string", Required: false, Placeholder: "https://your-site.com/orders/{order_id}/checkout", HelpText: "Browser redirect URL after payment success"},
 				{Key: "product_name", Label: "Product Name Template", Type: "string", Required: false, Placeholder: "VPS Service", HelpText: "Product name sent to EPay. Default: 'VPS Service'"},

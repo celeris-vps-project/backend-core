@@ -29,6 +29,9 @@ import (
 	paymentDomain "backend-core/internal/payment/domain"
 	paymentInfra "backend-core/internal/payment/infra"
 	paymentHttp "backend-core/internal/payment/interfaces/http"
+	promotionApp "backend-core/internal/promotion/app"
+	promotionInfra "backend-core/internal/promotion/infra"
+	promotionHttp "backend-core/internal/promotion/interfaces/http"
 	provisioningApp "backend-core/internal/provisioning/app"
 	provisioningInfra "backend-core/internal/provisioning/infra"
 	provisioningGrpc "backend-core/internal/provisioning/interfaces/grpc"
@@ -124,6 +127,7 @@ func main() {
 		&orderingInfra.OrderPO{},
 		&instanceInfra.InstancePO{},
 		&catalogInfra.ProductPO{},
+		&promotionInfra.CouponPO{}, &promotionInfra.CouponAllowedProductPO{}, &promotionInfra.CouponRedemptionPO{},
 		&provisioningInfra.RegionPO{}, &provisioningInfra.ResourcePoolPO{}, &provisioningInfra.HostNodePO{},
 		&provisioningInfra.IPAddressPO{}, &provisioningInfra.NATPortAllocationPO{}, &provisioningInfra.TaskPO{},
 		&provisioningInfra.BootstrapTokenPO{},
@@ -258,6 +262,10 @@ func main() {
 	prodApp := catalogApp.NewProductAppService(prodRepo, idGen, bus, capacityChecker)
 	prodHandler := catalogHttp.NewProductHandler(prodApp)
 	orderHandler := orderingHttp.NewOrderHandler(orderApp, prodApp)
+
+	couponRepo := promotionInfra.NewGormCouponRepo(db)
+	couponApp := promotionApp.NewCouponAppService(couponRepo, idGen)
+	couponHandler := promotionHttp.NewCouponHandler(couponApp)
 
 	// Product Line (customer-facing product browsing by resource pool)
 	// Uses a catalog/infra adapter so the handler never imports provisioning directly.
@@ -528,6 +536,7 @@ func main() {
 	// creation, timeout scheduling, and webhook handling.
 	paySvc := paymentApp.NewPaymentAppService(providerSvc, postPayOrch, cryptoProvider)
 	paySvc.SetRenewalService(renewalSvc)
+	paySvc.SetCouponApplier(promotionInfra.NewPaymentCouponAdapter(couponApp))
 	// PaymentHandler is now a thin HTTP adapter — only parses/serialises.
 	payHandler := paymentHttp.NewPaymentHandler(paySvc)
 	providerHandler := paymentHttp.NewProviderHandler(providerSvc)
@@ -717,10 +726,10 @@ func main() {
 		// Dropping a payment callback could leave orders in limbo.
 		v1.POST("/payments/webhook", payHandler.Webhook)
 		v1.POST("/payments/webhook/simulate", payHandler.SimulateWebhook)
-		// EPay (易支付) webhook — receives callbacks from EPay gateways as GET requests.
-		// Supports both V1 (MD5) and V2 (RSA) signature verification.
+		// EPay (易支付) webhook — receives POST callbacks from EPay gateways.
+		// Verifies timestamp + raw body HMAC signatures with configurable header names.
 		// Route: /api/v1/payments/webhook/epay/:providerId
-		v1.GET("/payments/webhook/epay/:providerId", payHandler.EPayWebhook)
+		v1.POST("/payments/webhook/epay/:providerId", payHandler.EPayWebhook)
 	}
 
 	// 傳入真實的 jwtService 給中間件
@@ -878,6 +887,11 @@ func main() {
 		adminAPI.POST("/smtp/test", mailHandler.TestSMTP)
 
 		// Payment Provider management (dynamic provider configuration)
+		adminAPI.POST("/coupons", couponHandler.Create)
+		adminAPI.GET("/coupons", couponHandler.List)
+		adminAPI.GET("/coupons/:id", couponHandler.GetByID)
+		adminAPI.POST("/coupons/:id/enable", couponHandler.Enable)
+		adminAPI.POST("/coupons/:id/disable", couponHandler.Disable)
 		adminAPI.POST("/payment-providers", providerHandler.Create)
 		adminAPI.GET("/payment-providers", providerHandler.ListAll)
 		adminAPI.GET("/payment-providers/types", providerHandler.ProviderTypes)

@@ -63,13 +63,13 @@ func (m *MockPaymentProvider) SetCallback(cb func(payload *domain.WebhookPayload
 }
 
 // VerifyWebhook always returns a valid payload — no real signature check.
-func (m *MockPaymentProvider) VerifyWebhook(rawBody []byte, signature string) (*domain.WebhookPayload, error) {
+func (m *MockPaymentProvider) VerifyWebhook(rawBody []byte, headers domain.WebhookHeaders) (*domain.WebhookPayload, error) {
 	// In the mock we trust everything.
 	return &domain.WebhookPayload{
 		ChargeID:  "mock_charge_from_webhook",
 		OrderID:   "extracted_from_body",
 		Status:    domain.ChargeStatusSuccess,
 		RawBody:   rawBody,
-		Signature: signature,
+		Signature: headers["x-webhook-signature"],
 	}, nil
 }

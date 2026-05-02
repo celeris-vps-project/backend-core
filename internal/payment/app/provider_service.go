@@ -143,6 +143,7 @@ func (s *ProviderAppService) UpdateProvider(id, name string, sortOrder int, conf
 		return nil, fmt.Errorf("update provider: %w", err)
 	}
 
+	s.invalidateProviderCache(id)
 	log.Printf("[ProviderAppService] provider updated: id=%s name=%s", id, existing.Name)
 	return existing, nil
 }
@@ -155,7 +156,11 @@ func (s *ProviderAppService) EnableProvider(id string) error {
 	}
 	p.Enabled = true
 	p.UpdatedAt = time.Now()
-	return s.repo.Update(p)
+	if err := s.repo.Update(p); err != nil {
+		return err
+	}
+	s.invalidateProviderCache(id)
+	return nil
 }
 
 // DisableProvider disables a provider.
@@ -166,7 +171,11 @@ func (s *ProviderAppService) DisableProvider(id string) error {
 	}
 	p.Enabled = false
 	p.UpdatedAt = time.Now()
-	return s.repo.Update(p)
+	if err := s.repo.Update(p); err != nil {
+		return err
+	}
+	s.invalidateProviderCache(id)
+	return nil
 }
 
 // DeleteProvider removes a provider permanently.
@@ -174,8 +183,14 @@ func (s *ProviderAppService) DeleteProvider(id string) error {
 	if err := s.repo.Delete(id); err != nil {
 		return fmt.Errorf("delete provider: %w", err)
 	}
+	s.invalidateProviderCache(id)
 	log.Printf("[ProviderAppService] provider deleted: id=%s", id)
 	return nil
+}
+
+func (s *ProviderAppService) invalidateProviderCache(id string) {
+	// Provider instances own parsed config, so mutations must force reconstruction.
+	s.cache.Delete(id)
 }
 
 func (s *ProviderAppService) SetCallback(cb func(*domain.WebhookPayload)) {

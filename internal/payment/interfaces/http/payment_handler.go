@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"strings"
 
 	"context"
 
@@ -36,6 +37,7 @@ func NewPaymentHandler(paymentSvc *paymentApp.PaymentAppService) *PaymentHandler
 type PayRequest struct {
 	Network    string `json:"network,omitempty"`     // e.g. "arbitrum", "solana"
 	ProviderID string `json:"provider_id,omitempty"` // dynamic provider selection
+	CouponCode string `json:"coupon_code,omitempty"` // optional activation/coupon code
 }
 
 // Pay handles POST /orders/:id/pay
@@ -53,6 +55,7 @@ func (h *PaymentHandler) Pay(ctx context.Context, c *hz_app.RequestContext) {
 		OrderID:    orderID,
 		ProviderID: req.ProviderID,
 		Network:    req.Network,
+		CouponCode: req.CouponCode,
 	})
 	if err != nil {
 		apperr.HandleErr(c, err)
@@ -110,7 +113,7 @@ type WebhookRequest struct {
 // Webhook handles POST /api/v1/payments/webhook
 func (h *PaymentHandler) Webhook(ctx context.Context, c *hz_app.RequestContext) {
 	rawBody := c.Request.Body()
-	signature := string(c.GetHeader("X-Webhook-Signature"))
+	headers := collectWebhookHeaders(c)
 
 	provider := h.paymentSvc.GetDefaultProvider()
 	if provider == nil {
@@ -118,7 +121,7 @@ func (h *PaymentHandler) Webhook(ctx context.Context, c *hz_app.RequestContext) 
 		return
 	}
 
-	payload, err := provider.VerifyWebhook(rawBody, signature)
+	payload, err := provider.VerifyWebhook(rawBody, headers)
 	if err != nil {
 		log.Printf("[PaymentHandler.Webhook] verification failed: %v", err)
 		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeWebhookFailed, "webhook verification failed"))
@@ -140,10 +143,11 @@ func (h *PaymentHandler) Webhook(ctx context.Context, c *hz_app.RequestContext) 
 	c.JSON(consts.StatusOK, utils.H{"message": "payment confirmed, order activated, provisioning triggered"})
 }
 
-// EPayWebhook handles GET /api/v1/payments/webhook/epay/:providerId
+// EPayWebhook handles POST /api/v1/payments/webhook/epay/:providerId
 //
 // This endpoint receives callbacks from EPay (易支付) payment gateways.
-// EPay sends payment notifications as GET requests with query parameters.
+// EPay sends payment notifications as POST requests, usually with JSON or
+// application/x-www-form-urlencoded payloads and timestamp/signature headers.
 // The handler delegates provider lookup and signature verification to the
 // app layer via VerifyProviderWebhook().
 func (h *PaymentHandler) EPayWebhook(ctx context.Context, c *hz_app.RequestContext) {
@@ -153,15 +157,15 @@ func (h *PaymentHandler) EPayWebhook(ctx context.Context, c *hz_app.RequestConte
 		return
 	}
 
-	// Extract the raw query string — EPay sends all parameters as GET query params
-	rawQuery := string(c.Request.URI().QueryString())
-	if rawQuery == "" {
-		c.String(consts.StatusBadRequest, "empty query string")
+	rawBody := c.Request.Body()
+	if len(rawBody) == 0 {
+		c.String(consts.StatusBadRequest, "empty request body")
 		return
 	}
+	headers := collectWebhookHeaders(c)
 
 	// Delegate verification to app layer (no infra import needed)
-	payload, err := h.paymentSvc.VerifyProviderWebhook(providerID, []byte(rawQuery), "")
+	payload, err := h.paymentSvc.VerifyProviderWebhook(providerID, rawBody, headers)
 	if err != nil {
 		log.Printf("[PaymentHandler.EPayWebhook] verification failed: provider=%s err=%v", providerID, err)
 		// EPay protocol: respond with error text
@@ -185,6 +189,14 @@ func (h *PaymentHandler) EPayWebhook(ctx context.Context, c *hz_app.RequestConte
 
 	// Return "success" as required by EPay protocol
 	c.String(consts.StatusOK, "success")
+}
+
+func collectWebhookHeaders(c *hz_app.RequestContext) domain.WebhookHeaders {
+	headers := make(domain.WebhookHeaders)
+	c.Request.Header.VisitAll(func(key, value []byte) {
+		headers[strings.ToLower(string(key))] = string(value)
+	})
+	return headers
 }
 
 // SimulateWebhook handles POST /api/v1/payments/webhook/simulate

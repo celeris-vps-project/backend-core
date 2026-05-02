@@ -88,6 +88,16 @@ func (a *BillingAdapter) CreateAndIssueInvoice(
 // RecordInvoicePayment records a payment on an issued invoice, transitioning
 // it to "paid" status if the full amount is covered.
 func (a *BillingAdapter) RecordInvoicePayment(invoiceID string, amount int64, currency string) error {
+	invoice, err := a.svc.GetInvoice(invoiceID)
+	if err != nil {
+		return err
+	}
+	if invoice.Total().Currency() != "" {
+		currency = invoice.Total().Currency()
+	}
+	if amount > invoice.Total().Amount() {
+		amount = invoice.Total().Amount()
+	}
 	payAmount, err := domain.NewMoney(currency, amount)
 	if err != nil {
 		return fmt.Errorf("billing: invalid payment amount: %w", err)

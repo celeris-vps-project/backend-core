@@ -54,6 +54,67 @@ func (m *mockInvoiceCreator) GetInvoiceStatus(invoiceID string) (string, error) 
 	return "issued", nil
 }
 
+type mockCouponApplier struct {
+	code       string
+	amountSeen int64
+}
+
+func (m *mockCouponApplier) ApplyCoupon(_ context.Context, req app.CouponApplicationRequest) (app.CouponApplicationResult, error) {
+	m.code = req.Code
+	m.amountSeen = req.OriginalAmount
+	return app.CouponApplicationResult{
+		Applied:        req.Code != "",
+		CouponID:       "coupon-1",
+		Code:           req.Code,
+		DiscountAmount: req.OriginalAmount,
+		FinalAmount:    0,
+	}, nil
+}
+
+func TestInitiatePayment_ZeroCouponConfirmsImmediately(t *testing.T) {
+	order := app.PayableOrder{
+		ID:          "order-1",
+		Status:      "pending",
+		ProductID:   "prod-1",
+		CustomerID:  "cust-1",
+		Currency:    "USD",
+		PriceAmount: 100,
+	}
+	orch := app.NewPostPaymentOrchestrator(
+		&mockOrderActivator{order: order},
+		&mockProductPurchaser{},
+		nil,
+		&mockInvoiceCreator{},
+		nil,
+	)
+	coupon := &mockCouponApplier{}
+	svc := app.NewPaymentAppService(nil, orch, nil)
+	svc.SetCouponApplier(coupon)
+
+	resp, err := svc.InitiatePayment(context.Background(), &app.InitiatePaymentRequest{
+		OrderID:    "order-1",
+		CouponCode: "FREE100",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if coupon.code != "FREE100" {
+		t.Fatalf("expected coupon code FREE100, got %s", coupon.code)
+	}
+	if coupon.amountSeen != 100 {
+		t.Fatalf("expected original amount 100, got %d", coupon.amountSeen)
+	}
+	if resp.PayableAmount != 0 {
+		t.Fatalf("expected payable amount 0, got %d", resp.PayableAmount)
+	}
+	if resp.Status != domain.ChargeStatusSuccess {
+		t.Fatalf("expected success status, got %s", resp.Status)
+	}
+	if resp.ChargeID != "coupon:coupon-1" {
+		t.Fatalf("expected coupon charge id, got %s", resp.ChargeID)
+	}
+}
+
 type mockCryptoProvider struct {
 	chargeResult *domain.ChargeResult
 	chargeErr    error
@@ -62,7 +123,7 @@ type mockCryptoProvider struct {
 func (m *mockCryptoProvider) CreateCharge(_ context.Context, orderID, currency string, amountMinor int64) (*domain.ChargeResult, error) {
 	return m.chargeResult, m.chargeErr
 }
-func (m *mockCryptoProvider) VerifyWebhook(rawBody []byte, signature string) (*domain.WebhookPayload, error) {
+func (m *mockCryptoProvider) VerifyWebhook(rawBody []byte, headers domain.WebhookHeaders) (*domain.WebhookPayload, error) {
 	return nil, nil
 }
 func (m *mockCryptoProvider) CreateCryptoCharge(_ context.Context, orderID string, amountMinor int64, network domain.CryptoNetwork) (*domain.ChargeResult, error) {

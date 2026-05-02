@@ -4,6 +4,7 @@ import (
 	"backend-core/internal/payment/domain"
 	"context"
 	"crypto"
+	"crypto/hmac"
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/rsa"
@@ -33,18 +34,16 @@ import (
 // EPay is a popular payment aggregation platform in China that supports
 // Alipay, WeChat Pay, QQ Pay and other payment channels through a unified API.
 //
-// V1 API:
+// Legacy V1 API:
 //   - Submit (redirect): {api_url}/submit.php
 //   - API (server-side): {api_url}/mapi.php
 //   - Signing: MD5  →  sign = md5(sorted_params + KEY), lowercase
-//   - Notify: GET with query parameters, return "success"
 //
 // V2 API:
 //   - Submit (redirect): {api_url}/api/pay/submit
 //   - Create (server-side): {api_url}/api/pay/create
 //   - Signing: SHA256WithRSA (merchant private key)
-//   - Verification: SHA256WithRSA (platform public key)
-//   - Notify: GET with query parameters, return "success"
+//   - Webhook: POST body with timestamp/signature headers, return "success"
 //
 // Mock mode auto-confirms payments after a delay for development/testing.
 
@@ -82,6 +81,9 @@ type EPayProviderConfig struct {
 	PayType               string          // Default payment type (alipay, wxpay, etc.)
 	NotifyURL             string          // Async callback URL
 	ReturnURL             string          // Browser redirect URL
+	WebhookSecret         string          // Secret for POST webhook HMAC verification
+	TimestampHeader       string          // Header carrying webhook timestamp
+	SignatureHeader       string          // Header carrying webhook signature
 	ProductName           string          // Product name template (default: "VPS Service")
 	MockMode              bool            // Auto-confirm for testing
 	MockConfirmDelay      time.Duration   // Delay before auto-confirm (default 3s)
@@ -115,6 +117,8 @@ func parseEPayConfig(cfg *domain.PaymentProviderConfig) EPayProviderConfig {
 	c := EPayProviderConfig{
 		APIVersion:       "v2",
 		ProductName:      "VPS Service",
+		TimestampHeader:  "timestamp",
+		SignatureHeader:  "signature",
 		MockConfirmDelay: 3 * time.Second,
 	}
 	if cfg.Config == nil {
@@ -156,6 +160,15 @@ func parseEPayConfig(cfg *domain.PaymentProviderConfig) EPayProviderConfig {
 	}
 	if v, ok := cfg.Config["return_url"].(string); ok {
 		c.ReturnURL = v
+	}
+	if v, ok := cfg.Config["webhook_secret"].(string); ok {
+		c.WebhookSecret = v
+	}
+	if v, ok := cfg.Config["timestamp_header"].(string); ok && strings.TrimSpace(v) != "" {
+		c.TimestampHeader = strings.TrimSpace(v)
+	}
+	if v, ok := cfg.Config["signature_header"].(string); ok && strings.TrimSpace(v) != "" {
+		c.SignatureHeader = strings.TrimSpace(v)
 	}
 	if v, ok := cfg.Config["product_name"].(string); ok && v != "" {
 		c.ProductName = v
@@ -489,100 +502,232 @@ func isTransientError(err error) bool {
 
 // VerifyWebhook validates the authenticity of an incoming EPay webhook callback.
 //
-// EPay sends callbacks as GET requests with query parameters:
-//
-//	GET /api/v1/payments/webhook/epay/{providerId}?pid=...&trade_no=...&out_trade_no=...
-//	    &type=alipay&trade_status=TRADE_SUCCESS&name=...&money=1.00&sign=...&sign_type=MD5|RSA
-//
-// For V1: verifies MD5 signature using merchant_key
-// For V2: verifies RSA signature using platform_public_key
-//
-// The rawBody parameter should contain the raw query string (not JSON).
-// The signature parameter is ignored (sign is in the query params).
-func (p *EPayPaymentProvider) VerifyWebhook(rawBody []byte, signature string) (*domain.WebhookPayload, error) {
-	// Parse the query string from rawBody
-	queryStr := string(rawBody)
-	values, err := url.ParseQuery(queryStr)
+// EPay-compatible providers are not fully uniform, but the common modern shape is:
+// POST raw body + timestamp header + signature header, where signature is
+// HMAC-SHA256(timestamp + "." + rawBody) using the configured webhook_secret.
+// The body may be JSON or application/x-www-form-urlencoded.
+func (p *EPayPaymentProvider) VerifyWebhook(rawBody []byte, headers domain.WebhookHeaders) (*domain.WebhookPayload, error) {
+	signature := p.headerValue(headers, p.config.SignatureHeader)
+	if err := p.verifyWebhookHMAC(rawBody, headers, signature); err != nil {
+		return nil, err
+	}
+
+	payload, err := p.parsePostWebhook(rawBody)
 	if err != nil {
-		return nil, fmt.Errorf("invalid webhook query string: %w", err)
+		return nil, err
+	}
+	payload.RawBody = rawBody
+	payload.Signature = signature
+
+	p.updateChargeStatus(payload.OrderID, payload.Status)
+
+	log.Printf("[EPayProvider:%s] POST webhook received: charge=%s order=%s status=%s",
+		p.providerID[:8], payload.ChargeID, payload.OrderID, payload.Status)
+
+	return payload, nil
+}
+
+func (p *EPayPaymentProvider) verifyWebhookHMAC(rawBody []byte, headers domain.WebhookHeaders, signature string) error {
+	if strings.TrimSpace(p.config.WebhookSecret) == "" {
+		return fmt.Errorf("webhook_secret is required for EPay POST webhook verification")
+	}
+	timestamp := p.headerValue(headers, p.config.TimestampHeader)
+	if timestamp == "" {
+		return fmt.Errorf("missing webhook timestamp header %q", p.config.TimestampHeader)
+	}
+	if signature == "" {
+		return fmt.Errorf("missing webhook signature header %q", p.config.SignatureHeader)
 	}
 
-	// Extract the sign and sign_type
-	actualSign := values.Get("sign")
-	signType := values.Get("sign_type")
+	mac := hmac.New(sha256.New, []byte(p.config.WebhookSecret))
+	mac.Write([]byte(timestamp))
+	mac.Write([]byte("."))
+	mac.Write(rawBody)
+	expected := hex.EncodeToString(mac.Sum(nil))
 
-	// Build params map (excluding sign and sign_type)
-	params := make(map[string]string)
-	for k := range values {
-		if k == "sign" || k == "sign_type" {
-			continue
-		}
-		v := values.Get(k)
-		if v != "" {
-			params[k] = v
-		}
+	if !equalWebhookSignature(expected, signature) {
+		return fmt.Errorf("webhook signature mismatch")
+	}
+	return nil
+}
+
+func (p *EPayPaymentProvider) parsePostWebhook(rawBody []byte) (*domain.WebhookPayload, error) {
+	trimmed := strings.TrimSpace(string(rawBody))
+	if trimmed == "" {
+		return nil, fmt.Errorf("empty webhook body")
+	}
+	if strings.HasPrefix(trimmed, "{") {
+		return p.parseJSONWebhook(rawBody)
 	}
 
-	// Verify signature based on sign_type (or api_version as fallback)
-	if signType == "RSA" || (signType == "" && p.config.APIVersion == "v2") {
-		// V2 RSA verification
-		if p.config.PlatformPublicKey == nil {
-			log.Printf("[EPayProvider:%s] WARNING: webhook RSA verification skipped (no platform_public_key)",
-				p.providerID[:8])
-		} else if actualSign != "" {
-			if err := p.verifySignV2(params, actualSign); err != nil {
-				return nil, fmt.Errorf("webhook RSA signature verification failed: %w", err)
-			}
-			log.Printf("[EPayProvider:%s] webhook RSA signature verified", p.providerID[:8])
-		}
-	} else {
-		// V1 MD5 verification
-		if p.config.MerchantKey != "" && actualSign != "" {
-			expectedSign := p.computeSignV1(params)
-			if !strings.EqualFold(expectedSign, actualSign) {
-				return nil, fmt.Errorf("webhook MD5 signature mismatch: expected=%s got=%s", expectedSign, actualSign)
-			}
-			log.Printf("[EPayProvider:%s] webhook MD5 signature verified", p.providerID[:8])
-		} else if p.config.MerchantKey != "" {
-			log.Printf("[EPayProvider:%s] WARNING: webhook received without signature", p.providerID[:8])
-		}
+	values, err := url.ParseQuery(trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("invalid form webhook body: %w", err)
+	}
+	return p.parseFormWebhook(values)
+}
+
+func (p *EPayPaymentProvider) parseFormWebhook(values url.Values) (*domain.WebhookPayload, error) {
+	orderID := firstFormValue(values, "merchantOrderNo", "merchant_order_id", "merchant_order_no", "out_trade_no", "order_id")
+	if orderID == "" {
+		return nil, fmt.Errorf("webhook missing merchant order id")
 	}
 
-	// Extract standard EPay fields
-	tradeStatus := values.Get("trade_status")
-	outTradeNo := values.Get("out_trade_no")
-	tradeNo := values.Get("trade_no")
-
-	if outTradeNo == "" {
-		return nil, fmt.Errorf("webhook missing required field: out_trade_no")
+	status, err := normalizeEPayWebhookStatus(firstFormValue(values, "status", "trade_status", "result_code"))
+	if err != nil {
+		return nil, err
 	}
 
-	// Map EPay trade_status to our status
-	status := domain.ChargeStatusFailed
-	if tradeStatus == "TRADE_SUCCESS" {
-		status = domain.ChargeStatusSuccess
+	chargeID := firstFormValue(values, "epayOrderNo", "epay_order_no", "trade_no", "id")
+	if chargeID == "" {
+		chargeID = orderID
 	}
 
-	// Update internal charge record if exists
+	return &domain.WebhookPayload{
+		ChargeID: chargeID,
+		OrderID:  orderID,
+		Status:   status,
+	}, nil
+}
+
+func (p *EPayPaymentProvider) parseJSONWebhook(rawBody []byte) (*domain.WebhookPayload, error) {
+	var root map[string]interface{}
+	if err := json.Unmarshal(rawBody, &root); err != nil {
+		return nil, fmt.Errorf("invalid JSON webhook body: %w", err)
+	}
+
+	data := objectMap(root["data"])
+	if data == nil {
+		data = root
+	}
+	metadata := objectMap(data["metadata"])
+
+	orderID := firstMapString(data, "merchant_order_id", "merchantOrderNo", "merchant_order_no", "out_trade_no")
+	if orderID == "" && metadata != nil {
+		orderID = firstMapString(metadata, "order_id", "merchant_order_id", "merchantOrderNo", "merchant_order_no")
+	}
+	if orderID == "" {
+		orderID = firstMapString(data, "order_id")
+	}
+	if orderID == "" {
+		return nil, fmt.Errorf("webhook missing merchant order id")
+	}
+
+	statusText := firstMapString(data, "status", "trade_status", "result_code")
+	if result := objectMap(data["result"]); result != nil {
+		statusText = firstNonEmpty(statusText, firstMapString(result, "result_code"))
+	}
+	if statusText == "" && strings.EqualFold(firstMapString(root, "type"), "order.paid") {
+		statusText = "SUCCEEDED"
+	}
+	status, err := normalizeEPayWebhookStatus(statusText)
+	if err != nil {
+		return nil, err
+	}
+
+	chargeID := firstMapString(data, "id", "epayOrderNo", "epay_order_no", "trade_no", "order_id")
+	if chargeID == "" {
+		chargeID = firstMapString(root, "id")
+	}
+	if chargeID == "" {
+		chargeID = orderID
+	}
+
+	return &domain.WebhookPayload{
+		ChargeID: chargeID,
+		OrderID:  orderID,
+		Status:   status,
+	}, nil
+}
+
+func (p *EPayPaymentProvider) updateChargeStatus(orderID, status string) {
 	p.charges.Range(func(key, value interface{}) bool {
 		r := value.(*epayChargeRecord)
-		if r.OrderID == outTradeNo {
+		if r.OrderID == orderID {
 			r.Status = status
-			return false // stop iteration
+			return false
 		}
 		return true
 	})
+}
 
-	log.Printf("[EPayProvider:%s] webhook received: trade_no=%s out_trade_no=%s status=%s trade_status=%s",
-		p.providerID[:8], tradeNo, outTradeNo, status, tradeStatus)
+func (p *EPayPaymentProvider) headerValue(headers domain.WebhookHeaders, name string) string {
+	if headers == nil || name == "" {
+		return ""
+	}
+	if v := headers[strings.ToLower(name)]; v != "" {
+		return strings.TrimSpace(v)
+	}
+	for k, v := range headers {
+		if strings.EqualFold(k, name) {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
 
-	return &domain.WebhookPayload{
-		ChargeID:  tradeNo,    // EPay's trade_no
-		OrderID:   outTradeNo, // our order ID
-		Status:    status,
-		RawBody:   rawBody,
-		Signature: actualSign,
-	}, nil
+func equalWebhookSignature(expectedHex, actual string) bool {
+	actual = strings.TrimSpace(actual)
+	actual = strings.TrimPrefix(strings.ToLower(actual), "sha256=")
+	expectedHex = strings.ToLower(expectedHex)
+	return hmac.Equal([]byte(expectedHex), []byte(actual))
+}
+
+func firstFormValue(values url.Values, keys ...string) string {
+	for _, key := range keys {
+		if v := strings.TrimSpace(values.Get(key)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func objectMap(v interface{}) map[string]interface{} {
+	if m, ok := v.(map[string]interface{}); ok {
+		return m
+	}
+	return nil
+}
+
+func firstMapString(values map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		v, ok := values[key]
+		if !ok {
+			continue
+		}
+		switch typed := v.(type) {
+		case string:
+			if strings.TrimSpace(typed) != "" {
+				return strings.TrimSpace(typed)
+			}
+		case float64:
+			return fmt.Sprintf("%.0f", typed)
+		case int:
+			return fmt.Sprintf("%d", typed)
+		}
+	}
+	return ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func normalizeEPayWebhookStatus(raw string) (string, error) {
+	status := strings.ToUpper(strings.TrimSpace(raw))
+	switch status {
+	case "7", "SUCCESS", "SUCCEEDED", "TRADE_SUCCESS":
+		return domain.ChargeStatusSuccess, nil
+	case "5", "6", "8", "20", "FAIL", "FAILED", "CANCEL", "CANCELED", "CANCELLED", "CLOSE", "CLOSED":
+		return domain.ChargeStatusFailed, nil
+	default:
+		return "", fmt.Errorf("unsupported EPay webhook status: %q", raw)
+	}
 }
 
 // ── V1 MD5 Signing ─────────────────────────────────────────────────────

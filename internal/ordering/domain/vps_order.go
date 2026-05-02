@@ -46,8 +46,8 @@ func NewOrder(id, customerID, productID, invoiceID, billingCycle string, cfg VPS
 	if currency == "" {
 		return nil, errors.New("domain_error: currency is required")
 	}
-	if priceAmount <= 0 {
-		return nil, errors.New("domain_error: price must be > 0")
+	if priceAmount < 0 {
+		return nil, errors.New("domain_error: price must be >= 0")
 	}
 	if billingCycle == "" {
 		billingCycle = "one_time"

@@ -65,6 +65,37 @@ func TestInvoiceLifecycle(t *testing.T) {
 	}
 }
 
+func TestZeroAmountInvoiceCanBePaid(t *testing.T) {
+	invoice, err := NewDraftInvoice("inv-zero", "cust-zero", "USD", OneTimeCycle(), nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	unitPrice, err := NewMoney("USD", 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	item, err := NewLineItem("item-zero", "Free activation", 1, unitPrice)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := invoice.AddLineItem(item); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := invoice.Issue(time.Now(), nil); err != nil {
+		t.Fatalf("unexpected error issuing zero invoice: %v", err)
+	}
+	if err := invoice.RecordPayment(unitPrice, time.Now()); err != nil {
+		t.Fatalf("unexpected error paying zero invoice: %v", err)
+	}
+	if invoice.Status() != InvoiceStatusPaid {
+		t.Fatalf("expected paid, got %s", invoice.Status())
+	}
+	if invoice.Total().Amount() != 0 {
+		t.Fatalf("expected total 0, got %d", invoice.Total().Amount())
+	}
+}
+
 func TestMonthlyInvoice(t *testing.T) {
 	monthly, _ := NewBillingCycle(BillingCycleMonthly)
 	start := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)

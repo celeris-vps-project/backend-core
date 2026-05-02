@@ -110,9 +110,9 @@ func (i *Invoice) Currency() string   { return i.currency }
 func (i *Invoice) Status() string     { return i.status }
 
 func (i *Invoice) BillingCycle() BillingCycle { return i.billingCycle }
-func (i *Invoice) PeriodStart() *time.Time   { return i.periodStart }
-func (i *Invoice) PeriodEnd() *time.Time     { return i.periodEnd }
-func (i *Invoice) IsRecurring() bool         { return i.billingCycle.IsRecurring() }
+func (i *Invoice) PeriodStart() *time.Time    { return i.periodStart }
+func (i *Invoice) PeriodEnd() *time.Time      { return i.periodEnd }
+func (i *Invoice) IsRecurring() bool          { return i.billingCycle.IsRecurring() }
 
 func (i *Invoice) LineItems() []LineItem {
 	items := make([]LineItem, len(i.lineItems))
@@ -162,9 +162,6 @@ func (i *Invoice) Issue(issuedAt time.Time, dueAt *time.Time) error {
 	if len(i.lineItems) == 0 {
 		return errors.New("domain_error: invoice must contain at least one line item")
 	}
-	if i.total.IsZero() {
-		return errors.New("domain_error: invoice total must be greater than zero")
-	}
 	if dueAt != nil && dueAt.Before(issuedAt) {
 		return errors.New("domain_error: due date must be on or after issued date")
 	}
@@ -185,7 +182,13 @@ func (i *Invoice) RecordPayment(amount Money, paidAt time.Time) error {
 		return errors.New("domain_error: payment currency mismatch")
 	}
 	if amount.IsZero() {
-		return errors.New("domain_error: payment amount must be greater than zero")
+		if !i.total.IsZero() {
+			return errors.New("domain_error: payment amount must be greater than zero")
+		}
+		i.amountPaid = amount
+		i.status = InvoiceStatusPaid
+		i.paidAt = &paidAt
+		return nil
 	}
 
 	updated, err := i.amountPaid.Add(amount)

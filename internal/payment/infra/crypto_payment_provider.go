@@ -93,7 +93,7 @@ func (p *CryptoPaymentProvider) CreateCharge(ctx context.Context, orderID string
 
 // VerifyWebhook implements domain.PaymentProvider.
 // Validates the webhook payload from the blockchain monitor service.
-func (p *CryptoPaymentProvider) VerifyWebhook(rawBody []byte, signature string) (*domain.WebhookPayload, error) {
+func (p *CryptoPaymentProvider) VerifyWebhook(rawBody []byte, headers domain.WebhookHeaders) (*domain.WebhookPayload, error) {
 	// In production: verify HMAC signature from the blockchain monitor.
 	// For now: parse the JSON body and trust it (same as mock provider).
 	var body struct {
@@ -117,7 +117,7 @@ func (p *CryptoPaymentProvider) VerifyWebhook(rawBody []byte, signature string) 
 		OrderID:   body.OrderID,
 		Status:    body.Status,
 		RawBody:   rawBody,
-		Signature: signature,
+		Signature: headers["x-webhook-signature"],
 	}, nil
 }
 

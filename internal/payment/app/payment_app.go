@@ -16,17 +16,41 @@ type InitiatePaymentRequest struct {
 	OrderID    string // required — the order to pay for
 	ProviderID string // optional — dynamic provider selection
 	Network    string // optional — crypto network (e.g. "arbitrum")
+	CouponCode string // optional — activation/coupon code for first payment
 }
 
 // InitiatePaymentResponse is the app-layer output after initiating a payment.
 type InitiatePaymentResponse struct {
-	OrderID    string                     `json:"order_id"`
-	InvoiceID  string                     `json:"invoice_id,omitempty"`
-	ChargeID   string                     `json:"charge_id"`
-	Status     string                     `json:"status"`
-	PaymentURL string                     `json:"payment_url"`
-	Message    string                     `json:"message"`
-	Crypto     *domain.CryptoChargeDetail `json:"crypto,omitempty"`
+	OrderID        string                     `json:"order_id"`
+	InvoiceID      string                     `json:"invoice_id,omitempty"`
+	ChargeID       string                     `json:"charge_id"`
+	Status         string                     `json:"status"`
+	PaymentURL     string                     `json:"payment_url"`
+	Message        string                     `json:"message"`
+	PayableAmount  int64                      `json:"payable_amount"`
+	DiscountAmount int64                      `json:"discount_amount,omitempty"`
+	CouponID       string                     `json:"coupon_id,omitempty"`
+	Crypto         *domain.CryptoChargeDetail `json:"crypto,omitempty"`
+}
+
+type CouponApplicationRequest struct {
+	Code           string
+	UserID         string
+	OrderID        string
+	ProductID      string
+	OriginalAmount int64
+}
+
+type CouponApplicationResult struct {
+	Applied        bool
+	CouponID       string
+	Code           string
+	DiscountAmount int64
+	FinalAmount    int64
+}
+
+type CouponApplier interface {
+	ApplyCoupon(ctx context.Context, req CouponApplicationRequest) (CouponApplicationResult, error)
 }
 
 // ── Service ────────────────────────────────────────────────────────────
@@ -44,6 +68,7 @@ type PaymentAppService struct {
 	orchestrator *PostPaymentOrchestrator
 	cryptoProv   domain.CryptoPaymentProvider // optional legacy crypto provider
 	renewals     *RenewalService
+	coupons      CouponApplier
 }
 
 func NewPaymentAppService(
@@ -60,6 +85,10 @@ func NewPaymentAppService(
 
 func (s *PaymentAppService) SetRenewalService(renewals *RenewalService) {
 	s.renewals = renewals
+}
+
+func (s *PaymentAppService) SetCouponApplier(coupons CouponApplier) {
+	s.coupons = coupons
 }
 
 // InitiatePayment is the single entry-point for starting a payment.
@@ -79,17 +108,46 @@ func (s *PaymentAppService) InitiatePayment(ctx context.Context, req *InitiatePa
 		return nil, apperr.ErrNotFound(apperr.CodeOrderNotFound, "order not found: "+err.Error())
 	}
 	invoiceID := ""
+	payableOrder := order
+	couponResult := CouponApplicationResult{FinalAmount: order.PriceAmount}
 	switch order.Status {
 	case "pending":
+		couponResult, err = s.applyCoupon(ctx, req.CouponCode, order)
+		if err != nil {
+			return nil, err
+		}
+		if couponResult.Applied {
+			payableOrder.PriceAmount = couponResult.FinalAmount
+		}
 		// 2. Create invoice
-		invoiceID, err = s.orchestrator.CreateInvoiceForPayment(order)
+		invoiceID, err = s.orchestrator.CreateInvoiceForPayment(payableOrder)
 		if err != nil {
 			log.Printf("[PaymentAppService] WARNING: invoice creation failed for order %s: %v", req.OrderID, err)
 			// Non-fatal — continue without invoice
 		} else {
 			order.InvoiceID = invoiceID
+			payableOrder.InvoiceID = invoiceID
+		}
+		if payableOrder.PriceAmount == 0 {
+			if err := s.orchestrator.HandlePaymentConfirmed(req.OrderID); err != nil {
+				return nil, apperr.ErrUnprocessable(apperr.CodePaymentFailed, "free order confirmation failed: "+err.Error())
+			}
+			return &InitiatePaymentResponse{
+				OrderID:        req.OrderID,
+				InvoiceID:      invoiceID,
+				ChargeID:       "coupon:" + couponResult.CouponID,
+				Status:         domain.ChargeStatusSuccess,
+				PaymentURL:     "",
+				Message:        "coupon redeemed, order activated",
+				PayableAmount:  payableOrder.PriceAmount,
+				DiscountAmount: couponResult.DiscountAmount,
+				CouponID:       couponResult.CouponID,
+			}, nil
 		}
 	case "active", "suspended":
+		if req.CouponCode != "" {
+			return nil, apperr.ErrBadRequest(apperr.CodeCouponInvalid, "coupon_code is only supported for first payment")
+		}
 		if s.renewals == nil {
 			return nil, apperr.ErrUnprocessable(apperr.CodeOrderNotPending,
 				"order is not in pending status, current: "+order.Status)
@@ -104,7 +162,7 @@ func (s *PaymentAppService) InitiatePayment(ctx context.Context, req *InitiatePa
 	}
 
 	// 3. Create charge — route based on provider_id or legacy flow
-	chargeResult, err := s.createCharge(ctx, req, order)
+	chargeResult, err := s.createCharge(ctx, req, payableOrder)
 	if err != nil {
 		// Void orphan invoice on charge failure
 		s.orchestrator.VoidInvoiceOnFailure(order, invoiceID, "payment charge creation failed: "+err.Error())
@@ -119,14 +177,41 @@ func (s *PaymentAppService) InitiatePayment(ctx context.Context, req *InitiatePa
 
 	// 5. Build response
 	return &InitiatePaymentResponse{
-		OrderID:    req.OrderID,
-		InvoiceID:  invoiceID,
-		ChargeID:   chargeResult.ChargeID,
-		Status:     chargeResult.Status,
-		PaymentURL: chargeResult.PaymentURL,
-		Message:    "payment initiated, awaiting confirmation",
-		Crypto:     chargeResult.Crypto,
+		OrderID:        req.OrderID,
+		InvoiceID:      invoiceID,
+		ChargeID:       chargeResult.ChargeID,
+		Status:         chargeResult.Status,
+		PaymentURL:     chargeResult.PaymentURL,
+		Message:        "payment initiated, awaiting confirmation",
+		PayableAmount:  payableOrder.PriceAmount,
+		DiscountAmount: couponResult.DiscountAmount,
+		CouponID:       couponResult.CouponID,
+		Crypto:         chargeResult.Crypto,
 	}, nil
+}
+
+func (s *PaymentAppService) applyCoupon(ctx context.Context, code string, order PayableOrder) (CouponApplicationResult, error) {
+	if s.coupons == nil {
+		if code != "" {
+			return CouponApplicationResult{}, apperr.ErrUnprocessable(apperr.CodeCouponInvalid, "coupon service not configured")
+		}
+		return CouponApplicationResult{FinalAmount: order.PriceAmount}, nil
+	}
+
+	result, err := s.coupons.ApplyCoupon(ctx, CouponApplicationRequest{
+		Code:           code,
+		UserID:         order.CustomerID,
+		OrderID:        order.ID,
+		ProductID:      order.ProductID,
+		OriginalAmount: order.PriceAmount,
+	})
+	if err != nil {
+		return CouponApplicationResult{}, err
+	}
+	if !result.Applied {
+		result.FinalAmount = order.PriceAmount
+	}
+	return result, nil
 }
 
 // createCharge routes the charge creation to the correct provider.
@@ -270,7 +355,7 @@ func (s *PaymentAppService) HandleWebhookPayload(payload *domain.WebhookPayload)
 
 // VerifyProviderWebhook looks up a provider by ID and verifies a webhook payload.
 // Used for provider-specific webhook endpoints (e.g. EPay).
-func (s *PaymentAppService) VerifyProviderWebhook(providerID string, rawBody []byte, signature string) (*domain.WebhookPayload, error) {
+func (s *PaymentAppService) VerifyProviderWebhook(providerID string, rawBody []byte, headers domain.WebhookHeaders) (*domain.WebhookPayload, error) {
 	if s.providerSvc == nil {
 		return nil, apperr.ErrInternal("provider service not configured")
 	}
@@ -288,7 +373,7 @@ func (s *PaymentAppService) VerifyProviderWebhook(providerID string, rawBody []b
 		return nil, apperr.ErrInternal("failed to construct provider: " + err.Error())
 	}
 
-	payload, err := provider.VerifyWebhook(rawBody, signature)
+	payload, err := provider.VerifyWebhook(rawBody, headers)
 	if err != nil {
 		return nil, apperr.ErrBadRequest(apperr.CodeWebhookFailed, "webhook verification failed: "+err.Error())
 	}
