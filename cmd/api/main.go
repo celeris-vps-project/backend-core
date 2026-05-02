@@ -174,7 +174,6 @@ func main() {
 	// Ordering
 	orderRepo := orderingInfra.NewGormOrderRepo(db)
 	orderApp := orderingApp.NewOrderAppService(orderRepo, idGen)
-	orderHandler := orderingHttp.NewOrderHandler(orderApp)
 
 	// Payment — USDT crypto payment provider (loaded from config YAML)
 	// Config source: crypto section in api.yaml (see api.example.yaml)
@@ -237,6 +236,7 @@ func main() {
 		circuitbreaker.New("node-capacity", 3, 2, 15*time.Second))
 	prodApp := catalogApp.NewProductAppService(prodRepo, idGen, bus, capacityChecker)
 	prodHandler := catalogHttp.NewProductHandler(prodApp)
+	orderHandler := orderingHttp.NewOrderHandler(orderApp, prodApp)
 
 	// Product Line (customer-facing product browsing by resource pool)
 	// Uses a catalog/infra adapter so the handler never imports provisioning directly.

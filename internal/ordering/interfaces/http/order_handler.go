@@ -54,23 +54,29 @@ type OrderResponse struct {
 }
 
 type VPSConfigResponse struct {
-	Hostname string `json:"hostname"`
-	Plan     string `json:"plan"`
-	Region   string `json:"region"`
-	OS       string `json:"os"`
-	CPU      int    `json:"cpu"`
-	MemoryMB int    `json:"memory_mb"`
-	DiskGB   int    `json:"disk_gb"`
+	Hostname    string `json:"hostname"`
+	Plan        string `json:"plan"`
+	Region      string `json:"region"`
+	OS          string `json:"os"`
+	NetworkMode string `json:"network_mode"`
+	CPU         int    `json:"cpu"`
+	MemoryMB    int    `json:"memory_mb"`
+	DiskGB      int    `json:"disk_gb"`
 }
 
 // ---- Handler ----
 
-type OrderHandler struct {
-	orderApp *app.OrderAppService
+type ProductNetworkModeReader interface {
+	GetNetworkMode(ctx context.Context, productID string) (string, error)
 }
 
-func NewOrderHandler(orderApp *app.OrderAppService) *OrderHandler {
-	return &OrderHandler{orderApp: orderApp}
+type OrderHandler struct {
+	orderApp    *app.OrderAppService
+	productRead ProductNetworkModeReader
+}
+
+func NewOrderHandler(orderApp *app.OrderAppService, productRead ProductNetworkModeReader) *OrderHandler {
+	return &OrderHandler{orderApp: orderApp, productRead: productRead}
 }
 
 // POST /orders
@@ -92,15 +98,30 @@ func (h *OrderHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 	if invoiceID == "" {
 		invoiceID = "auto-" + customerID
 	}
+	req.Hostname = strings.TrimSpace(req.Hostname)
+	if req.Hostname == "" {
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, "hostname is required"))
+		return
+	}
 
 	billingCycle := req.BillingCycle
 	if billingCycle == "" {
 		billingCycle = "one_time"
 	}
 
+	networkMode := ""
+	if h.productRead != nil {
+		mode, err := h.productRead.GetNetworkMode(ctx, req.ProductID)
+		if err != nil {
+			c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(apperr.CodeProductNotFound, err.Error()))
+			return
+		}
+		networkMode = mode
+	}
+
 	order, err := h.orderApp.CreateOrder(
 		customerID, req.ProductID, invoiceID, billingCycle,
-		req.Hostname, req.Plan, req.Region, req.OS,
+		req.Hostname, req.Plan, req.Region, req.OS, networkMode,
 		req.CPU, req.MemoryMB, req.DiskGB,
 		req.Currency, req.PriceAmount,
 	)
@@ -239,13 +260,14 @@ func toOrderResponse(o *domain.Order) OrderResponse {
 		Currency:     o.Currency(),
 		PriceAmount:  o.PriceAmount(),
 		VPS: VPSConfigResponse{
-			Hostname: cfg.Hostname(),
-			Plan:     cfg.Plan(),
-			Region:   cfg.Region(),
-			OS:       cfg.OS(),
-			CPU:      cfg.CPU(),
-			MemoryMB: cfg.MemoryMB(),
-			DiskGB:   cfg.DiskGB(),
+			Hostname:    cfg.Hostname(),
+			Plan:        cfg.Plan(),
+			Region:      cfg.Region(),
+			OS:          cfg.OS(),
+			NetworkMode: cfg.NetworkMode(),
+			CPU:         cfg.CPU(),
+			MemoryMB:    cfg.MemoryMB(),
+			DiskGB:      cfg.DiskGB(),
 		},
 		CreatedAt:    o.CreatedAt().Format(time.RFC3339),
 		CancelReason: o.CancelReason(),

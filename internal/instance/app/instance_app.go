@@ -80,7 +80,7 @@ func (s *InstanceAppService) PurchaseInstance(
 
 	// 3. Create the instance
 	id := s.ids.NewID()
-	inst, err := domain.NewInstance(id, customerID, orderID, node.ID(), hostname, plan, os, cpu, memoryMB, diskGB)
+	inst, err := domain.NewInstance(id, customerID, orderID, node.ID(), hostname, plan, os, "", cpu, memoryMB, diskGB)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +109,7 @@ func (s *InstanceAppService) PurchaseInstance(
 // node selection / slot allocation to provisioning.
 func (s *InstanceAppService) CreatePendingInstance(
 	customerID, orderID, region string,
-	hostname, plan, os string,
+	hostname, plan, os, networkMode string,
 	cpu, memoryMB, diskGB int,
 ) (*domain.Instance, error) {
 	// Region remains part of the request contract even though placement is
@@ -118,7 +118,7 @@ func (s *InstanceAppService) CreatePendingInstance(
 
 	// Create the instance with no node assignment yet.
 	id := s.ids.NewID()
-	inst, err := domain.NewInstance(id, customerID, orderID, "", hostname, plan, os, cpu, memoryMB, diskGB)
+	inst, err := domain.NewInstance(id, customerID, orderID, "", hostname, plan, os, networkMode, cpu, memoryMB, diskGB)
 	if err != nil {
 		return nil, fmt.Errorf("create_pending: %w", err)
 	}

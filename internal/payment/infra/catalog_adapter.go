@@ -16,8 +16,8 @@ func NewCatalogAdapter(svc *catalogApp.ProductAppService) *CatalogAdapter {
 	return &CatalogAdapter{svc: svc}
 }
 
-func (a *CatalogAdapter) PurchaseProduct(ctx context.Context, productID, customerID, orderID, instanceID, initialPassword, hostname, os string) (paymentApp.PurchasedProduct, error) {
-	product, err := a.svc.PurchaseProduct(ctx, productID, customerID, orderID, instanceID, initialPassword, hostname, os)
+func (a *CatalogAdapter) PurchaseProduct(ctx context.Context, productID, customerID, orderID, instanceID, initialPassword, hostname, os, networkMode string) (paymentApp.PurchasedProduct, error) {
+	product, err := a.svc.PurchaseProduct(ctx, productID, customerID, orderID, instanceID, initialPassword, hostname, os, networkMode)
 	if err != nil {
 		return paymentApp.PurchasedProduct{}, err
 	}

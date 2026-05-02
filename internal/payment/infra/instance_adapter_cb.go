@@ -35,7 +35,7 @@ func NewInstanceAdapterWithCB(inner *InstanceAdapter, cb *circuitbreaker.Circuit
 // On circuit open: returns an empty result and nil — silent degradation. The instance will
 // be created later via reconciliation when the service recovers.
 func (a *InstanceAdapterWithCB) CreatePendingInstance(
-	customerID, orderID, region, hostname, plan, os string,
+	customerID, orderID, region, hostname, plan, os, networkMode string,
 	cpu, memoryMB, diskGB int,
 ) (paymentApp.PendingInstance, error) {
 	if !a.cb.Allow() {
@@ -44,7 +44,7 @@ func (a *InstanceAdapterWithCB) CreatePendingInstance(
 		return paymentApp.PendingInstance{}, nil // silent degradation — non-fatal
 	}
 
-	pendingInstance, err := a.inner.CreatePendingInstance(customerID, orderID, region, hostname, plan, os, cpu, memoryMB, diskGB)
+	pendingInstance, err := a.inner.CreatePendingInstance(customerID, orderID, region, hostname, plan, os, networkMode, cpu, memoryMB, diskGB)
 	if err != nil {
 		a.cb.RecordFailure()
 		log.Printf("[circuit-breaker] %s: instance creation failed for order=%s: %v", a.cb.Name(), orderID, err)

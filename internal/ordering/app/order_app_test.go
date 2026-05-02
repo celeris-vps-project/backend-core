@@ -59,7 +59,7 @@ func TestOrderApp_CreateAndActivate(t *testing.T) {
 
 	order, err := svc.CreateOrder(
 		"cust-1", "prod-1", "inv-1", "monthly",
-		"web-01", "vps-starter", "us-east-1", "ubuntu-22.04",
+		"web-01", "vps-starter", "us-east-1", "ubuntu-22.04", "",
 		2, 2048, 40,
 		"USD", 999,
 	)
@@ -89,7 +89,7 @@ func TestOrderApp_SuspendAndUnsuspend(t *testing.T) {
 
 	_, _ = svc.CreateOrder(
 		"cust-2", "prod-2", "inv-2", "monthly",
-		"db-01", "vps-pro", "eu-west-1", "debian-12",
+		"db-01", "vps-pro", "eu-west-1", "debian-12", "",
 		4, 8192, 100,
 		"EUR", 1999,
 	)
@@ -118,7 +118,7 @@ func TestOrderApp_Cancel(t *testing.T) {
 
 	_, _ = svc.CreateOrder(
 		"cust-3", "prod-3", "inv-3", "one_time",
-		"app-01", "vps-starter", "ap-south-1", "centos-9",
+		"app-01", "vps-starter", "ap-south-1", "centos-9", "",
 		1, 1024, 20,
 		"USD", 500,
 	)
@@ -138,7 +138,7 @@ func TestOrderApp_ReplaceInvoice(t *testing.T) {
 
 	order, _ := svc.CreateOrder(
 		"cust-4", "prod-4", "inv-4", "monthly",
-		"app-01", "vps-basic", "ap-southeast-1", "ubuntu-24.04",
+		"app-01", "vps-basic", "ap-southeast-1", "ubuntu-24.04", "",
 		2, 2048, 40,
 		"USD", 1200,
 	)

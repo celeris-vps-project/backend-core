@@ -23,15 +23,21 @@ func (m *mockOrderActivator) GetOrderForPayment(orderID string) (app.PayableOrde
 func (m *mockOrderActivator) LinkInvoiceToOrder(orderID, invoiceID string) error { return nil }
 func (m *mockOrderActivator) CancelOrder(orderID, reason string) error           { return nil }
 
-type mockProductPurchaser struct{}
+type mockProductPurchaser struct {
+	networkMode string
+}
 
-func (m *mockProductPurchaser) PurchaseProduct(ctx context.Context, productID, customerID, orderID, instanceID, initialPassword, hostname, os string) (app.PurchasedProduct, error) {
+func (m *mockProductPurchaser) PurchaseProduct(ctx context.Context, productID, customerID, orderID, instanceID, initialPassword, hostname, os, networkMode string) (app.PurchasedProduct, error) {
+	m.networkMode = networkMode
 	return app.PurchasedProduct{}, nil
 }
 
-type mockInstanceCreator struct{}
+type mockInstanceCreator struct {
+	networkMode string
+}
 
-func (m *mockInstanceCreator) CreatePendingInstance(customerID, orderID, region, hostname, plan, os string, cpu, memoryMB, diskGB int) (app.PendingInstance, error) {
+func (m *mockInstanceCreator) CreatePendingInstance(customerID, orderID, region, hostname, plan, os, networkMode string, cpu, memoryMB, diskGB int) (app.PendingInstance, error) {
+	m.networkMode = networkMode
 	return app.PendingInstance{ID: "inst-1", InitialPassword: "pwd-1"}, nil
 }
 
@@ -92,6 +98,42 @@ func TestInitiatePayment_ValidationErrors(t *testing.T) {
 	}
 	if appErr.Code != apperr.CodeInvalidParams {
 		t.Fatalf("expected code %s, got %s", apperr.CodeInvalidParams, appErr.Code)
+	}
+}
+
+func TestHandlePaymentConfirmed_UsesOrderNetworkModeSnapshotForPendingInstanceAndProvisioning(t *testing.T) {
+	instances := &mockInstanceCreator{}
+	products := &mockProductPurchaser{}
+	orch := app.NewPostPaymentOrchestrator(
+		&mockOrderActivator{order: app.PayableOrder{
+			ID:          "order-1",
+			CustomerID:  "cust-1",
+			ProductID:   "prod-1",
+			Hostname:    "web-01",
+			Plan:        "free",
+			Region:      "region-1",
+			OS:          "ubuntu-22.04",
+			NetworkMode: "nat",
+			CPU:         1,
+			MemoryMB:    1024,
+			DiskGB:      25,
+			Currency:    "USD",
+			PriceAmount: 100,
+		}},
+		products,
+		instances,
+		nil,
+		nil,
+	)
+
+	if err := orch.HandlePaymentConfirmed("order-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if instances.networkMode != "nat" {
+		t.Fatalf("expected pending instance network mode nat, got %s", instances.networkMode)
+	}
+	if products.networkMode != "nat" {
+		t.Fatalf("expected provisioning event network mode nat, got %s", products.networkMode)
 	}
 }
 

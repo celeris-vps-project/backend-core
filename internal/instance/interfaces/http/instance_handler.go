@@ -83,6 +83,11 @@ func (h *InstanceHandler) Purchase(ctx context.Context, c *hz_app.RequestContext
 		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
 		return
 	}
+	req.Hostname = strings.TrimSpace(req.Hostname)
+	if req.Hostname == "" {
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, "hostname is required"))
+		return
+	}
 	inst, err := h.svc.PurchaseInstance(
 		uid.String(), req.OrderID, req.Region,
 		req.Hostname, req.Plan, req.OS,

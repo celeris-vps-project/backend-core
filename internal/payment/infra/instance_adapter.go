@@ -20,10 +20,10 @@ func NewInstanceAdapter(svc *instanceApp.InstanceAppService) *InstanceAdapter {
 // CreatePendingInstance delegates to the instance app service and returns
 // the new instance ID.
 func (a *InstanceAdapter) CreatePendingInstance(
-	customerID, orderID, region, hostname, plan, os string,
+	customerID, orderID, region, hostname, plan, os, networkMode string,
 	cpu, memoryMB, diskGB int,
 ) (paymentApp.PendingInstance, error) {
-	inst, err := a.svc.CreatePendingInstance(customerID, orderID, region, hostname, plan, os, cpu, memoryMB, diskGB)
+	inst, err := a.svc.CreatePendingInstance(customerID, orderID, region, hostname, plan, os, networkMode, cpu, memoryMB, diskGB)
 	if err != nil {
 		return paymentApp.PendingInstance{}, err
 	}

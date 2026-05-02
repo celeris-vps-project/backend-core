@@ -40,6 +40,7 @@ type PayableOrder struct {
 	Plan         string
 	Region       string
 	OS           string
+	NetworkMode  string
 	CPU          int
 	MemoryMB     int
 	DiskGB       int
@@ -47,7 +48,7 @@ type PayableOrder struct {
 
 // ProductPurchaser is a port for the catalog context.
 type ProductPurchaser interface {
-	PurchaseProduct(ctx context.Context, productID, customerID, orderID, instanceID, initialPassword, hostname, os string) (PurchasedProduct, error)
+	PurchaseProduct(ctx context.Context, productID, customerID, orderID, instanceID, initialPassword, hostname, os, networkMode string) (PurchasedProduct, error)
 }
 
 // PurchasedProduct is the minimal read-model returned after purchase.
@@ -62,7 +63,7 @@ type PurchasedProduct struct {
 // InstanceCreator is a port for the instance context.
 // Returns the newly created instance delivery details or an error.
 type InstanceCreator interface {
-	CreatePendingInstance(customerID, orderID, region, hostname, plan, os string, cpu, memoryMB, diskGB int) (PendingInstance, error)
+	CreatePendingInstance(customerID, orderID, region, hostname, plan, os, networkMode string, cpu, memoryMB, diskGB int) (PendingInstance, error)
 }
 
 type PendingInstance struct {
@@ -135,6 +136,7 @@ func (s *PostPaymentOrchestrator) HandlePaymentConfirmed(orderID string) error {
 	// update the same instance record instead of a controller-generated ID.
 	instanceID := ""
 	initialPassword := ""
+
 	if s.instances != nil {
 		pendingInstance, err := s.instances.CreatePendingInstance(
 			order.CustomerID,
@@ -143,6 +145,7 @@ func (s *PostPaymentOrchestrator) HandlePaymentConfirmed(orderID string) error {
 			order.Hostname,
 			order.Plan,
 			order.OS,
+			order.NetworkMode,
 			order.CPU,
 			order.MemoryMB,
 			order.DiskGB,
@@ -166,6 +169,7 @@ func (s *PostPaymentOrchestrator) HandlePaymentConfirmed(orderID string) error {
 		initialPassword,
 		order.Hostname,
 		order.OS,
+		order.NetworkMode,
 	); err != nil {
 		return fmt.Errorf("purchase product: %w", err)
 	}

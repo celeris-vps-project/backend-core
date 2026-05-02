@@ -4,16 +4,17 @@ import "errors"
 
 // VPSConfig describes the specification of a VPS product being ordered.
 type VPSConfig struct {
-	hostname string
-	plan     string // e.g. "vps-starter", "vps-pro"
-	region   string // e.g. "us-east-1"
-	os       string // e.g. "ubuntu-22.04"
-	cpu      int    // vCPU count
-	memoryMB int    // memory in MB
-	diskGB   int    // disk in GB
+	hostname    string
+	plan        string // e.g. "vps-starter", "vps-pro"
+	region      string // e.g. "us-east-1"
+	os          string // e.g. "ubuntu-22.04"
+	networkMode string // "dedicated" or "nat"; empty defaults to "dedicated"
+	cpu         int    // vCPU count
+	memoryMB    int    // memory in MB
+	diskGB      int    // disk in GB
 }
 
-func NewVPSConfig(hostname, plan, region, os string, cpu, memoryMB, diskGB int) (VPSConfig, error) {
+func NewVPSConfig(hostname, plan, region, os, networkMode string, cpu, memoryMB, diskGB int) (VPSConfig, error) {
 	if hostname == "" {
 		return VPSConfig{}, errors.New("domain_error: hostname is required")
 	}
@@ -35,21 +36,38 @@ func NewVPSConfig(hostname, plan, region, os string, cpu, memoryMB, diskGB int) 
 	if diskGB <= 0 {
 		return VPSConfig{}, errors.New("domain_error: disk must be > 0")
 	}
+	mode, err := normalizeNetworkMode(networkMode)
+	if err != nil {
+		return VPSConfig{}, err
+	}
 	return VPSConfig{
-		hostname: hostname,
-		plan:     plan,
-		region:   region,
-		os:       os,
-		cpu:      cpu,
-		memoryMB: memoryMB,
-		diskGB:   diskGB,
+		hostname:    hostname,
+		plan:        plan,
+		region:      region,
+		os:          os,
+		networkMode: mode,
+		cpu:         cpu,
+		memoryMB:    memoryMB,
+		diskGB:      diskGB,
 	}, nil
 }
 
-func (v VPSConfig) Hostname() string { return v.hostname }
-func (v VPSConfig) Plan() string     { return v.plan }
-func (v VPSConfig) Region() string   { return v.region }
-func (v VPSConfig) OS() string       { return v.os }
-func (v VPSConfig) CPU() int         { return v.cpu }
-func (v VPSConfig) MemoryMB() int    { return v.memoryMB }
-func (v VPSConfig) DiskGB() int      { return v.diskGB }
+func normalizeNetworkMode(mode string) (string, error) {
+	switch mode {
+	case "", "dedicated":
+		return "dedicated", nil
+	case "nat":
+		return "nat", nil
+	default:
+		return "", errors.New("domain_error: network mode must be dedicated or nat")
+	}
+}
+
+func (v VPSConfig) Hostname() string    { return v.hostname }
+func (v VPSConfig) Plan() string        { return v.plan }
+func (v VPSConfig) Region() string      { return v.region }
+func (v VPSConfig) OS() string          { return v.os }
+func (v VPSConfig) NetworkMode() string { return v.networkMode }
+func (v VPSConfig) CPU() int            { return v.cpu }
+func (v VPSConfig) MemoryMB() int       { return v.memoryMB }
+func (v VPSConfig) DiskGB() int         { return v.diskGB }

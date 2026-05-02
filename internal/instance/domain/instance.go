@@ -41,7 +41,7 @@ type Instance struct {
 	terminatedAt *time.Time
 }
 
-func NewInstance(id, customerID, orderID, nodeID, hostname, plan, os string, cpu, memoryMB, diskGB int) (*Instance, error) {
+func NewInstance(id, customerID, orderID, nodeID, hostname, plan, os, networkMode string, cpu, memoryMB, diskGB int) (*Instance, error) {
 	if id == "" {
 		return nil, errors.New("domain_error: instance id is required")
 	}
@@ -74,6 +74,7 @@ func NewInstance(id, customerID, orderID, nodeID, hostname, plan, os string, cpu
 		hostname: hostname, plan: plan, os: os,
 		cpu: cpu, memoryMB: memoryMB, diskGB: diskGB,
 		status: InstanceStatusPending, createdAt: time.Now(),
+		networkMode: networkMode,
 	}, nil
 }
 

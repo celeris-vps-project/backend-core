@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 )
 
 // CheckoutAppService orchestrates the cross-domain checkout flow.
@@ -31,8 +32,9 @@ func (s *CheckoutAppService) Execute(ctx context.Context, req domain.CheckoutReq
 	if req.ProductID == "" || req.CustomerID == "" {
 		return nil, fmt.Errorf("checkout_error: product_id and customer_id are required")
 	}
+	req.Hostname = strings.TrimSpace(req.Hostname)
 	if req.Hostname == "" {
-		req.Hostname = "vps-" + req.ProductID
+		return nil, fmt.Errorf("checkout_error: hostname is required")
 	}
 	if req.OS == "" {
 		req.OS = "ubuntu-22.04"
@@ -58,6 +60,7 @@ func (s *CheckoutAppService) Execute(ctx context.Context, req domain.CheckoutReq
 		product.Slug(),
 		product.Location(),
 		req.OS,
+		product.NetworkMode(),
 		product.CPU(),
 		product.MemoryMB(),
 		product.DiskGB(),

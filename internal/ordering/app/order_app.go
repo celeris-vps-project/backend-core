@@ -31,7 +31,7 @@ func NewOrderAppService(repo domain.OrderRepository, ids IDGenerator) *OrderAppS
 // so that no other context needs to import the ordering domain layer.
 func (s *OrderAppService) CreateOrder(
 	customerID, productID, invoiceID, billingCycle string,
-	hostname, plan, region, os string,
+	hostname, plan, region, os, networkMode string,
 	cpu, memoryMB, diskGB int,
 	currency string,
 	priceAmount int64,
@@ -39,7 +39,7 @@ func (s *OrderAppService) CreateOrder(
 	if s.ids == nil {
 		return nil, errors.New("app_error: id generator is required")
 	}
-	cfg, err := domain.NewVPSConfig(hostname, plan, region, os, cpu, memoryMB, diskGB)
+	cfg, err := domain.NewVPSConfig(hostname, plan, region, os, networkMode, cpu, memoryMB, diskGB)
 	if err != nil {
 		return nil, err
 	}

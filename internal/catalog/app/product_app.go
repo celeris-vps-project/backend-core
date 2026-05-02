@@ -75,7 +75,7 @@ func (s *ProductAppService) CreateProduct(ctx context.Context, name, slug, locat
 // and publishes a ProductPurchasedEvent for the Node domain to handle
 // physical provisioning independently.
 func (s *ProductAppService) PurchaseProduct(
-	ctx context.Context, productID, customerID, orderID, instanceID, initialPassword, hostname, os string,
+	ctx context.Context, productID, customerID, orderID, instanceID, initialPassword, hostname, os, networkMode string,
 ) (*domain.Product, error) {
 	p, err := s.repo.GetByID(ctx, productID)
 	if err != nil {
@@ -83,6 +83,14 @@ func (s *ProductAppService) PurchaseProduct(
 	}
 	if !p.Enabled() {
 		return nil, fmt.Errorf("app_error: product %s is not available", productID)
+	}
+	mode := p.NetworkMode()
+	if strings.TrimSpace(networkMode) != "" {
+		normalized, err := normalizeNetworkMode(networkMode)
+		if err != nil {
+			return nil, err
+		}
+		mode = normalized
 	}
 
 	// Use atomic database-level slot consumption to prevent the
@@ -112,7 +120,7 @@ func (s *ProductAppService) PurchaseProduct(
 		CPU:             p.CPU(),
 		MemoryMB:        p.MemoryMB(),
 		DiskGB:          p.DiskGB(),
-		NetworkMode:     p.NetworkMode(),
+		NetworkMode:     mode,
 	})
 
 	// Publish collected domain events
@@ -123,6 +131,15 @@ func (s *ProductAppService) PurchaseProduct(
 func (s *ProductAppService) GetProduct(ctx context.Context, id string) (*domain.Product, error) {
 	return s.repo.GetByID(ctx, id)
 }
+
+func (s *ProductAppService) GetNetworkMode(ctx context.Context, productID string) (string, error) {
+	p, err := s.repo.GetByID(ctx, productID)
+	if err != nil {
+		return "", err
+	}
+	return p.NetworkMode(), nil
+}
+
 func (s *ProductAppService) GetBySlug(ctx context.Context, slug string) (*domain.Product, error) {
 	return s.repo.GetBySlug(ctx, slug)
 }

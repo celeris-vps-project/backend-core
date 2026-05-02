@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	hertzApp "github.com/cloudwego/hertz/pkg/app"
@@ -62,6 +63,11 @@ func (h *CheckoutHandler) Checkout(c context.Context, ctx *hertzApp.RequestConte
 
 	// Override customer ID from JWT (don't trust client-provided value)
 	req.CustomerID = uid.String()
+	req.Hostname = strings.TrimSpace(req.Hostname)
+	if req.Hostname == "" {
+		ctx.JSON(http.StatusBadRequest, apperr.RespMap(apperr.CodeInvalidParams, "hostname is required"))
+		return
+	}
 
 	result, err := h.dispatcher.Dispatch(c, req)
 	if err != nil {

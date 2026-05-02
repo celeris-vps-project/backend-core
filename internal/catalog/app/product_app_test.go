@@ -125,7 +125,7 @@ func TestProductApp_PurchasePublishesEvent(t *testing.T) {
 		receivedEvent = &e
 	})
 
-	result, err := svc.PurchaseProduct(ctx, p.ID(), "cust-1", "ord-1", "inst-1", "pwd-1", "web-01", "ubuntu-22.04")
+	result, err := svc.PurchaseProduct(ctx, p.ID(), "cust-1", "ord-1", "inst-1", "pwd-1", "web-01", "ubuntu-22.04", "nat")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -166,6 +166,34 @@ func TestProductApp_PurchasePublishesEvent(t *testing.T) {
 	}
 }
 
+func TestProductApp_PurchaseUsesProductNetworkModeWhenSnapshotIsEmpty(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemProductRepo()
+	bus := eventbus.New()
+	svc := NewProductAppService(repo, staticIDGen{id: "prod-nat"}, bus, nil)
+
+	p, err := svc.CreateProduct(ctx, "VPS NAT", "vps-nat", "DE-fra", "region-de", "", "nat", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var receivedEvent *events.ProductPurchasedEvent
+	bus.Subscribe("product.purchased", func(evt eventbus.Event) {
+		e := evt.(events.ProductPurchasedEvent)
+		receivedEvent = &e
+	})
+
+	if _, err := svc.PurchaseProduct(ctx, p.ID(), "cust-1", "ord-1", "inst-1", "pwd-1", "web-01", "ubuntu-22.04", ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if receivedEvent == nil {
+		t.Fatal("expected ProductPurchasedEvent to be published")
+	}
+	if receivedEvent.NetworkMode != "nat" {
+		t.Fatalf("expected product fallback network mode nat, got %s", receivedEvent.NetworkMode)
+	}
+}
+
 func TestProductApp_PurchaseFailsWhenOutOfStock(t *testing.T) {
 	ctx := context.Background()
 	repo := newMemProductRepo()
@@ -174,11 +202,11 @@ func TestProductApp_PurchaseFailsWhenOutOfStock(t *testing.T) {
 
 	p, _ := svc.CreateProduct(ctx, "VPS Tiny", "vps-tiny", "US-nyc", "", "", "", 1, 512, 10, 500, 299, "USD", domain.BillingMonthly, 1)
 
-	if _, err := svc.PurchaseProduct(ctx, p.ID(), "cust-1", "ord-1", "", "", "h1", "ubuntu"); err != nil {
+	if _, err := svc.PurchaseProduct(ctx, p.ID(), "cust-1", "ord-1", "", "", "h1", "ubuntu", ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if _, err := svc.PurchaseProduct(ctx, p.ID(), "cust-2", "ord-2", "", "", "h2", "ubuntu"); err == nil {
+	if _, err := svc.PurchaseProduct(ctx, p.ID(), "cust-2", "ord-2", "", "", "h2", "ubuntu", ""); err == nil {
 		t.Fatal("expected error when no slots available")
 	}
 }
@@ -192,7 +220,7 @@ func TestProductApp_PurchaseFailsWhenDisabled(t *testing.T) {
 	p, _ := svc.CreateProduct(ctx, "VPS Off", "vps-off", "DE-fra", "", "", "", 1, 1024, 20, 1000, 499, "USD", domain.BillingMonthly, 10)
 	_ = svc.DisableProduct(ctx, p.ID())
 
-	if _, err := svc.PurchaseProduct(ctx, p.ID(), "cust-1", "ord-1", "", "", "h1", "ubuntu"); err == nil {
+	if _, err := svc.PurchaseProduct(ctx, p.ID(), "cust-1", "ord-1", "", "", "h1", "ubuntu", ""); err == nil {
 		t.Fatal("expected error when product disabled")
 	}
 }

@@ -188,12 +188,15 @@ func TestCreatePendingInstance_DoesNotAllocateNodeOrSlot(t *testing.T) {
 
 	node := createTestHostNode(nodeRepo, "node-3", "JP-tyo-01", "JP-tyo", "Tokyo #1", 2)
 
-	inst, err := svc.CreatePendingInstance("cust-1", "ord-1", "JP-tyo", "web-01", "vps-basic", "ubuntu-24.04", 2, 2048, 40)
+	inst, err := svc.CreatePendingInstance("cust-1", "ord-1", "JP-tyo", "web-01", "vps-basic", "ubuntu-24.04", "", 2, 2048, 40)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if inst.NodeID() != "" {
 		t.Fatalf("expected empty node assignment, got %s", inst.NodeID())
+	}
+	if inst.NetworkMode() != "dedicated" {
+		t.Fatalf("expected default dedicated network mode, got %s", inst.NetworkMode())
 	}
 
 	storedNode, _ := nodeRepo.GetByID(node.ID())
@@ -208,9 +211,12 @@ func TestConfirmProvisioning_AssignsNodeAndNetworkDetails(t *testing.T) {
 	idGen := &seqIDGen{}
 	svc := NewInstanceAppService(nodeRepo, instRepo, idGen, nil)
 
-	inst, err := svc.CreatePendingInstance("cust-1", "ord-1", "US-lax", "app-01", "vps-pro", "debian-12", 4, 8192, 100)
+	inst, err := svc.CreatePendingInstance("cust-1", "ord-1", "US-lax", "app-01", "vps-pro", "debian-12", "nat", 4, 8192, 100)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if inst.NetworkMode() != "nat" {
+		t.Fatalf("expected pending nat network mode, got %s", inst.NetworkMode())
 	}
 
 	if err := svc.ConfirmProvisioning(inst.ID(), "node-real-1", "10.0.0.10", "", "198.51.100.10", "nat", 22001); err != nil {

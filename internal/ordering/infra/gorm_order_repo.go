@@ -23,6 +23,7 @@ type OrderPO struct {
 	Plan         string     `gorm:"column:plan"`
 	Region       string     `gorm:"column:region"`
 	OS           string     `gorm:"column:os"`
+	NetworkMode  string     `gorm:"column:network_mode;default:dedicated"`
 	CPU          int        `gorm:"column:cpu"`
 	MemoryMB     int        `gorm:"column:memory_mb"`
 	DiskGB       int        `gorm:"column:disk_gb"`
@@ -92,7 +93,7 @@ func (r *GormOrderRepo) Save(order *domain.Order) error {
 
 func orderToDomain(po OrderPO) *domain.Order {
 	cfg, _ := domain.NewVPSConfig(
-		po.Hostname, po.Plan, po.Region, po.OS,
+		po.Hostname, po.Plan, po.Region, po.OS, po.NetworkMode,
 		po.CPU, po.MemoryMB, po.DiskGB,
 	)
 	return domain.ReconstituteOrder(
@@ -120,6 +121,7 @@ func orderFromDomain(o *domain.Order) OrderPO {
 		Plan:         cfg.Plan(),
 		Region:       cfg.Region(),
 		OS:           cfg.OS(),
+		NetworkMode:  cfg.NetworkMode(),
 		CPU:          cfg.CPU(),
 		MemoryMB:     cfg.MemoryMB(),
 		DiskGB:       cfg.DiskGB(),
