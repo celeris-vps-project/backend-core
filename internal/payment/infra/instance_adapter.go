@@ -22,12 +22,12 @@ func NewInstanceAdapter(svc *instanceApp.InstanceAppService) *InstanceAdapter {
 func (a *InstanceAdapter) CreatePendingInstance(
 	customerID, orderID, region, hostname, plan, os string,
 	cpu, memoryMB, diskGB int,
-) (string, error) {
+) (paymentApp.PendingInstance, error) {
 	inst, err := a.svc.CreatePendingInstance(customerID, orderID, region, hostname, plan, os, cpu, memoryMB, diskGB)
 	if err != nil {
-		return "", err
+		return paymentApp.PendingInstance{}, err
 	}
-	return inst.ID(), nil
+	return paymentApp.PendingInstance{ID: inst.ID(), InitialPassword: inst.InitialPassword()}, nil
 }
 
 func (a *InstanceAdapter) GetByOrderID(orderID string) (paymentApp.RenewalInstance, error) {

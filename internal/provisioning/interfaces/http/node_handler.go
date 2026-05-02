@@ -80,6 +80,8 @@ type IPResponse struct {
 	NodeID     string `json:"node_id"`
 	Address    string `json:"address"`
 	Version    int    `json:"version"`
+	Mode       string `json:"mode"`
+	Port       int    `json:"port,omitempty"`
 	InstanceID string `json:"instance_id,omitempty"`
 	Available  bool   `json:"available"`
 }
@@ -552,7 +554,8 @@ func toHostResp(n *domain.HostNode, state *domain.NodeState) HostNodeResponse {
 func toIPResp(ip *domain.IPAddress) IPResponse {
 	return IPResponse{
 		ID: ip.ID(), NodeID: ip.NodeID(), Address: ip.Address(),
-		Version: ip.Version(), InstanceID: ip.InstanceID(), Available: ip.IsAvailable(),
+		Version: ip.Version(), Mode: string(ip.Mode()), Port: ip.Port(),
+		InstanceID: ip.InstanceID(), Available: ip.IsAvailable(),
 	}
 }
 

@@ -47,7 +47,7 @@ type PayableOrder struct {
 
 // ProductPurchaser is a port for the catalog context.
 type ProductPurchaser interface {
-	PurchaseProduct(ctx context.Context, productID, customerID, orderID, instanceID, hostname, os string) (PurchasedProduct, error)
+	PurchaseProduct(ctx context.Context, productID, customerID, orderID, instanceID, initialPassword, hostname, os string) (PurchasedProduct, error)
 }
 
 // PurchasedProduct is the minimal read-model returned after purchase.
@@ -60,9 +60,14 @@ type PurchasedProduct struct {
 }
 
 // InstanceCreator is a port for the instance context.
-// Returns the newly created instance ID or an error.
+// Returns the newly created instance delivery details or an error.
 type InstanceCreator interface {
-	CreatePendingInstance(customerID, orderID, region, hostname, plan, os string, cpu, memoryMB, diskGB int) (string, error)
+	CreatePendingInstance(customerID, orderID, region, hostname, plan, os string, cpu, memoryMB, diskGB int) (PendingInstance, error)
+}
+
+type PendingInstance struct {
+	ID              string
+	InitialPassword string
 }
 
 // InvoiceCreator is a port for the billing context.
@@ -129,8 +134,9 @@ func (s *PostPaymentOrchestrator) HandlePaymentConfirmed(orderID string) error {
 	// 3. Create the pending instance first so the provisioning callback can
 	// update the same instance record instead of a controller-generated ID.
 	instanceID := ""
+	initialPassword := ""
 	if s.instances != nil {
-		instanceID, err = s.instances.CreatePendingInstance(
+		pendingInstance, err := s.instances.CreatePendingInstance(
 			order.CustomerID,
 			orderID,
 			order.Region,
@@ -144,6 +150,8 @@ func (s *PostPaymentOrchestrator) HandlePaymentConfirmed(orderID string) error {
 		if err != nil {
 			return fmt.Errorf("create pending instance: %w", err)
 		}
+		instanceID = pendingInstance.ID
+		initialPassword = pendingInstance.InitialPassword
 		log.Printf("[PostPaymentOrchestrator] pending instance created: %s (order=%s)", instanceID, orderID)
 	}
 
@@ -155,6 +163,7 @@ func (s *PostPaymentOrchestrator) HandlePaymentConfirmed(orderID string) error {
 		order.CustomerID,
 		orderID,
 		instanceID,
+		initialPassword,
 		order.Hostname,
 		order.OS,
 	); err != nil {
@@ -206,14 +215,20 @@ func (s *PostPaymentOrchestrator) CreateInvoiceForPayment(order PayableOrder) (s
 	return invoiceID, nil
 }
 
-// VoidInvoiceOnFailure voids an invoice when the payment charge creation fails.
-func (s *PostPaymentOrchestrator) VoidInvoiceOnFailure(invoiceID, reason string) {
-	if s.invoices == nil || invoiceID == "" {
+// VoidInvoiceOnFailure only voids the current invoice for an unpaid pending order.
+// This keeps normal first-payment retries clean without breaking renewal invoices.
+func (s *PostPaymentOrchestrator) VoidInvoiceOnFailure(order PayableOrder, invoiceID, reason string) {
+	if order.Status != "pending" {
+		log.Printf("[PostPaymentOrchestrator] skipping invoice void for order=%s status=%s invoice=%s",
+			order.ID, order.Status, invoiceID)
 		return
 	}
-	if err := s.invoices.VoidInvoice(invoiceID, reason); err != nil {
-		log.Printf("[PostPaymentOrchestrator] WARNING: failed to void invoice %s: %v", invoiceID, err)
-	} else {
+	if order.InvoiceID == "" || order.InvoiceID != invoiceID {
+		log.Printf("[PostPaymentOrchestrator] skipping invoice void for order=%s current_invoice=%s failed_invoice=%s",
+			order.ID, order.InvoiceID, invoiceID)
+		return
+	}
+	if s.voidInvoiceIfOpen(invoiceID, reason) {
 		log.Printf("[PostPaymentOrchestrator] invoice voided: %s reason=%s", invoiceID, reason)
 	}
 }
@@ -228,29 +243,35 @@ type InvoiceTimeoutPayload struct {
 // timeout period. If still unpaid ("issued"), it voids the invoice and
 // cancels the associated order.
 func (s *PostPaymentOrchestrator) HandleInvoiceTimeout(invoiceID, orderID string) {
-	if s.invoices == nil {
+	if s.invoices == nil || invoiceID == "" {
 		return
 	}
 
 	log.Printf("[PostPaymentOrchestrator] checking timeout: invoice=%s order=%s", invoiceID, orderID)
 
-	status, err := s.invoices.GetInvoiceStatus(invoiceID)
-	if err != nil {
-		log.Printf("[PostPaymentOrchestrator] ERROR: invoice not found %s: %v", invoiceID, err)
-		return
+	if orderID != "" {
+		order, err := s.orders.GetOrderForPayment(orderID)
+		if err != nil {
+			log.Printf("[PostPaymentOrchestrator] WARNING: failed to load order %s for timeout check: %v", orderID, err)
+			return
+		}
+		if order.InvoiceID == "" || order.InvoiceID != invoiceID {
+			if s.voidInvoiceIfOpen(invoiceID, "payment timeout - stale invoice auto-voided") {
+				log.Printf("[PostPaymentOrchestrator] stale invoice voided: invoice=%s order=%s current_invoice=%s",
+					invoiceID, orderID, order.InvoiceID)
+			}
+			log.Printf("[PostPaymentOrchestrator] skipping timeout cancellation for stale invoice=%s order=%s current_invoice=%s",
+				invoiceID, orderID, order.InvoiceID)
+			return
+		}
+		if order.Status != "pending" {
+			log.Printf("[PostPaymentOrchestrator] skipping timeout for order=%s status=%s invoice=%s",
+				orderID, order.Status, invoiceID)
+			return
+		}
 	}
 
-	switch status {
-	case "paid":
-		log.Printf("[PostPaymentOrchestrator] invoice %s already paid, skipping", invoiceID)
-		return
-	case "void":
-		log.Printf("[PostPaymentOrchestrator] invoice %s already void, skipping", invoiceID)
-		return
-	}
-
-	if err := s.invoices.VoidInvoice(invoiceID, "payment timeout - auto-voided after deadline"); err != nil {
-		log.Printf("[PostPaymentOrchestrator] ERROR: failed to void invoice %s: %v", invoiceID, err)
+	if !s.voidInvoiceIfOpen(invoiceID, "payment timeout - auto-voided after deadline") {
 		return
 	}
 	log.Printf("[PostPaymentOrchestrator] invoice voided: %s (payment timeout)", invoiceID)
@@ -263,6 +284,33 @@ func (s *PostPaymentOrchestrator) HandleInvoiceTimeout(invoiceID, orderID string
 			log.Printf("[PostPaymentOrchestrator] order cancelled: %s (payment timeout)", orderID)
 		}
 	}
+}
+
+func (s *PostPaymentOrchestrator) voidInvoiceIfOpen(invoiceID, reason string) bool {
+	if s.invoices == nil || invoiceID == "" {
+		return false
+	}
+
+	status, err := s.invoices.GetInvoiceStatus(invoiceID)
+	if err != nil {
+		log.Printf("[PostPaymentOrchestrator] ERROR: invoice not found %s: %v", invoiceID, err)
+		return false
+	}
+
+	switch status {
+	case "paid":
+		log.Printf("[PostPaymentOrchestrator] invoice %s already paid, skipping", invoiceID)
+		return false
+	case "void":
+		log.Printf("[PostPaymentOrchestrator] invoice %s already void, skipping", invoiceID)
+		return false
+	}
+
+	if err := s.invoices.VoidInvoice(invoiceID, reason); err != nil {
+		log.Printf("[PostPaymentOrchestrator] ERROR: failed to void invoice %s: %v", invoiceID, err)
+		return false
+	}
+	return true
 }
 
 // ScheduleInvoiceTimeout publishes a delayed event that will check whether

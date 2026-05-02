@@ -84,26 +84,28 @@ func (a *HostNodeAllocatorAdapter) Save(node domain.NodeAllocator) error {
 // ---- Persistence Objects ----
 
 type InstancePO struct {
-	ID           string     `gorm:"primaryKey;column:id"`
-	CustomerID   string     `gorm:"index;column:customer_id"`
-	OrderID      string     `gorm:"index;column:order_id"`
-	NodeID       string     `gorm:"index;column:node_id"`
-	Hostname     string     `gorm:"column:hostname"`
-	Plan         string     `gorm:"column:plan"`
-	OS           string     `gorm:"column:os"`
-	CPU          int        `gorm:"column:cpu"`
-	MemoryMB     int        `gorm:"column:memory_mb"`
-	DiskGB       int        `gorm:"column:disk_gb"`
-	IPv4         string     `gorm:"column:ipv4"`
-	IPv6         string     `gorm:"column:ipv6"`
-	Status       string     `gorm:"column:status"`
-	NetworkMode  string     `gorm:"column:network_mode;default:dedicated"` // "dedicated" or "nat"
-	NATPort      int        `gorm:"column:nat_port;default:0"`             // NAT SSH port
-	CreatedAt    time.Time  `gorm:"column:created_at"`
-	StartedAt    *time.Time `gorm:"column:started_at"`
-	StoppedAt    *time.Time `gorm:"column:stopped_at"`
-	SuspendedAt  *time.Time `gorm:"column:suspended_at"`
-	TerminatedAt *time.Time `gorm:"column:terminated_at"`
+	ID              string     `gorm:"primaryKey;column:id"`
+	CustomerID      string     `gorm:"index;column:customer_id"`
+	OrderID         string     `gorm:"index;column:order_id"`
+	NodeID          string     `gorm:"index;column:node_id"`
+	Hostname        string     `gorm:"column:hostname"`
+	Plan            string     `gorm:"column:plan"`
+	OS              string     `gorm:"column:os"`
+	CPU             int        `gorm:"column:cpu"`
+	MemoryMB        int        `gorm:"column:memory_mb"`
+	DiskGB          int        `gorm:"column:disk_gb"`
+	IPv4            string     `gorm:"column:ipv4"`
+	IPv6            string     `gorm:"column:ipv6"`
+	HostIP          string     `gorm:"column:host_ip"`
+	Status          string     `gorm:"column:status"`
+	InitialPassword string     `gorm:"column:initial_password"`
+	NetworkMode     string     `gorm:"column:network_mode;default:dedicated"` // "dedicated" or "nat"
+	NATPort         int        `gorm:"column:nat_port;default:0"`             // NAT SSH port
+	CreatedAt       time.Time  `gorm:"column:created_at"`
+	StartedAt       *time.Time `gorm:"column:started_at"`
+	StoppedAt       *time.Time `gorm:"column:stopped_at"`
+	SuspendedAt     *time.Time `gorm:"column:suspended_at"`
+	TerminatedAt    *time.Time `gorm:"column:terminated_at"`
 }
 
 func (InstancePO) TableName() string { return "instances" }
@@ -174,7 +176,7 @@ func instanceToDomain(po InstancePO) *domain.Instance {
 		po.ID, po.CustomerID, po.OrderID, po.NodeID,
 		po.Hostname, po.Plan, po.OS,
 		po.CPU, po.MemoryMB, po.DiskGB,
-		po.IPv4, po.IPv6, po.Status,
+		po.IPv4, po.IPv6, po.HostIP, po.Status, po.InitialPassword,
 		po.NetworkMode, po.NATPort,
 		po.CreatedAt,
 		po.StartedAt, po.StoppedAt, po.SuspendedAt, po.TerminatedAt,
@@ -186,8 +188,8 @@ func instanceFromDomain(i *domain.Instance) InstancePO {
 		ID: i.ID(), CustomerID: i.CustomerID(), OrderID: i.OrderID(), NodeID: i.NodeID(),
 		Hostname: i.Hostname(), Plan: i.Plan(), OS: i.OS(),
 		CPU: i.CPU(), MemoryMB: i.MemoryMB(), DiskGB: i.DiskGB(),
-		IPv4: i.IPv4(), IPv6: i.IPv6(), Status: i.Status(),
-		NetworkMode: i.NetworkMode(), NATPort: i.NATPort(),
+		IPv4: i.IPv4(), IPv6: i.IPv6(), HostIP: i.HostIP(), Status: i.Status(),
+		InitialPassword: i.InitialPassword(), NetworkMode: i.NetworkMode(), NATPort: i.NATPort(),
 		CreatedAt: i.CreatedAt(),
 		StartedAt: i.StartedAt(), StoppedAt: i.StoppedAt(),
 		SuspendedAt: i.SuspendedAt(), TerminatedAt: i.TerminatedAt(),

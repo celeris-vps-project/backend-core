@@ -35,26 +35,28 @@ type AssignIPRequest struct {
 // ---- Response DTOs ----
 
 type InstanceResponse struct {
-	ID           string  `json:"id"`
-	CustomerID   string  `json:"customer_id"`
-	OrderID      string  `json:"order_id"`
-	NodeID       string  `json:"node_id"`
-	Hostname     string  `json:"hostname"`
-	Plan         string  `json:"plan"`
-	OS           string  `json:"os"`
-	CPU          int     `json:"cpu"`
-	MemoryMB     int     `json:"memory_mb"`
-	DiskGB       int     `json:"disk_gb"`
-	IPv4         string  `json:"ipv4,omitempty"`
-	IPv6         string  `json:"ipv6,omitempty"`
-	Status       string  `json:"status"`
-	NetworkMode  string  `json:"network_mode,omitempty"` // "dedicated" or "nat"
-	NATPort      int     `json:"nat_port,omitempty"`     // NAT mode: SSH port on host
-	CreatedAt    string  `json:"created_at"`
-	StartedAt    *string `json:"started_at,omitempty"`
-	StoppedAt    *string `json:"stopped_at,omitempty"`
-	SuspendedAt  *string `json:"suspended_at,omitempty"`
-	TerminatedAt *string `json:"terminated_at,omitempty"`
+	ID              string  `json:"id"`
+	CustomerID      string  `json:"customer_id"`
+	OrderID         string  `json:"order_id"`
+	NodeID          string  `json:"node_id"`
+	Hostname        string  `json:"hostname"`
+	Plan            string  `json:"plan"`
+	OS              string  `json:"os"`
+	CPU             int     `json:"cpu"`
+	MemoryMB        int     `json:"memory_mb"`
+	DiskGB          int     `json:"disk_gb"`
+	IPv4            string  `json:"ipv4,omitempty"`
+	IPv6            string  `json:"ipv6,omitempty"`
+	HostIP          string  `json:"host_ip,omitempty"`
+	Status          string  `json:"status"`
+	NetworkMode     string  `json:"network_mode,omitempty"` // "dedicated" or "nat"
+	NATPort         int     `json:"nat_port,omitempty"`     // NAT mode: SSH port on host
+	InitialPassword string  `json:"initial_password,omitempty"`
+	CreatedAt       string  `json:"created_at"`
+	StartedAt       *string `json:"started_at,omitempty"`
+	StoppedAt       *string `json:"stopped_at,omitempty"`
+	SuspendedAt     *string `json:"suspended_at,omitempty"`
+	TerminatedAt    *string `json:"terminated_at,omitempty"`
 }
 
 // ---- Handler ----
@@ -194,8 +196,8 @@ func toInstResp(i *domain.Instance) InstanceResponse {
 		ID: i.ID(), CustomerID: i.CustomerID(), OrderID: i.OrderID(), NodeID: i.NodeID(),
 		Hostname: i.Hostname(), Plan: i.Plan(), OS: i.OS(),
 		CPU: i.CPU(), MemoryMB: i.MemoryMB(), DiskGB: i.DiskGB(),
-		IPv4: i.IPv4(), IPv6: i.IPv6(), Status: i.Status(),
-		NetworkMode: i.NetworkMode(), NATPort: i.NATPort(),
+		IPv4: i.IPv4(), IPv6: i.IPv6(), HostIP: i.HostIP(), Status: i.Status(),
+		NetworkMode: i.NetworkMode(), NATPort: i.NATPort(), InitialPassword: i.InitialPassword(),
 		CreatedAt: i.CreatedAt().Format(time.RFC3339),
 	}
 	if t := i.StartedAt(); t != nil {

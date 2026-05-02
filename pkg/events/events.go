@@ -11,19 +11,20 @@ package events
 // successfully purchases a product (commercial slot consumed).
 // The Node domain listens to this event to trigger physical provisioning.
 type ProductPurchasedEvent struct {
-	ProductID      string
-	ProductSlug    string
-	RegionID       string // the region where this product is sold (legacy)
-	ResourcePoolID string // the resource pool this product belongs to
-	CustomerID     string
-	OrderID        string
-	InstanceID     string // optional: the pre-created instance record to fulfill
-	Hostname       string
-	OS             string
-	CPU            int
-	MemoryMB       int
-	DiskGB         int
-	NetworkMode    string // "dedicated" or "nat"; empty = dedicated
+	ProductID       string
+	ProductSlug     string
+	RegionID        string // the region where this product is sold (legacy)
+	ResourcePoolID  string // the resource pool this product belongs to
+	CustomerID      string
+	OrderID         string
+	InstanceID      string // optional: the pre-created instance record to fulfill
+	Hostname        string
+	OS              string
+	InitialPassword string
+	CPU             int
+	MemoryMB        int
+	DiskGB          int
+	NetworkMode     string // "dedicated" or "nat"; empty = dedicated
 }
 
 func (ProductPurchasedEvent) EventName() string { return "product.purchased" }
@@ -114,26 +115,28 @@ func (NodeStateUpdatedEvent) EventName() string { return "node.state_updated" }
 // state of an instance changes. The customer-facing WebSocket hub listens to
 // this event and forwards matching updates to the owning user.
 type InstanceStateUpdatedEvent struct {
-	InstanceID   string  `json:"id"`
-	CustomerID   string  `json:"-"`
-	OrderID      string  `json:"order_id"`
-	NodeID       string  `json:"node_id"`
-	Hostname     string  `json:"hostname"`
-	Plan         string  `json:"plan"`
-	OS           string  `json:"os"`
-	CPU          int     `json:"cpu"`
-	MemoryMB     int     `json:"memory_mb"`
-	DiskGB       int     `json:"disk_gb"`
-	IPv4         string  `json:"ipv4,omitempty"`
-	IPv6         string  `json:"ipv6,omitempty"`
-	Status       string  `json:"status"`
-	NetworkMode  string  `json:"network_mode,omitempty"`
-	NATPort      int     `json:"nat_port,omitempty"`
-	CreatedAt    string  `json:"created_at"`
-	StartedAt    *string `json:"started_at,omitempty"`
-	StoppedAt    *string `json:"stopped_at,omitempty"`
-	SuspendedAt  *string `json:"suspended_at,omitempty"`
-	TerminatedAt *string `json:"terminated_at,omitempty"`
+	InstanceID      string  `json:"id"`
+	CustomerID      string  `json:"-"`
+	OrderID         string  `json:"order_id"`
+	NodeID          string  `json:"node_id"`
+	Hostname        string  `json:"hostname"`
+	Plan            string  `json:"plan"`
+	OS              string  `json:"os"`
+	CPU             int     `json:"cpu"`
+	MemoryMB        int     `json:"memory_mb"`
+	DiskGB          int     `json:"disk_gb"`
+	IPv4            string  `json:"ipv4,omitempty"`
+	IPv6            string  `json:"ipv6,omitempty"`
+	HostIP          string  `json:"host_ip,omitempty"`
+	Status          string  `json:"status"`
+	NetworkMode     string  `json:"network_mode,omitempty"`
+	NATPort         int     `json:"nat_port,omitempty"`
+	InitialPassword string  `json:"initial_password,omitempty"`
+	CreatedAt       string  `json:"created_at"`
+	StartedAt       *string `json:"started_at,omitempty"`
+	StoppedAt       *string `json:"stopped_at,omitempty"`
+	SuspendedAt     *string `json:"suspended_at,omitempty"`
+	TerminatedAt    *string `json:"terminated_at,omitempty"`
 }
 
 func (InstanceStateUpdatedEvent) EventName() string { return "instance.state_updated" }

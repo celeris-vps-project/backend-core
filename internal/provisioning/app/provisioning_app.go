@@ -285,9 +285,32 @@ func (s *ProvisioningAppService) Heartbeat(hb contracts.Heartbeat) (*contracts.H
 
 	tasks, err := s.taskRepo.ListPendingByNodeID(hb.NodeID)
 	if err != nil {
-		return &contracts.HeartbeatAck{OK: true}, nil
+		return &contracts.HeartbeatAck{OK: true, NATForwards: s.activeNATForwards(hb.NodeID)}, nil
 	}
-	return &contracts.HeartbeatAck{OK: true, Tasks: tasks}, nil
+	return &contracts.HeartbeatAck{OK: true, Tasks: tasks, NATForwards: s.activeNATForwards(hb.NodeID)}, nil
+}
+
+func (s *ProvisioningAppService) activeNATForwards(nodeID string) []contracts.NATForwardRule {
+	if s.ipRepo == nil {
+		return nil
+	}
+	ips, err := s.ipRepo.ListByNodeID(nodeID)
+	if err != nil {
+		log.Printf("[provisioning] WARNING: failed to list NAT forwards for node %s: %v", nodeID, err)
+		return nil
+	}
+	rules := make([]contracts.NATForwardRule, 0, len(ips))
+	for _, ip := range ips {
+		if ip == nil || !ip.IsNAT() || ip.IsAvailable() || ip.Port() <= 0 || ip.Address() == "" {
+			continue
+		}
+		rules = append(rules, contracts.NATForwardRule{
+			InstanceID: ip.InstanceID(),
+			HostPort:   ip.Port(),
+			GuestIP:    ip.Address(),
+		})
+	}
+	return rules
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -313,6 +336,14 @@ func (s *ProvisioningAppService) ReportTaskResult(result contracts.TaskResult) e
 		case contracts.TaskProvision:
 			switch result.Status {
 			case contracts.TaskStatusCompleted:
+				ipv4 := result.IPv4
+				if ipv4 == "" {
+					ipv4 = task.Spec.IPv4
+				}
+				ipv6 := result.IPv6
+				if ipv6 == "" {
+					ipv6 = task.Spec.IPv6
+				}
 				// Resolve NAT info from the task spec
 				networkMode := string(task.Spec.NetworkMode)
 				natPort := task.Spec.NATPort
@@ -325,15 +356,15 @@ func (s *ProvisioningAppService) ReportTaskResult(result contracts.TaskResult) e
 					InstanceID:  task.Spec.InstanceID,
 					NodeID:      task.NodeID,
 					TaskID:      task.ID,
-					IPv4:        result.IPv4,
-					IPv6:        result.IPv6,
+					IPv4:        ipv4,
+					IPv6:        ipv6,
 					VMState:     result.VMState,
 					NetworkMode: networkMode,
 					NATPort:     natPort,
 					HostIP:      hostIP,
 				})
 				log.Printf("[provisioning] task %s completed: instance=%s ipv4=%s vm_state=%s nat_port=%d",
-					task.ID, task.Spec.InstanceID, result.IPv4, result.VMState, natPort)
+					task.ID, task.Spec.InstanceID, ipv4, result.VMState, natPort)
 
 			case contracts.TaskStatusFailed:
 				s.bus.Publish(events.ProvisioningFailedEvent{
@@ -471,6 +502,15 @@ func (s *ProvisioningAppService) AllocateNATPort(nodeID, instanceID string) (hos
 	// 1. Try to reuse a previously released NAT port
 	existing, findErr := s.ipRepo.FindAvailableNAT(nodeID)
 	if findErr == nil && existing != nil {
+		if existing.Address() == "" {
+			guestIP, err := defaultNATGuestIPv4(node, existing.Port())
+			if err != nil {
+				return "", 0, err
+			}
+			if err := existing.SetAddress(guestIP); err != nil {
+				return "", 0, err
+			}
+		}
 		if err := existing.Assign(instanceID); err != nil {
 			return "", 0, err
 		}
@@ -494,9 +534,13 @@ func (s *ProvisioningAppService) AllocateNATPort(nodeID, instanceID string) (hos
 	if err != nil {
 		return "", 0, err
 	}
+	guestIP, err := defaultNATGuestIPv4(node, freePort)
+	if err != nil {
+		return "", 0, err
+	}
 
 	// 3. Create and assign a new NAT port allocation
-	alloc, err := domain.NewNATPortAllocation(s.ids.NewID(), nodeID, freePort)
+	alloc, err := domain.NewNATPortAllocation(s.ids.NewID(), nodeID, guestIP, freePort)
 	if err != nil {
 		return "", 0, err
 	}

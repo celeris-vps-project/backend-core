@@ -57,8 +57,9 @@ func (s *AgentGRPCServer) Heartbeat(ctx context.Context, req *agentpb.HeartbeatR
 		return nil, status.Errorf(codes.Internal, "heartbeat failed: %v", err)
 	}
 	return &agentpb.HeartbeatResponse{
-		Ok:    ack.OK,
-		Tasks: tasksToProto(ack.Tasks),
+		Ok:          ack.OK,
+		Tasks:       tasksToProto(ack.Tasks),
+		NatForwards: natForwardsToProto(ack.NATForwards),
 	}, nil
 }
 
@@ -104,17 +105,32 @@ func tasksToProto(tasks []contracts.Task) []*agentpb.Task {
 
 func specToProto(s contracts.ProvisionSpec) *agentpb.ProvisionSpec {
 	return &agentpb.ProvisionSpec{
-		InstanceId:  s.InstanceID,
-		Hostname:    s.Hostname,
-		Os:          s.OS,
-		Cpu:         int32(s.CPU),
-		MemoryMb:    int32(s.MemoryMB),
-		DiskGb:      int32(s.DiskGB),
-		Ipv4:        s.IPv4,
-		Ipv6:        s.IPv6,
-		VirtType:    string(s.VirtType),
-		StoragePool: s.StoragePool,
-		NetworkName: s.NetworkName,
-		SshKeys:     s.SSHKeys,
+		InstanceId:      s.InstanceID,
+		Hostname:        s.Hostname,
+		Os:              s.OS,
+		Cpu:             int32(s.CPU),
+		MemoryMb:        int32(s.MemoryMB),
+		DiskGb:          int32(s.DiskGB),
+		Ipv4:            s.IPv4,
+		Ipv6:            s.IPv6,
+		VirtType:        string(s.VirtType),
+		StoragePool:     s.StoragePool,
+		NetworkName:     s.NetworkName,
+		SshKeys:         s.SSHKeys,
+		NetworkMode:     string(s.NetworkMode),
+		NatPort:         int32(s.NATPort),
+		InitialPassword: s.InitialPassword,
 	}
+}
+
+func natForwardsToProto(rules []contracts.NATForwardRule) []*agentpb.NATForwardRule {
+	out := make([]*agentpb.NATForwardRule, len(rules))
+	for i, rule := range rules {
+		out[i] = &agentpb.NATForwardRule{
+			InstanceId: rule.InstanceID,
+			HostPort:   int32(rule.HostPort),
+			GuestIp:    rule.GuestIP,
+		}
+	}
+	return out
 }

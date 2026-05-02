@@ -236,8 +236,8 @@ func toOrderResponse(o *domain.Order) OrderResponse {
 		InvoiceID:    o.InvoiceID(),
 		BillingCycle: o.BillingCycle(),
 		Status:       o.Status(),
-		Currency:    o.Currency(),
-		PriceAmount: o.PriceAmount(),
+		Currency:     o.Currency(),
+		PriceAmount:  o.PriceAmount(),
 		VPS: VPSConfigResponse{
 			Hostname: cfg.Hostname(),
 			Plan:     cfg.Plan(),

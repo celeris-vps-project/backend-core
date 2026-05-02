@@ -86,6 +86,8 @@ func (s *PaymentAppService) InitiatePayment(ctx context.Context, req *InitiatePa
 		if err != nil {
 			log.Printf("[PaymentAppService] WARNING: invoice creation failed for order %s: %v", req.OrderID, err)
 			// Non-fatal — continue without invoice
+		} else {
+			order.InvoiceID = invoiceID
 		}
 	case "active", "suspended":
 		if s.renewals == nil {
@@ -105,7 +107,7 @@ func (s *PaymentAppService) InitiatePayment(ctx context.Context, req *InitiatePa
 	chargeResult, err := s.createCharge(ctx, req, order)
 	if err != nil {
 		// Void orphan invoice on charge failure
-		s.orchestrator.VoidInvoiceOnFailure(invoiceID, "payment charge creation failed: "+err.Error())
+		s.orchestrator.VoidInvoiceOnFailure(order, invoiceID, "payment charge creation failed: "+err.Error())
 		return nil, err // already an *AppError from createCharge
 	}
 
@@ -228,7 +230,16 @@ func (s *PaymentAppService) HandleWebhookPayload(payload *domain.WebhookPayload)
 		payload.ChargeID, payload.OrderID, payload.Status)
 
 	if payload.Status != domain.ChargeStatusSuccess {
-		log.Printf("[PaymentAppService.HandleWebhookPayload] payment not successful (status=%s), skipping",
+		if payload.Status == domain.ChargeStatusFailed {
+			order, err := s.orchestrator.GetOrderForPay(payload.OrderID)
+			if err != nil {
+				log.Printf("[PaymentAppService.HandleWebhookPayload] WARNING: order lookup failed for failed payment: %v", err)
+				return
+			}
+			s.orchestrator.VoidInvoiceOnFailure(order, order.InvoiceID,
+				"payment gateway reported unsuccessful payment")
+		}
+		log.Printf("[PaymentAppService.HandleWebhookPayload] payment not successful (status=%s), skipping activation",
 			payload.Status)
 		return
 	}

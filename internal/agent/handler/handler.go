@@ -92,6 +92,21 @@ func ProcessTasks(tasks []contracts.Task, driver vm.Hypervisor, natForwarder NAT
 	}
 }
 
+func SyncNATForwards(rules []contracts.NATForwardRule, forwarder NATForwarder) error {
+	if forwarder == nil {
+		return nil
+	}
+	for _, rule := range rules {
+		if rule.InstanceID == "" || rule.HostPort <= 0 || rule.GuestIP == "" {
+			continue
+		}
+		if err := forwarder.EnsureForward(rule.InstanceID, rule.HostPort, rule.GuestIP); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // needsBootWait returns true for task types that result in a VM being
 // started (and thus need boot confirmation polling).
 func needsBootWait(tt contracts.TaskType) bool {
@@ -116,10 +131,14 @@ func ensureNATForward(task contracts.Task, result contracts.TaskResult, forwarde
 	if forwarder == nil {
 		return nil
 	}
-	if result.IPv4 == "" {
+	guestIP := result.IPv4
+	if guestIP == "" {
+		guestIP = task.Spec.IPv4
+	}
+	if guestIP == "" {
 		return nil
 	}
-	return forwarder.EnsureForward(task.Spec.InstanceID, task.Spec.NATPort, result.IPv4)
+	return forwarder.EnsureForward(task.Spec.InstanceID, task.Spec.NATPort, guestIP)
 }
 
 func releaseNATForward(task contracts.Task, result contracts.TaskResult, forwarder NATForwarder) error {

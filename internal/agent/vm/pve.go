@@ -31,14 +31,14 @@ type PVEDriver struct {
 
 // PVEDriverConfig holds configuration for creating a PVEDriver.
 type PVEDriverConfig struct {
-	APIURL         string // e.g. "https://127.0.0.1:8006"
-	TokenID        string // e.g. "root@pam!celeris"
-	TokenSecret    string
-	Node           string // PVE node name
-	Insecure       bool   // skip TLS verification
-	TemplateVMID   int    // default template VMID for cloning
-	StoragePool    string // target storage, e.g. "local-lvm"
-	TaskTimeout    time.Duration
+	APIURL       string // e.g. "https://127.0.0.1:8006"
+	TokenID      string // e.g. "root@pam!celeris"
+	TokenSecret  string
+	Node         string // PVE node name
+	Insecure     bool   // skip TLS verification
+	TemplateVMID int    // default template VMID for cloning
+	StoragePool  string // target storage, e.g. "local-lvm"
+	TaskTimeout  time.Duration
 }
 
 // NewPVEDriver creates a PVE hypervisor driver from the given options map.
@@ -159,6 +159,10 @@ func (d *PVEDriver) Create(spec contracts.ProvisionSpec) error {
 	// Add SSH keys via cloud-init (if provided and cloud-init is configured in template)
 	if len(spec.SSHKeys) > 0 {
 		configParams["sshkeys"] = strings.Join(spec.SSHKeys, "\n")
+	}
+	if spec.InitialPassword != "" {
+		configParams["ciuser"] = "root"
+		configParams["cipassword"] = spec.InitialPassword
 	}
 	// Set network bridge if specified
 	if spec.NetworkName != "" {
@@ -284,7 +288,7 @@ func (d *PVEDriver) Destroy(instanceID string) error {
 
 	// Delete the VM (purge all related data)
 	upid, err := d.client.DeleteQEMU(d.node, vmid, map[string]string{
-		"purge":          "1",
+		"purge":                      "1",
 		"destroy-unreferenced-disks": "1",
 	})
 	if err != nil {

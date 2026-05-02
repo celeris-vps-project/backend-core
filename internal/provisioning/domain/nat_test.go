@@ -8,7 +8,7 @@ import (
 // ──── IPAddress NAT tests ────────────────────────────────────────────
 
 func TestNewNATPortAllocation_Valid(t *testing.T) {
-	alloc, err := NewNATPortAllocation("ip-1", "node-1", 20001)
+	alloc, err := NewNATPortAllocation("ip-1", "node-1", "10.0.0.15", 20001)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -18,8 +18,8 @@ func TestNewNATPortAllocation_Valid(t *testing.T) {
 	if alloc.Port() != 20001 {
 		t.Fatalf("expected port=20001, got %d", alloc.Port())
 	}
-	if alloc.Address() != "" {
-		t.Fatalf("expected empty address for NAT, got %s", alloc.Address())
+	if alloc.Address() != "10.0.0.15" {
+		t.Fatalf("expected guest address for NAT, got %s", alloc.Address())
 	}
 	if !alloc.IsNAT() {
 		t.Fatal("expected IsNAT=true")
@@ -43,7 +43,7 @@ func TestNewNATPortAllocation_InvalidPort(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := NewNATPortAllocation("ip-1", "node-1", tc.port)
+			_, err := NewNATPortAllocation("ip-1", "node-1", "10.0.0.15", tc.port)
 			if err == nil {
 				t.Fatal("expected error for invalid port")
 			}
@@ -52,7 +52,7 @@ func TestNewNATPortAllocation_InvalidPort(t *testing.T) {
 }
 
 func TestNATPortAllocation_AssignAndRelease(t *testing.T) {
-	alloc, _ := NewNATPortAllocation("ip-1", "node-1", 20001)
+	alloc, _ := NewNATPortAllocation("ip-1", "node-1", "10.0.0.15", 20001)
 
 	if err := alloc.Assign("inst-1"); err != nil {
 		t.Fatalf("unexpected error assigning: %v", err)
@@ -77,7 +77,7 @@ func TestNATPortAllocation_AssignAndRelease(t *testing.T) {
 }
 
 func TestReconstituteIPAddressFull_NAT(t *testing.T) {
-	ip := ReconstituteIPAddressFull("ip-1", "node-1", "", 4, NetworkModeNAT, 30000, "inst-1")
+	ip := ReconstituteIPAddressFull("ip-1", "node-1", "10.0.0.15", 4, NetworkModeNAT, 30000, "inst-1")
 	if ip.Mode() != NetworkModeNAT {
 		t.Fatalf("expected mode=nat, got %s", ip.Mode())
 	}

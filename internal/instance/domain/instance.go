@@ -14,19 +14,21 @@ const (
 )
 
 type Instance struct {
-	id         string
-	customerID string
-	orderID    string
-	nodeID     string
-	hostname   string
-	plan       string
-	os         string
-	cpu        int
-	memoryMB   int
-	diskGB     int
-	ipv4       string
-	ipv6       string
-	status     string
+	id              string
+	customerID      string
+	orderID         string
+	nodeID          string
+	hostname        string
+	plan            string
+	os              string
+	cpu             int
+	memoryMB        int
+	diskGB          int
+	ipv4            string
+	ipv6            string
+	hostIP          string
+	status          string
+	initialPassword string
 
 	// NAT mode fields
 	networkMode string // "dedicated" or "nat"; empty defaults to "dedicated"
@@ -96,7 +98,7 @@ func ReconstituteInstance(
 func ReconstituteInstanceFull(
 	id, customerID, orderID, nodeID, hostname, plan, os string,
 	cpu, memoryMB, diskGB int,
-	ipv4, ipv6, status string,
+	ipv4, ipv6, hostIP, status, initialPassword string,
 	networkMode string, natPort int,
 	createdAt time.Time,
 	startedAt, stoppedAt, suspendedAt, terminatedAt *time.Time,
@@ -105,8 +107,9 @@ func ReconstituteInstanceFull(
 		id: id, customerID: customerID, orderID: orderID, nodeID: nodeID,
 		hostname: hostname, plan: plan, os: os,
 		cpu: cpu, memoryMB: memoryMB, diskGB: diskGB,
-		ipv4: ipv4, ipv6: ipv6, status: status,
-		networkMode: networkMode, natPort: natPort,
+		ipv4: ipv4, ipv6: ipv6, hostIP: hostIP, status: status,
+		initialPassword: initialPassword,
+		networkMode:     networkMode, natPort: natPort,
 		createdAt: createdAt, startedAt: startedAt, stoppedAt: stoppedAt,
 		suspendedAt: suspendedAt, terminatedAt: terminatedAt,
 	}
@@ -124,7 +127,9 @@ func (i *Instance) MemoryMB() int            { return i.memoryMB }
 func (i *Instance) DiskGB() int              { return i.diskGB }
 func (i *Instance) IPv4() string             { return i.ipv4 }
 func (i *Instance) IPv6() string             { return i.ipv6 }
+func (i *Instance) HostIP() string           { return i.hostIP }
 func (i *Instance) Status() string           { return i.status }
+func (i *Instance) InitialPassword() string  { return i.initialPassword }
 func (i *Instance) CreatedAt() time.Time     { return i.createdAt }
 func (i *Instance) StartedAt() *time.Time    { return i.startedAt }
 func (i *Instance) StoppedAt() *time.Time    { return i.stoppedAt }
@@ -142,10 +147,12 @@ func (i *Instance) NetworkMode() string {
 	return i.networkMode
 }
 
-func (i *Instance) NATPort() int               { return i.natPort }
-func (i *Instance) IsNAT() bool                { return i.networkMode == "nat" }
-func (i *Instance) SetNetworkMode(mode string) { i.networkMode = mode }
-func (i *Instance) SetNATPort(port int)        { i.natPort = port }
+func (i *Instance) NATPort() int                       { return i.natPort }
+func (i *Instance) IsNAT() bool                        { return i.networkMode == "nat" }
+func (i *Instance) SetNetworkMode(mode string)         { i.networkMode = mode }
+func (i *Instance) SetNATPort(port int)                { i.natPort = port }
+func (i *Instance) SetInitialPassword(password string) { i.initialPassword = password }
+func (i *Instance) SetHostIP(hostIP string)            { i.hostIP = hostIP }
 
 // AssignNode records the host node that fulfilled this instance.
 func (i *Instance) AssignNode(nodeID string) error {

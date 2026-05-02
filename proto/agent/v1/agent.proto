@@ -45,8 +45,15 @@ message HeartbeatRequest {
 }
 
 message HeartbeatResponse {
-  bool          ok    = 1;
-  repeated Task tasks = 2;
+  bool                    ok           = 1;
+  repeated Task           tasks        = 2;
+  repeated NATForwardRule nat_forwards = 3;
+}
+
+message NATForwardRule {
+  string instance_id = 1;
+  int32  host_port   = 2;
+  string guest_ip    = 3;
 }
 
 // ---- Task ----
@@ -75,6 +82,9 @@ message ProvisionSpec {
   string          storage_pool = 10;
   string          network_name = 11;
   repeated string ssh_keys     = 12;
+  string          network_mode = 13;
+  int32           nat_port     = 14;
+  string          initial_password = 15;
 }
 
 // ---- Task Result ----

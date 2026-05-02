@@ -11,7 +11,7 @@ import (
 // the circuit breaker trips open.
 //
 // Degradation strategy: SILENT DEGRADATION
-//   - CreatePendingInstance: when the circuit is open, returns ("", nil) instead
+//   - CreatePendingInstance: when the circuit is open, returns an empty result and nil
 //     of an error. This is safe because:
 //     1. Instance creation is already designed as non-fatal in the PostPaymentOrchestrator
 //     2. The provisioning bus will handle actual VM provisioning asynchronously
@@ -32,28 +32,28 @@ func NewInstanceAdapterWithCB(inner *InstanceAdapter, cb *circuitbreaker.Circuit
 
 // CreatePendingInstance delegates to the inner adapter with circuit breaker protection.
 //
-// On circuit open: returns ("", nil) — silent degradation. The instance will
+// On circuit open: returns an empty result and nil — silent degradation. The instance will
 // be created later via reconciliation when the service recovers.
 func (a *InstanceAdapterWithCB) CreatePendingInstance(
 	customerID, orderID, region, hostname, plan, os string,
 	cpu, memoryMB, diskGB int,
-) (string, error) {
+) (paymentApp.PendingInstance, error) {
 	if !a.cb.Allow() {
 		log.Printf("[circuit-breaker] %s: instance creation skipped (circuit open), order=%s will be reconciled",
 			a.cb.Name(), orderID)
-		return "", nil // silent degradation — non-fatal
+		return paymentApp.PendingInstance{}, nil // silent degradation — non-fatal
 	}
 
-	instanceID, err := a.inner.CreatePendingInstance(customerID, orderID, region, hostname, plan, os, cpu, memoryMB, diskGB)
+	pendingInstance, err := a.inner.CreatePendingInstance(customerID, orderID, region, hostname, plan, os, cpu, memoryMB, diskGB)
 	if err != nil {
 		a.cb.RecordFailure()
 		log.Printf("[circuit-breaker] %s: instance creation failed for order=%s: %v", a.cb.Name(), orderID, err)
 		// Still return nil error for graceful degradation
-		return "", nil
+		return paymentApp.PendingInstance{}, nil
 	}
 
 	a.cb.RecordSuccess()
-	return instanceID, nil
+	return pendingInstance, nil
 }
 
 func (a *InstanceAdapterWithCB) GetByOrderID(orderID string) (paymentApp.RenewalInstance, error) {

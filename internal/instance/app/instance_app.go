@@ -84,6 +84,11 @@ func (s *InstanceAppService) PurchaseInstance(
 	if err != nil {
 		return nil, err
 	}
+	password, err := generateInitialPassword()
+	if err != nil {
+		return nil, err
+	}
+	inst.SetInitialPassword(password)
 
 	// 4. Persist both
 	if err := s.nodeRepo.Save(node); err != nil {
@@ -117,6 +122,11 @@ func (s *InstanceAppService) CreatePendingInstance(
 	if err != nil {
 		return nil, fmt.Errorf("create_pending: %w", err)
 	}
+	password, err := generateInitialPassword()
+	if err != nil {
+		return nil, fmt.Errorf("create_pending: generate password failed: %w", err)
+	}
+	inst.SetInitialPassword(password)
 
 	if err := s.instanceRepo.Save(inst); err != nil {
 		return nil, fmt.Errorf("create_pending: save instance failed: %w", err)
@@ -278,7 +288,7 @@ func (s *InstanceAppService) AssignIP(instanceID, ipv4, ipv6 string) error {
 //
 // This method is designed to be called from an event handler subscribing
 // to ProvisioningCompletedEvent.
-func (s *InstanceAppService) ConfirmProvisioning(instanceID, nodeID, ipv4, ipv6, networkMode string, natPort int) error {
+func (s *InstanceAppService) ConfirmProvisioning(instanceID, nodeID, ipv4, ipv6, hostIP, networkMode string, natPort int) error {
 	inst, err := s.instanceRepo.GetByID(instanceID)
 	if err != nil {
 		// Instance may not exist yet if the provisioning was triggered
@@ -299,6 +309,9 @@ func (s *InstanceAppService) ConfirmProvisioning(instanceID, nodeID, ipv4, ipv6,
 		if assignErr := inst.AssignIP(ipv4, ipv6); assignErr != nil {
 			fmt.Printf("[InstanceAppService] WARNING: failed to assign IP to instance %s: %v\n", instanceID, assignErr)
 		}
+	}
+	if hostIP != "" {
+		inst.SetHostIP(hostIP)
 	}
 
 	// Set NAT mode info
@@ -438,12 +451,15 @@ func (s *InstanceAppService) enqueueLifecycleTask(inst *domain.Instance, taskTyp
 		return nil
 	}
 	spec := contracts.ProvisionSpec{
-		InstanceID: inst.ID(),
-		Hostname:   inst.Hostname(),
-		OS:         inst.OS(),
-		CPU:        inst.CPU(),
-		MemoryMB:   inst.MemoryMB(),
-		DiskGB:     inst.DiskGB(),
+		InstanceID:      inst.ID(),
+		Hostname:        inst.Hostname(),
+		OS:              inst.OS(),
+		CPU:             inst.CPU(),
+		MemoryMB:        inst.MemoryMB(),
+		DiskGB:          inst.DiskGB(),
+		IPv4:            inst.IPv4(),
+		IPv6:            inst.IPv6(),
+		InitialPassword: inst.InitialPassword(),
 	}
 	if inst.NetworkMode() == "nat" {
 		spec.NetworkMode = contracts.NetworkModeNAT
@@ -461,26 +477,28 @@ func (s *InstanceAppService) publishState(inst *domain.Instance) {
 
 func toInstanceStateEvent(inst *domain.Instance) events.InstanceStateUpdatedEvent {
 	return events.InstanceStateUpdatedEvent{
-		InstanceID:   inst.ID(),
-		CustomerID:   inst.CustomerID(),
-		OrderID:      inst.OrderID(),
-		NodeID:       inst.NodeID(),
-		Hostname:     inst.Hostname(),
-		Plan:         inst.Plan(),
-		OS:           inst.OS(),
-		CPU:          inst.CPU(),
-		MemoryMB:     inst.MemoryMB(),
-		DiskGB:       inst.DiskGB(),
-		IPv4:         inst.IPv4(),
-		IPv6:         inst.IPv6(),
-		Status:       inst.Status(),
-		NetworkMode:  inst.NetworkMode(),
-		NATPort:      inst.NATPort(),
-		CreatedAt:    inst.CreatedAt().Format(time.RFC3339),
-		StartedAt:    formatOptionalTime(inst.StartedAt()),
-		StoppedAt:    formatOptionalTime(inst.StoppedAt()),
-		SuspendedAt:  formatOptionalTime(inst.SuspendedAt()),
-		TerminatedAt: formatOptionalTime(inst.TerminatedAt()),
+		InstanceID:      inst.ID(),
+		CustomerID:      inst.CustomerID(),
+		OrderID:         inst.OrderID(),
+		NodeID:          inst.NodeID(),
+		Hostname:        inst.Hostname(),
+		Plan:            inst.Plan(),
+		OS:              inst.OS(),
+		CPU:             inst.CPU(),
+		MemoryMB:        inst.MemoryMB(),
+		DiskGB:          inst.DiskGB(),
+		IPv4:            inst.IPv4(),
+		IPv6:            inst.IPv6(),
+		HostIP:          inst.HostIP(),
+		Status:          inst.Status(),
+		NetworkMode:     inst.NetworkMode(),
+		NATPort:         inst.NATPort(),
+		InitialPassword: inst.InitialPassword(),
+		CreatedAt:       inst.CreatedAt().Format(time.RFC3339),
+		StartedAt:       formatOptionalTime(inst.StartedAt()),
+		StoppedAt:       formatOptionalTime(inst.StoppedAt()),
+		SuspendedAt:     formatOptionalTime(inst.SuspendedAt()),
+		TerminatedAt:    formatOptionalTime(inst.TerminatedAt()),
 	}
 }
 

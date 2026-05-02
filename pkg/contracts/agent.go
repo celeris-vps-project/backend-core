@@ -30,6 +30,7 @@ type Heartbeat struct {
 
 // HeartbeatAck is the controller's response, optionally including queued tasks.
 type HeartbeatAck struct {
-	OK    bool   `json:"ok"`
-	Tasks []Task `json:"tasks,omitempty"`
+	OK          bool             `json:"ok"`
+	Tasks       []Task           `json:"tasks,omitempty"`
+	NATForwards []NATForwardRule `json:"nat_forwards,omitempty"`
 }

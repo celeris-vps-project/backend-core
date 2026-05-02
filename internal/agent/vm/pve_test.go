@@ -1,8 +1,10 @@
 package vm
 
 import (
+	"backend-core/pkg/contracts"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -137,6 +139,61 @@ func TestResolveTemplate(t *testing.T) {
 	d2 := &PVEDriver{templateID: 0}
 	if got := d2.resolveTemplate("ubuntu"); got != 0 {
 		t.Fatalf("expected 0, got %d", got)
+	}
+}
+
+func TestPVEDriver_CreateSendsCloudInitIPAndPassword(t *testing.T) {
+	var configForm string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api2/json/cluster/nextid" && r.Method == "GET":
+			json.NewEncoder(w).Encode(map[string]interface{}{"data": "105"})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu/9000/clone" && r.Method == "POST":
+			json.NewEncoder(w).Encode(map[string]interface{}{"data": "UPID:pve1:clone"})
+		case strings.Contains(r.URL.Path, "/tasks/") && strings.Contains(r.URL.Path, "/status"):
+			json.NewEncoder(w).Encode(map[string]interface{}{"data": map[string]interface{}{"status": "stopped", "exitstatus": "OK"}})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu/105/config" && r.Method == "PUT":
+			data, _ := io.ReadAll(r.Body)
+			configForm = string(data)
+			json.NewEncoder(w).Encode(map[string]interface{}{"data": nil})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu/105/resize" && r.Method == "PUT":
+			json.NewEncoder(w).Encode(map[string]interface{}{"data": nil})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu/105/status/start" && r.Method == "POST":
+			json.NewEncoder(w).Encode(map[string]interface{}{"data": "UPID:pve1:start"})
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client, _ := NewPVEClient(PVEClientConfig{
+		APIURL:      srv.URL,
+		TokenID:     "test@pam!t",
+		TokenSecret: "s",
+		Insecure:    true,
+	})
+	driver := &PVEDriver{client: client, node: "pve1", templateID: 9000, storagePool: "local-lvm"}
+
+	err := driver.Create(contracts.ProvisionSpec{
+		InstanceID:      "inst-1",
+		Hostname:        "web-01",
+		OS:              "ubuntu-24.04",
+		CPU:             2,
+		MemoryMB:        2048,
+		DiskGB:          40,
+		IPv4:            "10.0.0.10",
+		NetworkName:     "vmbr0",
+		InitialPassword: "pwd-1",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if !strings.Contains(configForm, "ipconfig0=ip%3D10.0.0.10%2F24%2Cgw%3D10.0.0.1") {
+		t.Fatalf("expected ipconfig0 in config form, got %s", configForm)
+	}
+	if !strings.Contains(configForm, "ciuser=root") || !strings.Contains(configForm, "cipassword=pwd-1") {
+		t.Fatalf("expected cloud-init password fields in config form, got %s", configForm)
 	}
 }
 

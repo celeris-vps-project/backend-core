@@ -101,8 +101,9 @@ func (c *AgentClient) Heartbeat(ctx context.Context, hb contracts.Heartbeat) (*c
 		return nil, err
 	}
 	return &contracts.HeartbeatAck{
-		OK:    resp.GetOk(),
-		Tasks: protoToTasks(resp.GetTasks()),
+		OK:          resp.GetOk(),
+		Tasks:       protoToTasks(resp.GetTasks()),
+		NATForwards: protoToNATForwards(resp.GetNatForwards()),
 	}, nil
 }
 
@@ -145,17 +146,32 @@ func protoToSpec(ps *agentpb.ProvisionSpec) contracts.ProvisionSpec {
 		return contracts.ProvisionSpec{}
 	}
 	return contracts.ProvisionSpec{
-		InstanceID:  ps.GetInstanceId(),
-		Hostname:    ps.GetHostname(),
-		OS:          ps.GetOs(),
-		CPU:         int(ps.GetCpu()),
-		MemoryMB:    int(ps.GetMemoryMb()),
-		DiskGB:      int(ps.GetDiskGb()),
-		IPv4:        ps.GetIpv4(),
-		IPv6:        ps.GetIpv6(),
-		VirtType:    contracts.VirtType(ps.GetVirtType()),
-		StoragePool: ps.GetStoragePool(),
-		NetworkName: ps.GetNetworkName(),
-		SSHKeys:     ps.GetSshKeys(),
+		InstanceID:      ps.GetInstanceId(),
+		Hostname:        ps.GetHostname(),
+		OS:              ps.GetOs(),
+		CPU:             int(ps.GetCpu()),
+		MemoryMB:        int(ps.GetMemoryMb()),
+		DiskGB:          int(ps.GetDiskGb()),
+		IPv4:            ps.GetIpv4(),
+		IPv6:            ps.GetIpv6(),
+		VirtType:        contracts.VirtType(ps.GetVirtType()),
+		StoragePool:     ps.GetStoragePool(),
+		NetworkName:     ps.GetNetworkName(),
+		SSHKeys:         ps.GetSshKeys(),
+		NetworkMode:     contracts.NetworkMode(ps.GetNetworkMode()),
+		NATPort:         int(ps.GetNatPort()),
+		InitialPassword: ps.GetInitialPassword(),
 	}
+}
+
+func protoToNATForwards(prs []*agentpb.NATForwardRule) []contracts.NATForwardRule {
+	out := make([]contracts.NATForwardRule, len(prs))
+	for i, pr := range prs {
+		out[i] = contracts.NATForwardRule{
+			InstanceID: pr.GetInstanceId(),
+			HostPort:   int(pr.GetHostPort()),
+			GuestIP:    pr.GetGuestIp(),
+		}
+	}
+	return out
 }

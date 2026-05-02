@@ -40,12 +40,12 @@ func (HostNodePO) TableName() string { return "host_nodes" }
 
 type IPAddressPO struct {
 	ID         string `gorm:"primaryKey;column:id"`
-	NodeID     string `gorm:"index;column:node_id"`
+	NodeID     string `gorm:"column:node_id;index;index:idx_ip_node_mode_instance,priority:1;index:idx_nat_port_lookup,priority:1"`
 	Address    string `gorm:"column:address"`
 	Version    int    `gorm:"column:version"`
-	Mode       string `gorm:"column:mode;default:dedicated"` // "dedicated" or "nat"
-	Port       int    `gorm:"column:port;default:0"`         // NAT only: high port on host
-	InstanceID string `gorm:"column:instance_id"`
+	Mode       string `gorm:"column:mode;default:dedicated;index:idx_ip_node_mode_instance,priority:2;index:idx_nat_port_lookup,priority:2"` // "dedicated" or "nat"
+	Port       int    `gorm:"column:port;default:0;index:idx_nat_port_lookup,priority:3"`                                                    // NAT only: high port on host
+	InstanceID string `gorm:"column:instance_id;index;index:idx_ip_node_mode_instance,priority:3"`
 }
 
 func (IPAddressPO) TableName() string { return "ip_addresses" }

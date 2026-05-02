@@ -363,6 +363,9 @@ func TestVPSProvisioner_ProvisionAssignsNATPortToTask(t *testing.T) {
 	if taskRepo.lastTask.Spec.NATPort != 20000 {
 		t.Fatalf("expected NAT port 20000, got %d", taskRepo.lastTask.Spec.NATPort)
 	}
+	if taskRepo.lastTask.Spec.IPv4 != "10.0.0.10" {
+		t.Fatalf("expected NAT guest IPv4 10.0.0.10, got %s", taskRepo.lastTask.Spec.IPv4)
+	}
 
 	storedHost, err := hostRepo.GetByID("node-1")
 	if err != nil {
@@ -394,6 +397,79 @@ func TestVPSProvisioner_ProvisionAssignsNATPortToTask(t *testing.T) {
 	if allocation.InstanceID() != "inst-1" {
 		t.Fatalf("expected allocation instance inst-1, got %s", allocation.InstanceID())
 	}
+	if allocation.Address() != "10.0.0.10" {
+		t.Fatalf("expected allocation guest ip 10.0.0.10, got %s", allocation.Address())
+	}
+}
+
+func TestVPSProvisioner_ProvisionAssignsDedicatedIPv4ToTask(t *testing.T) {
+	hostRepo := newMemProvisionHostRepo()
+	poolRepo := newMemProvisionPoolRepo()
+	taskRepo := newMemProvisionTaskRepo()
+	ipRepo := newMemProvisionIPRepo()
+	idGen := &seqProvisionIDGen{}
+
+	host, err := domain.NewHostNode("node-3", "US-lax-01", "US-lax", "Los Angeles #1", "secret")
+	if err != nil {
+		t.Fatalf("unexpected host error: %v", err)
+	}
+	host.SetTotalSlots(4)
+	host.SetRegionID("region-us")
+	host.SetResourcePoolID("pool-3")
+	hostRepo.items[host.ID()] = host
+
+	pool, err := domain.NewResourcePool("pool-3", "lax-pool", "region-us")
+	if err != nil {
+		t.Fatalf("unexpected pool error: %v", err)
+	}
+	poolRepo.items[pool.ID()] = pool
+
+	ip, err := domain.NewIPAddress("ip-ded-1", host.ID(), "203.0.113.10", 4)
+	if err != nil {
+		t.Fatalf("unexpected ip error: %v", err)
+	}
+	ipRepo.items[ip.ID()] = ip
+
+	provisioner := NewVPSProvisioner(
+		hostRepo,
+		poolRepo,
+		taskRepo,
+		idGen,
+		WithIPRepo(ipRepo),
+	)
+
+	_, err = provisioner.Provision(ProvisionCommand{
+		InstanceID:     "inst-ded-1",
+		ProductID:      "prod-1",
+		ResourcePoolID: "pool-3",
+		CustomerID:     "cust-1",
+		OrderID:        "ord-1",
+		Hostname:       "web-01",
+		OS:             "ubuntu-24.04",
+		CPU:            2,
+		MemoryMB:       2048,
+		DiskGB:         40,
+		NetworkMode:    "dedicated",
+	})
+	if err != nil {
+		t.Fatalf("unexpected provision error: %v", err)
+	}
+	if taskRepo.lastTask == nil {
+		t.Fatal("expected task to be saved")
+	}
+	if taskRepo.lastTask.Spec.IPv4 != "203.0.113.10" {
+		t.Fatalf("expected dedicated IPv4 in task, got %s", taskRepo.lastTask.Spec.IPv4)
+	}
+	if taskRepo.lastTask.Spec.NetworkMode != contracts.NetworkModeDedicated {
+		t.Fatalf("expected dedicated network mode, got %s", taskRepo.lastTask.Spec.NetworkMode)
+	}
+	storedIP, err := ipRepo.GetByID("ip-ded-1")
+	if err != nil {
+		t.Fatalf("unexpected ip lookup error: %v", err)
+	}
+	if storedIP.InstanceID() != "inst-ded-1" {
+		t.Fatalf("expected dedicated ip assigned to inst-ded-1, got %s", storedIP.InstanceID())
+	}
 }
 
 func TestVPSProvisioner_ReleaseFreesSlotAndNATAllocation(t *testing.T) {
@@ -415,7 +491,7 @@ func TestVPSProvisioner_ReleaseFreesSlotAndNATAllocation(t *testing.T) {
 	}
 	hostRepo.items[host.ID()] = host
 
-	alloc, err := domain.NewNATPortAllocation("ip-1", host.ID(), 20005)
+	alloc, err := domain.NewNATPortAllocation("ip-1", host.ID(), "10.0.0.15", 20005)
 	if err != nil {
 		t.Fatalf("unexpected NAT allocation error: %v", err)
 	}

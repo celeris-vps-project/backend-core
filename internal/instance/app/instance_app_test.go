@@ -213,7 +213,7 @@ func TestConfirmProvisioning_AssignsNodeAndNetworkDetails(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if err := svc.ConfirmProvisioning(inst.ID(), "node-real-1", "198.51.100.10", "", "nat", 22001); err != nil {
+	if err := svc.ConfirmProvisioning(inst.ID(), "node-real-1", "10.0.0.10", "", "198.51.100.10", "nat", 22001); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -224,8 +224,11 @@ func TestConfirmProvisioning_AssignsNodeAndNetworkDetails(t *testing.T) {
 	if stored.NodeID() != "node-real-1" {
 		t.Fatalf("expected node-real-1, got %s", stored.NodeID())
 	}
-	if stored.IPv4() != "198.51.100.10" {
+	if stored.IPv4() != "10.0.0.10" {
 		t.Fatalf("expected ipv4 assigned, got %s", stored.IPv4())
+	}
+	if stored.HostIP() != "198.51.100.10" {
+		t.Fatalf("expected host ip assigned, got %s", stored.HostIP())
 	}
 	if stored.NetworkMode() != "nat" {
 		t.Fatalf("expected nat mode, got %s", stored.NetworkMode())
@@ -314,7 +317,7 @@ func TestTerminateInstance_WithLifecycleSchedulerEnqueuesDeprovision(t *testing.
 	if err := svc.StartInstance(inst.ID()); err != nil {
 		t.Fatalf("unexpected local start error: %v", err)
 	}
-	if err := svc.ConfirmProvisioning(inst.ID(), inst.NodeID(), "198.51.100.20", "", "nat", 22010); err != nil {
+	if err := svc.ConfirmProvisioning(inst.ID(), inst.NodeID(), "10.0.0.20", "", "198.51.100.20", "nat", 22010); err != nil {
 		t.Fatalf("unexpected provisioning confirm error: %v", err)
 	}
 	svc.SetLifecycleScheduler(scheduler)

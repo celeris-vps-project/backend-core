@@ -15,14 +15,13 @@ const (
 // IPAddress represents a single network resource in a pool attached to a node.
 //
 // In dedicated mode, each entry is a unique public IP address.
-// In NAT mode, each entry is a port allocation on the host's shared IP.
-// The host IP itself is NOT stored here — it is resolved at runtime from
-// NodeStateCache (agent registration). This avoids stale data if the host
-// IP changes.
+// In NAT mode, each entry is a host port allocation plus the guest/internal
+// IPv4 used as the DNAT target. The host IP itself is resolved at runtime from
+// NodeStateCache (agent registration), avoiding stale public IP data.
 type IPAddress struct {
 	id         string
 	nodeID     string
-	address    string      // dedicated: the public IP; NAT: empty (resolved at runtime)
+	address    string      // dedicated: public IP; NAT: guest/internal IPv4
 	version    int         // 4 or 6
 	mode       NetworkMode // "dedicated" or "nat"; defaults to "dedicated" for backward compat
 	port       int         // NAT only: the allocated high port on the host (e.g. 20001)
@@ -46,13 +45,15 @@ func NewIPAddress(id, nodeID, address string, version int) (*IPAddress, error) {
 }
 
 // NewNATPortAllocation creates an IPAddress entry for NAT mode.
-// The address field is left empty — the host IP is resolved at runtime from NodeStateCache.
-func NewNATPortAllocation(id, nodeID string, port int) (*IPAddress, error) {
+func NewNATPortAllocation(id, nodeID, guestIP string, port int) (*IPAddress, error) {
 	if id == "" {
 		return nil, errors.New("domain_error: ip id is required")
 	}
 	if nodeID == "" {
 		return nil, errors.New("domain_error: node id is required")
+	}
+	if guestIP == "" {
+		return nil, errors.New("domain_error: guest ip is required")
 	}
 	if port <= 0 || port > 65535 {
 		return nil, errors.New("domain_error: port must be between 1 and 65535")
@@ -60,7 +61,7 @@ func NewNATPortAllocation(id, nodeID string, port int) (*IPAddress, error) {
 	return &IPAddress{
 		id:      id,
 		nodeID:  nodeID,
-		address: "", // resolved at runtime from NodeStateCache
+		address: guestIP,
 		version: 4,
 		mode:    NetworkModeNAT,
 		port:    port,
@@ -105,3 +106,11 @@ func (ip *IPAddress) Assign(instanceID string) error {
 }
 
 func (ip *IPAddress) Release() { ip.instanceID = "" }
+
+func (ip *IPAddress) SetAddress(address string) error {
+	if address == "" {
+		return errors.New("domain_error: address is required")
+	}
+	ip.address = address
+	return nil
+}

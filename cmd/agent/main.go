@@ -1,11 +1,11 @@
-﻿package main
+package main
 
 import (
 	"backend-core/internal/agent/client"
 	"backend-core/internal/agent/config"
 	"backend-core/internal/agent/handler"
-	"backend-core/internal/agent/nat"
 	"backend-core/internal/agent/monitor"
+	"backend-core/internal/agent/nat"
 	"backend-core/internal/agent/vm"
 	"backend-core/pkg/contracts"
 	"context"
@@ -155,6 +155,12 @@ func main() {
 		if err != nil {
 			log.Printf("[agent] heartbeat failed: %v", err)
 			continue
+		}
+
+		if len(ack.NATForwards) > 0 {
+			if err := handler.SyncNATForwards(ack.NATForwards, natForwarder); err != nil {
+				log.Printf("[agent] failed to sync NAT forwards: %v", err)
+			}
 		}
 
 		if len(ack.Tasks) > 0 {

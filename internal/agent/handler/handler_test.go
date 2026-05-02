@@ -152,6 +152,55 @@ func TestProcessTasks_ForwarderErrorMarksTaskFailed(t *testing.T) {
 	}
 }
 
+func TestProcessTasks_UsesSpecIPv4ForNATWhenBootWaitTimesOut(t *testing.T) {
+	driver := &fakeDriver{waitErr: errors.New("guest agent timeout")}
+	forwarder := &fakeForwarder{}
+	task := contracts.Task{
+		ID:   "task-spec-ip",
+		Type: contracts.TaskProvision,
+		Spec: contracts.ProvisionSpec{
+			InstanceID:  "inst-spec-ip",
+			Hostname:    "web-02",
+			OS:          "ubuntu-24.04",
+			CPU:         2,
+			MemoryMB:    2048,
+			DiskGB:      40,
+			IPv4:        "10.0.0.30",
+			NetworkMode: contracts.NetworkModeNAT,
+			NATPort:     20030,
+		},
+	}
+
+	var result contracts.TaskResult
+	ProcessTasks([]contracts.Task{task}, driver, forwarder, func(r contracts.TaskResult) {
+		result = r
+	})
+
+	if result.Status != contracts.TaskStatusCompleted {
+		t.Fatalf("expected completed status, got %s error=%s", result.Status, result.Error)
+	}
+	if result.VMState != "boot_timeout" {
+		t.Fatalf("expected boot_timeout state, got %s", result.VMState)
+	}
+	if forwarder.calls != 1 || forwarder.guestIP != "10.0.0.30" {
+		t.Fatalf("expected NAT forward to spec IPv4, calls=%d ip=%s", forwarder.calls, forwarder.guestIP)
+	}
+}
+
+func TestSyncNATForwards_ReplaysDesiredRules(t *testing.T) {
+	forwarder := &fakeForwarder{}
+
+	err := SyncNATForwards([]contracts.NATForwardRule{
+		{InstanceID: "inst-1", HostPort: 20001, GuestIP: "10.0.0.11"},
+	}, forwarder)
+	if err != nil {
+		t.Fatalf("unexpected sync error: %v", err)
+	}
+	if forwarder.calls != 1 || forwarder.hostPort != 20001 || forwarder.guestIP != "10.0.0.11" {
+		t.Fatalf("unexpected sync target calls=%d port=%d ip=%s", forwarder.calls, forwarder.hostPort, forwarder.guestIP)
+	}
+}
+
 func TestProcessTasks_DeprovisionNATCallsReleaseHook(t *testing.T) {
 	driver := &fakeDriver{}
 	forwarder := &fakeForwarder{}

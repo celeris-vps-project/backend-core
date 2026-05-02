@@ -56,7 +56,7 @@ var (
 )
 
 const (
-	epayMaxRetries     = 2             // up to 2 retries (3 attempts total)
+	epayMaxRetries     = 2               // up to 2 retries (3 attempts total)
 	epayPerAttemptTime = 8 * time.Second // per-attempt timeout
 	epayBaseBackoff    = 1 * time.Second // initial backoff between retries
 )

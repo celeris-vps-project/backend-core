@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"time"
 )
@@ -23,24 +24,25 @@ import (
 
 // ProvisionCommand carries all the info needed to provision a purchased product.
 type ProvisionCommand struct {
-	InstanceID     string
-	NodeID         string
-	ProductID      string
-	ProductSlug    string
-	ProductType    string // "vps", "license", "cdn", etc.
-	ResourcePoolID string
-	RegionID       string
-	CustomerID     string
-	OrderID        string
-	Hostname       string
-	OS             string
-	CPU            int
-	MemoryMB       int
-	DiskGB         int
-	VirtType       string // "kvm" or "lxc", defaults to "kvm"
-	StoragePool    string // e.g. "default", "zfs-pool"
-	NetworkName    string // e.g. "incusbr0", "br0"
-	NetworkMode    string // "dedicated" or "nat"; empty = dedicated
+	InstanceID      string
+	NodeID          string
+	ProductID       string
+	ProductSlug     string
+	ProductType     string // "vps", "license", "cdn", etc.
+	ResourcePoolID  string
+	RegionID        string
+	CustomerID      string
+	OrderID         string
+	Hostname        string
+	OS              string
+	CPU             int
+	MemoryMB        int
+	DiskGB          int
+	InitialPassword string
+	VirtType        string // "kvm" or "lxc", defaults to "kvm"
+	StoragePool     string // e.g. "default", "zfs-pool"
+	NetworkName     string // e.g. "incusbr0", "br0"
+	NetworkMode     string // "dedicated" or "nat"; empty = dedicated
 }
 
 // ProvisionResult contains the outcome of a provisioning operation.
@@ -234,29 +236,24 @@ func (p *VPSProvisioner) Provision(cmd ProvisionCommand) (*ProvisionResult, erro
 		instanceID = p.ids.NewID()
 	}
 	spec := contracts.ProvisionSpec{
-		InstanceID:  instanceID,
-		Hostname:    cmd.Hostname,
-		OS:          cmd.OS,
-		CPU:         cmd.CPU,
-		MemoryMB:    cmd.MemoryMB,
-		DiskGB:      cmd.DiskGB,
-		VirtType:    virtType,
-		StoragePool: cmd.StoragePool,
-		NetworkName: cmd.NetworkName,
+		InstanceID:      instanceID,
+		Hostname:        cmd.Hostname,
+		OS:              cmd.OS,
+		CPU:             cmd.CPU,
+		MemoryMB:        cmd.MemoryMB,
+		DiskGB:          cmd.DiskGB,
+		VirtType:        virtType,
+		StoragePool:     cmd.StoragePool,
+		NetworkName:     cmd.NetworkName,
+		InitialPassword: cmd.InitialPassword,
 	}
 
-	// 4a. Network resource allocation (dedicated IP or NAT port)
-	if cmd.NetworkMode == "nat" {
-		natPort, err := p.allocateNATPort(node, instanceID)
-		if err != nil {
-			log.Printf("[vps-provisioner] WARNING: NAT port allocation failed on %s: %v", node.Code(), err)
-			// Non-fatal: continue provisioning, agent will need manual NAT setup
-		} else {
-			spec.NetworkMode = contracts.NetworkModeNAT
-			spec.NATPort = natPort
-			log.Printf("[vps-provisioner] NAT port %d allocated on node %s for instance %s",
-				natPort, node.Code(), instanceID)
-		}
+	// 4a. Network resource allocation. Do not enqueue no-IP provisioning when
+	// the controller already owns an IP/NAT pool; PVE cloud-init depends on it.
+	if err := p.allocateNetworkResource(node, instanceID, cmd.NetworkMode, &spec); err != nil {
+		log.Printf("[vps-provisioner] ERROR: network allocation failed on %s: %v", node.Code(), err)
+		p.releaseSlot(node.ID())
+		return nil, err
 	}
 
 	// 5. Enqueue a provisioning task for the agent
@@ -270,6 +267,8 @@ func (p *VPSProvisioner) Provision(cmd ProvisionCommand) (*ProvisionResult, erro
 	}
 	if err := p.taskRepo.Save(task); err != nil {
 		log.Printf("[vps-provisioner] ERROR: failed to enqueue task: %v", err)
+		p.releaseNetworkAllocation(instanceID)
+		p.releaseSlot(node.ID())
 		return nil, err
 	}
 
@@ -363,15 +362,16 @@ func (p *VPSProvisioner) enqueuePendingTask(cmd ProvisionCommand, nodeID string)
 		Type:   contracts.TaskProvision,
 		Status: contracts.TaskStatusQueued,
 		Spec: contracts.ProvisionSpec{
-			InstanceID:  instanceID,
-			Hostname:    cmd.Hostname,
-			OS:          cmd.OS,
-			CPU:         cmd.CPU,
-			MemoryMB:    cmd.MemoryMB,
-			DiskGB:      cmd.DiskGB,
-			VirtType:    resolveVirtType(cmd.VirtType),
-			StoragePool: cmd.StoragePool,
-			NetworkName: cmd.NetworkName,
+			InstanceID:      instanceID,
+			Hostname:        cmd.Hostname,
+			OS:              cmd.OS,
+			CPU:             cmd.CPU,
+			MemoryMB:        cmd.MemoryMB,
+			DiskGB:          cmd.DiskGB,
+			VirtType:        resolveVirtType(cmd.VirtType),
+			StoragePool:     cmd.StoragePool,
+			NetworkName:     cmd.NetworkName,
+			InitialPassword: cmd.InitialPassword,
 		},
 		CreatedAt: time.Now().Format(time.RFC3339),
 	}
@@ -380,33 +380,77 @@ func (p *VPSProvisioner) enqueuePendingTask(cmd ProvisionCommand, nodeID string)
 	}
 }
 
-// allocateNATPort finds a free port on the node's NAT port range, creates an
-// IPAddress record (mode=nat) in the ip_pool, assigns it to the instance,
-// and returns the allocated port number.
-func (p *VPSProvisioner) allocateNATPort(node *domain.HostNode, instanceID string) (int, error) {
+func (p *VPSProvisioner) allocateNetworkResource(node *domain.HostNode, instanceID, networkMode string, spec *contracts.ProvisionSpec) error {
+	if networkMode == "nat" {
+		allocation, err := p.allocateNATPort(node, instanceID)
+		if err != nil {
+			return err
+		}
+		spec.NetworkMode = contracts.NetworkModeNAT
+		spec.NATPort = allocation.Port()
+		spec.IPv4 = allocation.Address()
+		log.Printf("[vps-provisioner] NAT port %d allocated on node %s for instance %s guest_ip=%s",
+			allocation.Port(), node.Code(), instanceID, allocation.Address())
+		return nil
+	}
+
+	spec.NetworkMode = contracts.NetworkModeDedicated
 	if p.ipRepo == nil {
-		return 0, errors.New("provisioning: ipRepo not configured for NAT allocation")
+		log.Printf("[vps-provisioner] WARNING: ipRepo not configured; provisioning %s without static IPv4", instanceID)
+		return nil
+	}
+	ip, err := p.ipRepo.FindAvailable(node.ID(), 4)
+	if err != nil {
+		return fmt.Errorf("provisioning: no available IPv4 on node %s: %w", node.Code(), err)
+	}
+	if err := ip.Assign(instanceID); err != nil {
+		return err
+	}
+	if err := p.ipRepo.Save(ip); err != nil {
+		return err
+	}
+	spec.IPv4 = ip.Address()
+	log.Printf("[vps-provisioner] dedicated IPv4 %s allocated on node %s for instance %s",
+		ip.Address(), node.Code(), instanceID)
+	return nil
+}
+
+// allocateNATPort finds a free port on the node's NAT port range, creates an
+// IPAddress record (mode=nat) in the ip_pool, assigns it to the instance, and
+// stores the guest/internal IPv4 used by cloud-init and DNAT.
+func (p *VPSProvisioner) allocateNATPort(node *domain.HostNode, instanceID string) (*domain.IPAddress, error) {
+	if p.ipRepo == nil {
+		return nil, errors.New("provisioning: ipRepo not configured for NAT allocation")
 	}
 	if !node.HasNATPortPool() {
-		return 0, errors.New("provisioning: node " + node.Code() + " has no NAT port pool configured")
+		return nil, errors.New("provisioning: node " + node.Code() + " has no NAT port pool configured")
 	}
 
 	// 1. Try to reuse a previously released (available) NAT port allocation
 	existing, err := p.ipRepo.FindAvailableNAT(node.ID())
 	if err == nil && existing != nil {
+		if existing.Address() == "" {
+			guestIP, err := defaultNATGuestIPv4(node, existing.Port())
+			if err != nil {
+				return nil, err
+			}
+			if err := existing.SetAddress(guestIP); err != nil {
+				return nil, err
+			}
+		}
 		if err := existing.Assign(instanceID); err != nil {
-			return 0, err
+			return nil, err
 		}
 		if err := p.ipRepo.Save(existing); err != nil {
-			return 0, err
+			return nil, err
 		}
-		return existing.Port(), nil
+		return existing, nil
 	}
 
 	// 2. No reusable allocation — find a free port from the node's range
 	usedPorts, err := p.ipRepo.ListNATPortsByNodeID(node.ID())
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	usedSet := make(map[int]struct{}, len(usedPorts))
 	for _, port := range usedPorts {
@@ -414,21 +458,56 @@ func (p *VPSProvisioner) allocateNATPort(node *domain.HostNode, instanceID strin
 	}
 	freePort, err := node.FindFreeNATPort(usedSet)
 	if err != nil {
-		return 0, err
+		return nil, err
+	}
+	guestIP, err := defaultNATGuestIPv4(node, freePort)
+	if err != nil {
+		return nil, err
 	}
 
 	// 3. Create a new IPAddress record (mode=nat) and assign it
-	alloc, err := domain.NewNATPortAllocation(p.ids.NewID(), node.ID(), freePort)
+	alloc, err := domain.NewNATPortAllocation(p.ids.NewID(), node.ID(), guestIP, freePort)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	if err := alloc.Assign(instanceID); err != nil {
-		return 0, err
+		return nil, err
 	}
 	if err := p.ipRepo.Save(alloc); err != nil {
-		return 0, err
+		return nil, err
 	}
-	return freePort, nil
+	return alloc, nil
+}
+
+func defaultNATGuestIPv4(node *domain.HostNode, port int) (string, error) {
+	offset := port - node.NATPortStart() + 10
+	if offset < 2 || offset > 254 {
+		return "", fmt.Errorf("provisioning: NAT guest IPv4 exhausted for default 10.0.0.0/24 range on node %s", node.Code())
+	}
+	return fmt.Sprintf("10.0.0.%d", offset), nil
+}
+
+func (p *VPSProvisioner) releaseSlot(nodeID string) {
+	if nodeID == "" {
+		return
+	}
+	if err := p.hostRepo.ReleaseSlotAtomic(nodeID); err != nil {
+		log.Printf("[vps-provisioner] WARNING: failed to roll back slot on node %s: %v", nodeID, err)
+	}
+}
+
+func (p *VPSProvisioner) releaseNetworkAllocation(instanceID string) {
+	if p.ipRepo == nil || instanceID == "" {
+		return
+	}
+	ip, err := p.ipRepo.FindByInstanceID(instanceID)
+	if err != nil || ip == nil {
+		return
+	}
+	ip.Release()
+	if err := p.ipRepo.Save(ip); err != nil {
+		log.Printf("[vps-provisioner] WARNING: failed to roll back network allocation for instance %s: %v", instanceID, err)
+	}
 }
 
 func (p *VPSProvisioner) mockCompleteTask(task *contracts.Task) {
@@ -494,20 +573,21 @@ func (d *ProvisionDispatcher) onProductPurchased(evt eventbus.Event) {
 	}
 
 	cmd := ProvisionCommand{
-		InstanceID:     e.InstanceID,
-		ProductID:      e.ProductID,
-		ProductSlug:    e.ProductSlug,
-		ProductType:    "vps", // default; future: read from event
-		ResourcePoolID: e.ResourcePoolID,
-		RegionID:       e.RegionID,
-		CustomerID:     e.CustomerID,
-		OrderID:        e.OrderID,
-		Hostname:       e.Hostname,
-		OS:             e.OS,
-		CPU:            e.CPU,
-		MemoryMB:       e.MemoryMB,
-		DiskGB:         e.DiskGB,
-		NetworkMode:    e.NetworkMode,
+		InstanceID:      e.InstanceID,
+		ProductID:       e.ProductID,
+		ProductSlug:     e.ProductSlug,
+		ProductType:     "vps", // default; future: read from event
+		ResourcePoolID:  e.ResourcePoolID,
+		RegionID:        e.RegionID,
+		CustomerID:      e.CustomerID,
+		OrderID:         e.OrderID,
+		Hostname:        e.Hostname,
+		OS:              e.OS,
+		CPU:             e.CPU,
+		MemoryMB:        e.MemoryMB,
+		DiskGB:          e.DiskGB,
+		InitialPassword: e.InitialPassword,
+		NetworkMode:     e.NetworkMode,
 	}
 
 	if _, err := d.Dispatch(cmd); err != nil {

@@ -34,8 +34,8 @@ import (
 	"backend-core/internal/web"
 	"backend-core/pkg/adaptive"
 	"backend-core/pkg/agentpb"
-	"backend-core/pkg/contracts"
 	"backend-core/pkg/circuitbreaker"
+	"backend-core/pkg/contracts"
 	"backend-core/pkg/database"
 	"backend-core/pkg/delayed"
 	"backend-core/pkg/eventbus"
@@ -55,6 +55,8 @@ import (
 
 	identityHttp "backend-core/internal/identity/interfaces/http"
 
+	_ "net/http/pprof"
+
 	hertzApp "github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/adaptor"
 	"github.com/hertz-contrib/cors"
@@ -68,7 +70,9 @@ func main() {
 	log.Printf("[api] Celeris API %s", version)
 	cfgPath := flag.String("config", "api.yaml", "path to API YAML config file")
 	flag.Parse()
-
+	//go func() {
+	//	_ = http.ListenAndServe("localhost:6060", nil)
+	//}() // pprof
 	// Load config from YAML file; fall back to defaults if file not found
 	cfg, err := apiConfig.LoadFromFile(*cfgPath)
 	if err != nil {
@@ -121,6 +125,7 @@ func main() {
 	jwtService := infra.NewJWTService(cfg.JWT.Secret, cfg.JWT.Issuer)
 	var msgClient *messageclient.Client
 	var registrationNotifier app.RegistrationNotifier
+	var instanceProvisionedNotifier *messageclient.InstanceProvisionedNotifier
 	if cfg.Message.Enabled() {
 		msgClient, err = messageclient.Dial(messageclient.Config{
 			Address:      cfg.Message.Address,
@@ -137,6 +142,7 @@ func main() {
 			Content:      cfg.Message.UserRegistered.Content,
 			TemplateCode: cfg.Message.UserRegistered.TemplateCode,
 		})
+		instanceProvisionedNotifier = messageclient.NewInstanceProvisionedNotifier(msgClient)
 		log.Printf("[api] message service integration enabled: address=%s user_registered=%t channel=%s",
 			cfg.Message.Address,
 			cfg.Message.UserRegistered.Enabled,
@@ -332,8 +338,27 @@ func main() {
 		}
 		log.Printf("[event-bridge] provisioning completed: instance=%s ipv4=%s nat_port=%d",
 			e.InstanceID, e.IPv4, e.NATPort)
-		if err := instApp.ConfirmProvisioning(e.InstanceID, e.NodeID, e.IPv4, e.IPv6, e.NetworkMode, e.NATPort); err != nil {
+		if err := instApp.ConfirmProvisioning(e.InstanceID, e.NodeID, e.IPv4, e.IPv6, e.HostIP, e.NetworkMode, e.NATPort); err != nil {
 			log.Printf("[event-bridge] ERROR: failed to confirm provisioning for instance %s: %v", e.InstanceID, err)
+			return
+		}
+		if instanceProvisionedNotifier != nil {
+			if inst, err := instApp.GetInstance(e.InstanceID); err == nil && inst != nil {
+				go func() {
+					if err := instanceProvisionedNotifier.NotifyInstanceProvisioned(context.Background(), messageclient.InstanceProvisionedMessage{
+						UserID:          inst.CustomerID(),
+						InstanceID:      inst.ID(),
+						Hostname:        inst.Hostname(),
+						IPv4:            inst.IPv4(),
+						HostIP:          inst.HostIP(),
+						NetworkMode:     inst.NetworkMode(),
+						NATPort:         inst.NATPort(),
+						InitialPassword: inst.InitialPassword(),
+					}); err != nil {
+						log.Printf("[event-bridge] WARNING: failed to send instance notification for %s: %v", e.InstanceID, err)
+					}
+				}()
+			}
 		}
 	})
 	bus.Subscribe("node.provisioning_failed", func(evt eventbus.Event) {
@@ -476,7 +501,7 @@ func main() {
 	if cryptoCfg.MockMode {
 		log.Printf("[api] USDT crypto payment: MOCK MODE (auto-confirms after %v, set CRYPTO_MOCK_MODE=false for real blockchain)", cryptoCfg.MockConfirmDelay)
 	} else {
-	log.Printf("[api] USDT crypto payment: PRODUCTION MODE (awaiting real blockchain confirmations via webhook)")
+		log.Printf("[api] USDT crypto payment: PRODUCTION MODE (awaiting real blockchain confirmations via webhook)")
 	}
 	log.Printf("[api]   payment timeout: %v, wallets configured: %d networks", cryptoCfg.PaymentTimeout, len(cryptoCfg.Wallets))
 

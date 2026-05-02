@@ -245,6 +245,7 @@ type HeartbeatResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
 	Tasks         []*Task                `protobuf:"bytes,2,rep,name=tasks,proto3" json:"tasks,omitempty"`
+	NatForwards   []*NATForwardRule      `protobuf:"bytes,3,rep,name=nat_forwards,json=natForwards,proto3" json:"nat_forwards,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -293,6 +294,73 @@ func (x *HeartbeatResponse) GetTasks() []*Task {
 	return nil
 }
 
+func (x *HeartbeatResponse) GetNatForwards() []*NATForwardRule {
+	if x != nil {
+		return x.NatForwards
+	}
+	return nil
+}
+
+type NATForwardRule struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InstanceId    string                 `protobuf:"bytes,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	HostPort      int32                  `protobuf:"varint,2,opt,name=host_port,json=hostPort,proto3" json:"host_port,omitempty"`
+	GuestIp       string                 `protobuf:"bytes,3,opt,name=guest_ip,json=guestIp,proto3" json:"guest_ip,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NATForwardRule) Reset() {
+	*x = NATForwardRule{}
+	mi := &file_agent_v1_agent_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NATForwardRule) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NATForwardRule) ProtoMessage() {}
+
+func (x *NATForwardRule) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NATForwardRule.ProtoReflect.Descriptor instead.
+func (*NATForwardRule) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *NATForwardRule) GetInstanceId() string {
+	if x != nil {
+		return x.InstanceId
+	}
+	return ""
+}
+
+func (x *NATForwardRule) GetHostPort() int32 {
+	if x != nil {
+		return x.HostPort
+	}
+	return 0
+}
+
+func (x *NATForwardRule) GetGuestIp() string {
+	if x != nil {
+		return x.GuestIp
+	}
+	return ""
+}
+
 type Task struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -309,7 +377,7 @@ type Task struct {
 
 func (x *Task) Reset() {
 	*x = Task{}
-	mi := &file_agent_v1_agent_proto_msgTypes[4]
+	mi := &file_agent_v1_agent_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -321,7 +389,7 @@ func (x *Task) String() string {
 func (*Task) ProtoMessage() {}
 
 func (x *Task) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[4]
+	mi := &file_agent_v1_agent_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -334,7 +402,7 @@ func (x *Task) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Task.ProtoReflect.Descriptor instead.
 func (*Task) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{4}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Task) GetId() string {
@@ -394,26 +462,29 @@ func (x *Task) GetFinishedAt() string {
 }
 
 type ProvisionSpec struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	InstanceId    string                 `protobuf:"bytes,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
-	Hostname      string                 `protobuf:"bytes,2,opt,name=hostname,proto3" json:"hostname,omitempty"`
-	Os            string                 `protobuf:"bytes,3,opt,name=os,proto3" json:"os,omitempty"`
-	Cpu           int32                  `protobuf:"varint,4,opt,name=cpu,proto3" json:"cpu,omitempty"`
-	MemoryMb      int32                  `protobuf:"varint,5,opt,name=memory_mb,json=memoryMb,proto3" json:"memory_mb,omitempty"`
-	DiskGb        int32                  `protobuf:"varint,6,opt,name=disk_gb,json=diskGb,proto3" json:"disk_gb,omitempty"`
-	Ipv4          string                 `protobuf:"bytes,7,opt,name=ipv4,proto3" json:"ipv4,omitempty"`
-	Ipv6          string                 `protobuf:"bytes,8,opt,name=ipv6,proto3" json:"ipv6,omitempty"`
-	VirtType      string                 `protobuf:"bytes,9,opt,name=virt_type,json=virtType,proto3" json:"virt_type,omitempty"` // "kvm" or "lxc"
-	StoragePool   string                 `protobuf:"bytes,10,opt,name=storage_pool,json=storagePool,proto3" json:"storage_pool,omitempty"`
-	NetworkName   string                 `protobuf:"bytes,11,opt,name=network_name,json=networkName,proto3" json:"network_name,omitempty"`
-	SshKeys       []string               `protobuf:"bytes,12,rep,name=ssh_keys,json=sshKeys,proto3" json:"ssh_keys,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	InstanceId      string                 `protobuf:"bytes,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	Hostname        string                 `protobuf:"bytes,2,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	Os              string                 `protobuf:"bytes,3,opt,name=os,proto3" json:"os,omitempty"`
+	Cpu             int32                  `protobuf:"varint,4,opt,name=cpu,proto3" json:"cpu,omitempty"`
+	MemoryMb        int32                  `protobuf:"varint,5,opt,name=memory_mb,json=memoryMb,proto3" json:"memory_mb,omitempty"`
+	DiskGb          int32                  `protobuf:"varint,6,opt,name=disk_gb,json=diskGb,proto3" json:"disk_gb,omitempty"`
+	Ipv4            string                 `protobuf:"bytes,7,opt,name=ipv4,proto3" json:"ipv4,omitempty"`
+	Ipv6            string                 `protobuf:"bytes,8,opt,name=ipv6,proto3" json:"ipv6,omitempty"`
+	VirtType        string                 `protobuf:"bytes,9,opt,name=virt_type,json=virtType,proto3" json:"virt_type,omitempty"` // "kvm" or "lxc"
+	StoragePool     string                 `protobuf:"bytes,10,opt,name=storage_pool,json=storagePool,proto3" json:"storage_pool,omitempty"`
+	NetworkName     string                 `protobuf:"bytes,11,opt,name=network_name,json=networkName,proto3" json:"network_name,omitempty"`
+	SshKeys         []string               `protobuf:"bytes,12,rep,name=ssh_keys,json=sshKeys,proto3" json:"ssh_keys,omitempty"`
+	NetworkMode     string                 `protobuf:"bytes,13,opt,name=network_mode,json=networkMode,proto3" json:"network_mode,omitempty"`
+	NatPort         int32                  `protobuf:"varint,14,opt,name=nat_port,json=natPort,proto3" json:"nat_port,omitempty"`
+	InitialPassword string                 `protobuf:"bytes,15,opt,name=initial_password,json=initialPassword,proto3" json:"initial_password,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ProvisionSpec) Reset() {
 	*x = ProvisionSpec{}
-	mi := &file_agent_v1_agent_proto_msgTypes[5]
+	mi := &file_agent_v1_agent_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -425,7 +496,7 @@ func (x *ProvisionSpec) String() string {
 func (*ProvisionSpec) ProtoMessage() {}
 
 func (x *ProvisionSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[5]
+	mi := &file_agent_v1_agent_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -438,7 +509,7 @@ func (x *ProvisionSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProvisionSpec.ProtoReflect.Descriptor instead.
 func (*ProvisionSpec) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{5}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ProvisionSpec) GetInstanceId() string {
@@ -525,6 +596,27 @@ func (x *ProvisionSpec) GetSshKeys() []string {
 	return nil
 }
 
+func (x *ProvisionSpec) GetNetworkMode() string {
+	if x != nil {
+		return x.NetworkMode
+	}
+	return ""
+}
+
+func (x *ProvisionSpec) GetNatPort() int32 {
+	if x != nil {
+		return x.NatPort
+	}
+	return 0
+}
+
+func (x *ProvisionSpec) GetInitialPassword() string {
+	if x != nil {
+		return x.InitialPassword
+	}
+	return ""
+}
+
 type TaskResultRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
@@ -540,7 +632,7 @@ type TaskResultRequest struct {
 
 func (x *TaskResultRequest) Reset() {
 	*x = TaskResultRequest{}
-	mi := &file_agent_v1_agent_proto_msgTypes[6]
+	mi := &file_agent_v1_agent_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -552,7 +644,7 @@ func (x *TaskResultRequest) String() string {
 func (*TaskResultRequest) ProtoMessage() {}
 
 func (x *TaskResultRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[6]
+	mi := &file_agent_v1_agent_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -565,7 +657,7 @@ func (x *TaskResultRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskResultRequest.ProtoReflect.Descriptor instead.
 func (*TaskResultRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{6}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *TaskResultRequest) GetTaskId() string {
@@ -626,7 +718,7 @@ type TaskResultResponse struct {
 
 func (x *TaskResultResponse) Reset() {
 	*x = TaskResultResponse{}
-	mi := &file_agent_v1_agent_proto_msgTypes[7]
+	mi := &file_agent_v1_agent_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -638,7 +730,7 @@ func (x *TaskResultResponse) String() string {
 func (*TaskResultResponse) ProtoMessage() {}
 
 func (x *TaskResultResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[7]
+	mi := &file_agent_v1_agent_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -651,7 +743,7 @@ func (x *TaskResultResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskResultResponse.ProtoReflect.Descriptor instead.
 func (*TaskResultResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{7}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *TaskResultResponse) GetOk() bool {
@@ -685,10 +777,16 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x06uptime\x18\x05 \x01(\x03R\x06uptime\x12\x19\n" +
 	"\bvm_count\x18\x06 \x01(\x05R\avmCount\x12\x1f\n" +
 	"\vreported_at\x18\a \x01(\tR\n" +
-	"reportedAt\"I\n" +
+	"reportedAt\"\x86\x01\n" +
 	"\x11HeartbeatResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12$\n" +
-	"\x05tasks\x18\x02 \x03(\v2\x0e.agent.v1.TaskR\x05tasks\"\xde\x01\n" +
+	"\x05tasks\x18\x02 \x03(\v2\x0e.agent.v1.TaskR\x05tasks\x12;\n" +
+	"\fnat_forwards\x18\x03 \x03(\v2\x18.agent.v1.NATForwardRuleR\vnatForwards\"i\n" +
+	"\x0eNATForwardRule\x12\x1f\n" +
+	"\vinstance_id\x18\x01 \x01(\tR\n" +
+	"instanceId\x12\x1b\n" +
+	"\thost_port\x18\x02 \x01(\x05R\bhostPort\x12\x19\n" +
+	"\bguest_ip\x18\x03 \x01(\tR\aguestIp\"\xde\x01\n" +
 	"\x04Task\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12\x12\n" +
@@ -699,7 +797,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\a \x01(\tR\tcreatedAt\x12\x1f\n" +
 	"\vfinished_at\x18\b \x01(\tR\n" +
-	"finishedAt\"\xca\x02\n" +
+	"finishedAt\"\xb3\x03\n" +
 	"\rProvisionSpec\x12\x1f\n" +
 	"\vinstance_id\x18\x01 \x01(\tR\n" +
 	"instanceId\x12\x1a\n" +
@@ -714,7 +812,10 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\fstorage_pool\x18\n" +
 	" \x01(\tR\vstoragePool\x12!\n" +
 	"\fnetwork_name\x18\v \x01(\tR\vnetworkName\x12\x19\n" +
-	"\bssh_keys\x18\f \x03(\tR\asshKeys\"\xbe\x01\n" +
+	"\bssh_keys\x18\f \x03(\tR\asshKeys\x12!\n" +
+	"\fnetwork_mode\x18\r \x01(\tR\vnetworkMode\x12\x19\n" +
+	"\bnat_port\x18\x0e \x01(\x05R\anatPort\x12)\n" +
+	"\x10initial_password\x18\x0f \x01(\tR\x0finitialPassword\"\xbe\x01\n" +
 	"\x11TaskResultRequest\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x14\n" +
@@ -743,31 +844,33 @@ func file_agent_v1_agent_proto_rawDescGZIP() []byte {
 	return file_agent_v1_agent_proto_rawDescData
 }
 
-var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_agent_v1_agent_proto_goTypes = []any{
 	(*RegisterRequest)(nil),    // 0: agent.v1.RegisterRequest
 	(*RegisterResponse)(nil),   // 1: agent.v1.RegisterResponse
 	(*HeartbeatRequest)(nil),   // 2: agent.v1.HeartbeatRequest
 	(*HeartbeatResponse)(nil),  // 3: agent.v1.HeartbeatResponse
-	(*Task)(nil),               // 4: agent.v1.Task
-	(*ProvisionSpec)(nil),      // 5: agent.v1.ProvisionSpec
-	(*TaskResultRequest)(nil),  // 6: agent.v1.TaskResultRequest
-	(*TaskResultResponse)(nil), // 7: agent.v1.TaskResultResponse
+	(*NATForwardRule)(nil),     // 4: agent.v1.NATForwardRule
+	(*Task)(nil),               // 5: agent.v1.Task
+	(*ProvisionSpec)(nil),      // 6: agent.v1.ProvisionSpec
+	(*TaskResultRequest)(nil),  // 7: agent.v1.TaskResultRequest
+	(*TaskResultResponse)(nil), // 8: agent.v1.TaskResultResponse
 }
 var file_agent_v1_agent_proto_depIdxs = []int32{
-	4, // 0: agent.v1.HeartbeatResponse.tasks:type_name -> agent.v1.Task
-	5, // 1: agent.v1.Task.spec:type_name -> agent.v1.ProvisionSpec
-	0, // 2: agent.v1.AgentService.Register:input_type -> agent.v1.RegisterRequest
-	2, // 3: agent.v1.AgentService.Heartbeat:input_type -> agent.v1.HeartbeatRequest
-	6, // 4: agent.v1.AgentService.ReportTaskResult:input_type -> agent.v1.TaskResultRequest
-	1, // 5: agent.v1.AgentService.Register:output_type -> agent.v1.RegisterResponse
-	3, // 6: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
-	7, // 7: agent.v1.AgentService.ReportTaskResult:output_type -> agent.v1.TaskResultResponse
-	5, // [5:8] is the sub-list for method output_type
-	2, // [2:5] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	5, // 0: agent.v1.HeartbeatResponse.tasks:type_name -> agent.v1.Task
+	4, // 1: agent.v1.HeartbeatResponse.nat_forwards:type_name -> agent.v1.NATForwardRule
+	6, // 2: agent.v1.Task.spec:type_name -> agent.v1.ProvisionSpec
+	0, // 3: agent.v1.AgentService.Register:input_type -> agent.v1.RegisterRequest
+	2, // 4: agent.v1.AgentService.Heartbeat:input_type -> agent.v1.HeartbeatRequest
+	7, // 5: agent.v1.AgentService.ReportTaskResult:input_type -> agent.v1.TaskResultRequest
+	1, // 6: agent.v1.AgentService.Register:output_type -> agent.v1.RegisterResponse
+	3, // 7: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
+	8, // 8: agent.v1.AgentService.ReportTaskResult:output_type -> agent.v1.TaskResultResponse
+	6, // [6:9] is the sub-list for method output_type
+	3, // [3:6] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_agent_v1_agent_proto_init() }
@@ -781,7 +884,7 @@ func file_agent_v1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_v1_agent_proto_rawDesc), len(file_agent_v1_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -25,14 +25,14 @@ func (m *mockOrderActivator) CancelOrder(orderID, reason string) error          
 
 type mockProductPurchaser struct{}
 
-func (m *mockProductPurchaser) PurchaseProduct(ctx context.Context, productID, customerID, orderID, instanceID, hostname, os string) (app.PurchasedProduct, error) {
+func (m *mockProductPurchaser) PurchaseProduct(ctx context.Context, productID, customerID, orderID, instanceID, initialPassword, hostname, os string) (app.PurchasedProduct, error) {
 	return app.PurchasedProduct{}, nil
 }
 
 type mockInstanceCreator struct{}
 
-func (m *mockInstanceCreator) CreatePendingInstance(customerID, orderID, region, hostname, plan, os string, cpu, memoryMB, diskGB int) (string, error) {
-	return "inst-1", nil
+func (m *mockInstanceCreator) CreatePendingInstance(customerID, orderID, region, hostname, plan, os string, cpu, memoryMB, diskGB int) (app.PendingInstance, error) {
+	return app.PendingInstance{ID: "inst-1", InitialPassword: "pwd-1"}, nil
 }
 
 type mockInvoiceCreator struct{}

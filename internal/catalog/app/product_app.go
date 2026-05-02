@@ -75,7 +75,7 @@ func (s *ProductAppService) CreateProduct(ctx context.Context, name, slug, locat
 // and publishes a ProductPurchasedEvent for the Node domain to handle
 // physical provisioning independently.
 func (s *ProductAppService) PurchaseProduct(
-	ctx context.Context, productID, customerID, orderID, instanceID, hostname, os string,
+	ctx context.Context, productID, customerID, orderID, instanceID, initialPassword, hostname, os string,
 ) (*domain.Product, error) {
 	p, err := s.repo.GetByID(ctx, productID)
 	if err != nil {
@@ -99,19 +99,20 @@ func (s *ProductAppService) PurchaseProduct(
 
 	// Raise domain event — Node domain will handle provisioning
 	p.RaiseEvent(events.ProductPurchasedEvent{
-		ProductID:      p.ID(),
-		ProductSlug:    p.Slug(),
-		RegionID:       p.RegionID(),
-		ResourcePoolID: p.ResourcePoolID(),
-		CustomerID:     customerID,
-		OrderID:        orderID,
-		InstanceID:     instanceID,
-		Hostname:       hostname,
-		OS:             os,
-		CPU:            p.CPU(),
-		MemoryMB:       p.MemoryMB(),
-		DiskGB:         p.DiskGB(),
-		NetworkMode:    p.NetworkMode(),
+		ProductID:       p.ID(),
+		ProductSlug:     p.Slug(),
+		RegionID:        p.RegionID(),
+		ResourcePoolID:  p.ResourcePoolID(),
+		CustomerID:      customerID,
+		OrderID:         orderID,
+		InstanceID:      instanceID,
+		Hostname:        hostname,
+		OS:              os,
+		InitialPassword: initialPassword,
+		CPU:             p.CPU(),
+		MemoryMB:        p.MemoryMB(),
+		DiskGB:          p.DiskGB(),
+		NetworkMode:     p.NetworkMode(),
 	})
 
 	// Publish collected domain events
