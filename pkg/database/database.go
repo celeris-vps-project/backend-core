@@ -5,6 +5,7 @@
 // Supported drivers:
 //   - "sqlite"  (default) — uses github.com/glebarez/sqlite (pure-Go, CGO-free)
 //   - "postgres"          — uses gorm.io/driver/postgres
+//   - "mysql", "mariadb"  — uses gorm.io/driver/mysql
 //
 // Usage:
 //
@@ -21,6 +22,7 @@ import (
 	"backend-core/internal/api/config"
 
 	"github.com/glebarez/sqlite"
+	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -34,8 +36,10 @@ func Open(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		return openSQLite(cfg)
 	case "postgres":
 		return openPostgres(cfg)
+	case "mysql", "mariadb":
+		return openMySQL(cfg)
 	default:
-		return nil, fmt.Errorf("database: unsupported driver %q (expected \"sqlite\" or \"postgres\")", cfg.Driver)
+		return nil, fmt.Errorf("database: unsupported driver %q (expected \"sqlite\", \"postgres\", \"mysql\", or \"mariadb\")", cfg.Driver)
 	}
 }
 
@@ -91,28 +95,7 @@ func openPostgres(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		return nil, fmt.Errorf("database: failed to get underlying sql.DB: %w", err)
 	}
 
-	// Connection pool settings — use config values or sensible defaults.
-	maxOpen := cfg.MaxOpenConns
-	if maxOpen <= 0 {
-		maxOpen = 25
-	}
-	maxIdle := cfg.MaxIdleConns
-	if maxIdle <= 0 {
-		maxIdle = 10
-	}
-	connMaxLifetime := cfg.ConnMaxLifetime
-	if connMaxLifetime <= 0 {
-		connMaxLifetime = 5 * time.Minute
-	}
-	connMaxIdleTime := cfg.ConnMaxIdleTime
-	if connMaxIdleTime <= 0 {
-		connMaxIdleTime = 3 * time.Minute
-	}
-
-	sqlDB.SetMaxOpenConns(maxOpen)
-	sqlDB.SetMaxIdleConns(maxIdle)
-	sqlDB.SetConnMaxLifetime(connMaxLifetime)
-	sqlDB.SetConnMaxIdleTime(connMaxIdleTime)
+	maxOpen, maxIdle, connMaxLifetime, connMaxIdleTime := configureSQLPool(sqlDB, cfg)
 
 	log.Printf("[database] PostgreSQL connected (maxOpen=%d, maxIdle=%d, maxLifetime=%s)",
 		maxOpen, maxIdle, connMaxLifetime)
@@ -135,6 +118,62 @@ func openPostgres(cfg config.DatabaseConfig) (*gorm.DB, error) {
 	}
 
 	return db, nil
+}
+
+// openMySQL opens a MySQL-compatible connection. MariaDB uses the same driver
+// and DSN format as MySQL.
+func openMySQL(cfg config.DatabaseConfig) (*gorm.DB, error) {
+	if cfg.DSN == "" {
+		return nil, fmt.Errorf("database: mysql DSN is required")
+	}
+
+	db, err := gorm.Open(mysql.Open(cfg.DSN), &gorm.Config{})
+	if err != nil {
+		return nil, fmt.Errorf("database: failed to connect to MySQL/MariaDB: %w", err)
+	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("database: failed to get underlying sql.DB: %w", err)
+	}
+
+	maxOpen, maxIdle, connMaxLifetime, _ := configureSQLPool(sqlDB, cfg)
+
+	log.Printf("[database] MySQL/MariaDB connected (maxOpen=%d, maxIdle=%d, maxLifetime=%s)",
+		maxOpen, maxIdle, connMaxLifetime)
+
+	return db, nil
+}
+
+func configureSQLPool(sqlDB interface {
+	SetMaxOpenConns(int)
+	SetMaxIdleConns(int)
+	SetConnMaxLifetime(time.Duration)
+	SetConnMaxIdleTime(time.Duration)
+}, cfg config.DatabaseConfig) (int, int, time.Duration, time.Duration) {
+	maxOpen := cfg.MaxOpenConns
+	if maxOpen <= 0 {
+		maxOpen = 25
+	}
+	maxIdle := cfg.MaxIdleConns
+	if maxIdle <= 0 {
+		maxIdle = 10
+	}
+	connMaxLifetime := cfg.ConnMaxLifetime
+	if connMaxLifetime <= 0 {
+		connMaxLifetime = 5 * time.Minute
+	}
+	connMaxIdleTime := cfg.ConnMaxIdleTime
+	if connMaxIdleTime <= 0 {
+		connMaxIdleTime = 3 * time.Minute
+	}
+
+	sqlDB.SetMaxOpenConns(maxOpen)
+	sqlDB.SetMaxIdleConns(maxIdle)
+	sqlDB.SetConnMaxLifetime(connMaxLifetime)
+	sqlDB.SetConnMaxIdleTime(connMaxIdleTime)
+
+	return maxOpen, maxIdle, connMaxLifetime, connMaxIdleTime
 }
 
 // newDBResolver creates a GORM DBResolver plugin for read-write splitting.

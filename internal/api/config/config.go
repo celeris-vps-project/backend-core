@@ -41,10 +41,10 @@ type PortConfig string
 
 // DatabaseConfig holds database connection settings.
 type DatabaseConfig struct {
-	Driver string `json:"driver" yaml:"driver"` // "sqlite" (default) or "postgres"
-	DSN    string `json:"dsn" yaml:"dsn"`       // e.g. "data.db" for SQLite, or PG connection string
+	Driver string `json:"driver" yaml:"driver"` // "sqlite" (default), "postgres", "mysql", or "mariadb"
+	DSN    string `json:"dsn" yaml:"dsn"`       // e.g. "data.db", a Postgres URL, or a MySQL/MariaDB DSN
 
-	// PostgreSQL connection pool settings (ignored for SQLite).
+	// SQL connection pool settings (ignored for SQLite).
 	MaxOpenConns    int           `json:"max_open_conns" yaml:"max_open_conns"`         // default: 25
 	MaxIdleConns    int           `json:"max_idle_conns" yaml:"max_idle_conns"`         // default: 10
 	ConnMaxLifetime time.Duration `json:"conn_max_lifetime" yaml:"conn_max_lifetime"`   // default: 5m

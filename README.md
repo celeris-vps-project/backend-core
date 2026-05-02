@@ -160,6 +160,7 @@ go run ./cmd/agent --config agent.yaml
 
 | 变量 | 说明 |
 | --- | --- |
+| `API_DATABASE_DRIVER` | 数据库驱动：`sqlite`、`postgres`、`mysql` 或 `mariadb` |
 | `API_DATABASE_DSN` | 数据库 DSN |
 | `API_JWT_SECRET` | JWT Secret |
 | `API_GRPC_LISTEN` | gRPC 监听地址 |

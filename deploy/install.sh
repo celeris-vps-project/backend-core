@@ -132,6 +132,7 @@ server:
   domain: localhost
 
 database:
+  driver: sqlite
   dsn: /var/lib/celeris/data.db
 
 jwt:
@@ -157,6 +158,7 @@ YAML
     if [[ ! -f "${CONFIG_DIR}/api.env" ]]; then
       cat > "${CONFIG_DIR}/api.env" <<ENV
 # Celeris API environment overrides
+# API_DATABASE_DRIVER=sqlite
 # API_DATABASE_DSN=/var/lib/celeris/data.db
 # API_JWT_SECRET=
 # API_GRPC_LISTEN=:50051

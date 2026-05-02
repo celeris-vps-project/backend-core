@@ -9,7 +9,28 @@ server:
   name: "Celeris-api-server"
 
 database:
-  dsn: "data.db"            # SQLite database file path
+  driver: "sqlite"           # sqlite, postgres, mysql, or mariadb
+  dsn: "data.db"             # SQLite database file path
+
+  # PostgreSQL example:
+  # driver: "postgres"
+  # dsn: "host=127.0.0.1 user=celeris password=celeris_pass dbname=celeris port=5432 sslmode=disable TimeZone=Asia/Shanghai"
+  # Or URL style:
+  # dsn: "postgres://celeris:celeris_pass@127.0.0.1:5432/celeris?sslmode=disable&TimeZone=Asia%2FShanghai"
+  #
+  # Optional SQL connection pool settings. Ignored for SQLite.
+  # max_open_conns: 25
+  # max_idle_conns: 10
+  # conn_max_lifetime: 5m
+  # conn_max_idle_time: 3m
+  #
+  # Optional PostgreSQL read replicas. Leave empty unless you have replicas.
+  # replica_dsns:
+  #   - "host=127.0.0.1 user=celeris password=celeris_pass dbname=celeris port=5433 sslmode=disable TimeZone=Asia/Shanghai"
+
+  # MariaDB example:
+  # driver: "mariadb"
+  # dsn: "celeris:celeris_pass@tcp(127.0.0.1:3306)/celeris?charset=utf8mb4&parseTime=True&loc=Local"
 
 jwt:
   secret: "my-super-secret-key"    # JWT signing secret (change in production!)

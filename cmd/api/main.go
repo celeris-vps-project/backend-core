@@ -84,6 +84,9 @@ func main() {
 	}
 
 	// Environment variable overrides
+	if v := os.Getenv("API_DATABASE_DRIVER"); v != "" {
+		cfg.Database.Driver = v
+	}
 	if v := os.Getenv("API_DATABASE_DSN"); v != "" {
 		cfg.Database.DSN = v
 	}
@@ -107,7 +110,7 @@ func main() {
 		}
 	}
 
-	// 1. Open database (SQLite or PostgreSQL, based on config)
+	// 1. Open database based on config
 	db, err := database.Open(cfg.Database)
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
