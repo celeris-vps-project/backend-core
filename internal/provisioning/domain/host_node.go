@@ -35,6 +35,7 @@ type HostNode struct {
 	natPortStart int // NAT port range start (e.g. 20000); 0 = NAT not configured
 	natPortEnd   int // NAT port range end (e.g. 60000)
 	natBridge    string
+	natEntryHost string // public host/IP shown to users for NAT-mode access
 }
 
 func NewHostNode(id, code, location, name, secret string) (*HostNode, error) {
@@ -75,7 +76,7 @@ func ReconstituteHostNodeFull(
 	id, code, location, regionID, resourcePoolID, name, secret, nodeToken string,
 	createdAt time.Time,
 	totalSlots, usedSlots int, enabled bool,
-	natPortStart, natPortEnd int, natBridge string,
+	natPortStart, natPortEnd int, natBridge, natEntryHost string,
 ) *HostNode {
 	return &HostNode{
 		id: id, code: code, location: location, regionID: regionID, resourcePoolID: resourcePoolID,
@@ -83,7 +84,7 @@ func ReconstituteHostNodeFull(
 		createdAt:  createdAt,
 		totalSlots: totalSlots, usedSlots: usedSlots, enabled: enabled,
 		natPortStart: natPortStart, natPortEnd: natPortEnd,
-		natBridge: natBridge,
+		natBridge: natBridge, natEntryHost: natEntryHost,
 	}
 }
 
@@ -159,6 +160,9 @@ func (n *HostNode) ValidateNodeToken(t string) bool {
 func (n *HostNode) NATPortStart() int { return n.natPortStart }
 func (n *HostNode) NATPortEnd() int   { return n.natPortEnd }
 func (n *HostNode) NATBridge() string { return n.natBridge }
+func (n *HostNode) NATEntryHost() string {
+	return n.natEntryHost
+}
 
 // HasNATPortPool returns true if the node has a NAT port range configured.
 func (n *HostNode) HasNATPortPool() bool {
@@ -205,6 +209,19 @@ func (n *HostNode) SetNATBridge(bridge string) error {
 		return errors.New("domain_error: NAT bridge name must not contain whitespace")
 	}
 	n.natBridge = bridge
+	return nil
+}
+
+// SetNATEntryHost configures the public host/IP used for NAT-mode delivery.
+func (n *HostNode) SetNATEntryHost(host string) error {
+	host = strings.TrimSpace(host)
+	if len(host) > 255 {
+		return errors.New("domain_error: NAT entry host must not exceed 255 characters")
+	}
+	if strings.ContainsAny(host, " \t\r\n") {
+		return errors.New("domain_error: NAT entry host must not contain whitespace")
+	}
+	n.natEntryHost = host
 	return nil
 }
 

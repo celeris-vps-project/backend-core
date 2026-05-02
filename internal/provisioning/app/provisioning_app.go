@@ -62,7 +62,7 @@ func (s *ProvisioningAppService) StateCache() domain.NodeStateCache {
 // Host CRUD
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-func (s *ProvisioningAppService) CreateHost(code, location, name, secret string, totalSlots, natPortStart, natPortEnd int, natBridge string) (*domain.HostNode, error) {
+func (s *ProvisioningAppService) CreateHost(code, location, name, secret string, totalSlots, natPortStart, natPortEnd int, natBridge, natEntryHost string) (*domain.HostNode, error) {
 	id := s.ids.NewID()
 	h, err := domain.NewHostNode(id, code, location, name, secret)
 	if err != nil {
@@ -79,6 +79,9 @@ func (s *ProvisioningAppService) CreateHost(code, location, name, secret string,
 		return nil, err
 	}
 	if err := h.SetNATBridge(defaultNATBridge(natBridge)); err != nil {
+		return nil, err
+	}
+	if err := h.SetNATEntryHost(natEntryHost); err != nil {
 		return nil, err
 	}
 	if err := s.hostRepo.Save(h); err != nil {
@@ -598,8 +601,16 @@ func (s *ProvisioningAppService) ListNATPorts(nodeID string) ([]int, error) {
 	return s.ipRepo.ListNATPortsByNodeID(nodeID)
 }
 
-// resolveHostIP gets the host's public IP from the NodeStateCache.
+// resolveHostIP gets the user-facing NAT entry host from persistent node
+// configuration, falling back to the agent-reported runtime IP for old nodes.
 func (s *ProvisioningAppService) resolveHostIP(nodeID string) string {
+	node, err := s.hostRepo.GetByID(nodeID)
+	if err == nil && node != nil && node.NATEntryHost() != "" {
+		return node.NATEntryHost()
+	}
+	if s.stateCache == nil {
+		return ""
+	}
 	state, err := s.stateCache.GetNodeState(nodeID)
 	if err != nil || state == nil {
 		return ""

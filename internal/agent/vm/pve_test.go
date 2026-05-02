@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ── Factory integration tests ──────────────────────────────────────────
@@ -198,6 +199,63 @@ func TestPVEDriver_CreateSendsCloudInitIPAndPassword(t *testing.T) {
 }
 
 // ── PVE Client HTTP tests ─────────────────────────────────────────────
+
+func TestPVEDriver_WaitForBootReturnsRunningWithoutGuestAgentIP(t *testing.T) {
+	agentCalls := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu" && r.Method == "GET":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": []map[string]interface{}{
+					{"vmid": 101, "name": "celeris-inst-boot", "status": "running"},
+				},
+			})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu/101/status/current" && r.Method == "GET":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": map[string]interface{}{
+					"vmid":    101,
+					"name":    "celeris-inst-boot",
+					"status":  "running",
+					"cpus":    2,
+					"maxmem":  int64(2048 * 1024 * 1024),
+					"maxdisk": int64(40 * 1024 * 1024 * 1024),
+				},
+			})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu/101/agent/network-get-interfaces" && r.Method == "GET":
+			agentCalls++
+			http.Error(w, "guest agent not running", http.StatusInternalServerError)
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client, _ := NewPVEClient(PVEClientConfig{
+		APIURL:      srv.URL,
+		TokenID:     "test@pam!t",
+		TokenSecret: "s",
+		Insecure:    true,
+	})
+	driver := &PVEDriver{client: client, node: "pve1"}
+
+	info, err := driver.WaitForBoot("inst-boot", 50*time.Millisecond)
+	if err != nil {
+		t.Fatalf("WaitForBoot: %v", err)
+	}
+	if info.State != "running" {
+		t.Fatalf("expected running state, got %s", info.State)
+	}
+	if info.IPv4 != "" || info.IPv6 != "" {
+		t.Fatalf("expected no guest-agent IPs, got ipv4=%s ipv6=%s", info.IPv4, info.IPv6)
+	}
+	if info.CPU != 2 || info.MemoryMB != 2048 || info.DiskGB != 40 {
+		t.Fatalf("unexpected runtime info: cpu=%d mem=%d disk=%d", info.CPU, info.MemoryMB, info.DiskGB)
+	}
+	if agentCalls != 1 {
+		t.Fatalf("expected one best-effort guest-agent query, got %d", agentCalls)
+	}
+}
 
 func TestPVEClient_AuthHeader(t *testing.T) {
 	var receivedAuth string

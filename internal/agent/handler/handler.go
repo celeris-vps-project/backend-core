@@ -7,9 +7,8 @@ import (
 	"time"
 )
 
-// DefaultBootTimeout is the maximum time to wait for a VM to boot and
-// report a valid IP via the guest agent. 5 minutes is generous enough
-// to cover slow cloud-init + DHCP scenarios.
+// DefaultBootTimeout is the maximum time to wait for a VM to reach the
+// driver's ready state. 5 minutes is generous enough to cover slow starts.
 const DefaultBootTimeout = 5 * time.Minute
 
 // NATForwarder applies host-level port forwarding for NAT-mode tasks.
@@ -20,8 +19,8 @@ type NATForwarder interface {
 
 // ProcessTasks executes any tasks received from the controller heartbeat ack,
 // then reports results back. For provision/start tasks, if the driver supports
-// BootWaiter, it polls the hypervisor until the VM is fully booted and has
-// a valid internal IP, then includes the IP in the task result.
+// BootWaiter, it polls the hypervisor until the VM reaches the driver's ready
+// state. If the controller already assigned a static IP, that IP is reported.
 func ProcessTasks(tasks []contracts.Task, driver vm.Hypervisor, natForwarder NATForwarder, reportFn func(contracts.TaskResult)) {
 	for _, task := range tasks {
 		log.Printf("[agent] executing task %s type=%s instance=%s", task.ID, task.Type, task.Spec.InstanceID)
@@ -43,12 +42,17 @@ func ProcessTasks(tasks []contracts.Task, driver vm.Hypervisor, natForwarder NAT
 
 		log.Printf("[agent] task %s COMPLETED (execution phase)", task.ID)
 
-		// For provision/start tasks, wait for the VM to fully boot and
-		// retrieve the internal IP via the guest agent. This replaces the
-		// old single-shot Info() call which almost always returned empty
-		// because the guest agent wasn't ready yet.
+		// For provision/start tasks, confirm the VM reached the driver's
+		// ready state. Controller-assigned static IPs do not depend on a
+		// guest agent reporting network interfaces.
 		if needsBootWait(task.Type) {
-			if bw, ok := driver.(vm.BootWaiter); ok {
+			if task.Spec.IPv4 != "" {
+				result.IPv4 = task.Spec.IPv4
+				result.IPv6 = task.Spec.IPv6
+				result.VMState = "running"
+				log.Printf("[agent] task %s: using provisioned static IPv4=%s (skipping guest-agent IP wait)",
+					task.ID, task.Spec.IPv4)
+			} else if bw, ok := driver.(vm.BootWaiter); ok {
 				log.Printf("[agent] task %s: waiting for boot (polling guest agent)...", task.ID)
 				info, waitErr := bw.WaitForBoot(task.Spec.InstanceID, DefaultBootTimeout)
 				if waitErr != nil {

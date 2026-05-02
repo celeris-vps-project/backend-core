@@ -340,13 +340,39 @@ func (r *memProvisionTaskRepo) Save(task *contracts.Task) error {
 	return nil
 }
 
+type memProvisionStateCache struct {
+	items map[string]*domain.NodeState
+}
+
+func newMemProvisionStateCache() *memProvisionStateCache {
+	return &memProvisionStateCache{items: map[string]*domain.NodeState{}}
+}
+
+func (c *memProvisionStateCache) SetNodeState(nodeID string, state *domain.NodeState) error {
+	c.items[nodeID] = state
+	return nil
+}
+
+func (c *memProvisionStateCache) GetNodeState(nodeID string) (*domain.NodeState, error) {
+	return c.items[nodeID], nil
+}
+
+func (c *memProvisionStateCache) GetAllNodeStates() (map[string]*domain.NodeState, error) {
+	return c.items, nil
+}
+
+func (c *memProvisionStateCache) DeleteNodeState(nodeID string) error {
+	delete(c.items, nodeID)
+	return nil
+}
+
 func TestProvisioningAppService_CreateHostDefaultsNATPortRange(t *testing.T) {
 	hostRepo := newMemProvisionHostRepo()
 	regionRepo := newMemProvisionRegionRepo()
 	idGen := &seqProvisionIDGen{}
 	svc := NewProvisioningAppService(hostRepo, nil, nil, regionRepo, nil, nil, nil, idGen, nil)
 
-	node, err := svc.CreateHost("DE-fra-01", "DE-fra", "Frankfurt #1", "secret", 10, 0, 0, "")
+	node, err := svc.CreateHost("DE-fra-01", "DE-fra", "Frankfurt #1", "secret", 10, 0, 0, "", "")
 	if err != nil {
 		t.Fatalf("unexpected create host error: %v", err)
 	}
@@ -370,6 +396,44 @@ func TestProvisioningAppService_CreateHostDefaultsNATPortRange(t *testing.T) {
 	}
 	if stored.NATBridge() != DefaultNATBridge {
 		t.Fatalf("stored node lost default NAT bridge: %s", stored.NATBridge())
+	}
+}
+
+func TestProvisioningAppService_ResolveHostIPPrefersNATEntryHost(t *testing.T) {
+	hostRepo := newMemProvisionHostRepo()
+	stateCache := newMemProvisionStateCache()
+	idGen := &seqProvisionIDGen{}
+	svc := NewProvisioningAppService(hostRepo, nil, nil, newMemProvisionRegionRepo(), nil, nil, stateCache, idGen, nil)
+
+	node, err := svc.CreateHost("DE-fra-01", "DE-fra", "Frankfurt #1", "secret", 10, 20000, 20010, "vmbr2", "nat.example.com")
+	if err != nil {
+		t.Fatalf("unexpected create host error: %v", err)
+	}
+	if err := stateCache.SetNodeState(node.ID(), &domain.NodeState{IP: "198.51.100.10"}); err != nil {
+		t.Fatalf("unexpected state set error: %v", err)
+	}
+
+	if got := svc.resolveHostIP(node.ID()); got != "nat.example.com" {
+		t.Fatalf("expected configured NAT entry host, got %q", got)
+	}
+}
+
+func TestProvisioningAppService_ResolveHostIPFallsBackToAgentIP(t *testing.T) {
+	hostRepo := newMemProvisionHostRepo()
+	stateCache := newMemProvisionStateCache()
+	idGen := &seqProvisionIDGen{}
+	svc := NewProvisioningAppService(hostRepo, nil, nil, newMemProvisionRegionRepo(), nil, nil, stateCache, idGen, nil)
+
+	node, err := svc.CreateHost("DE-fra-01", "DE-fra", "Frankfurt #1", "secret", 10, 20000, 20010, "vmbr2", "")
+	if err != nil {
+		t.Fatalf("unexpected create host error: %v", err)
+	}
+	if err := stateCache.SetNodeState(node.ID(), &domain.NodeState{IP: "198.51.100.10"}); err != nil {
+		t.Fatalf("unexpected state set error: %v", err)
+	}
+
+	if got := svc.resolveHostIP(node.ID()); got != "198.51.100.10" {
+		t.Fatalf("expected agent IP fallback, got %q", got)
 	}
 }
 

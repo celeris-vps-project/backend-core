@@ -16,8 +16,8 @@ const (
 //
 // In dedicated mode, each entry is a unique public IP address.
 // In NAT mode, each entry is a host port allocation plus the guest/internal
-// IPv4 used as the DNAT target. The host IP itself is resolved at runtime from
-// NodeStateCache (agent registration), avoiding stale public IP data.
+// IPv4 used as the DNAT target. The public NAT entry host is owned by HostNode
+// configuration and may fall back to agent-reported runtime IP for old nodes.
 type IPAddress struct {
 	id         string
 	nodeID     string

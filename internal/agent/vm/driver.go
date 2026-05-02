@@ -49,14 +49,10 @@ type Hypervisor interface {
 
 // BootWaiter is an optional interface that a Hypervisor can implement to
 // provide polling-based boot confirmation. After a VM is created or started,
-// the caller can use WaitForBoot to poll the hypervisor until the guest is
-// fully booted (running + guest agent reports a valid IP).
-//
-// Drivers that do not support guest-agent-based IP retrieval (e.g. StubDriver)
-// do not need to implement this interface.
+// the caller can use WaitForBoot to poll the hypervisor until the guest reaches
+// the driver's ready state. Guest-agent IP discovery is optional.
 type BootWaiter interface {
-	// WaitForBoot polls the hypervisor until the VM is running and has a
-	// valid internal IP reported by the guest agent, or until the timeout
+	// WaitForBoot polls the hypervisor until the VM is ready or the timeout
 	// expires. Returns the final VMInfo on success.
 	WaitForBoot(instanceID string, timeout time.Duration) (*VMInfo, error)
 }

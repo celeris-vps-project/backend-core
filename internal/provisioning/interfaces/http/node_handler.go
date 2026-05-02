@@ -27,6 +27,7 @@ type CreateHostRequest struct {
 	NATPortStart     int    `json:"nat_port_start"`
 	NATPortEnd       int    `json:"nat_port_end"`
 	NATBridge        string `json:"nat_bridge"`
+	NATEntryHost     string `json:"nat_entry_host"`
 	TokenTTLMinutes  int    `json:"token_ttl_minutes"` // TTL for the auto-created bootstrap token (default 24h)
 	TokenDescription string `json:"token_description"` // optional description for the bootstrap token
 }
@@ -77,6 +78,7 @@ type HostNodeResponse struct {
 	NATPortEnd      int     `json:"nat_port_end"`
 	NATPortPoolSize int     `json:"nat_port_pool_size"`
 	NATBridge       string  `json:"nat_bridge"`
+	NATEntryHost    string  `json:"nat_entry_host,omitempty"`
 	Enabled         bool    `json:"enabled"`
 	LastSeen        *string `json:"last_seen_at,omitempty"`
 	CreatedAt       string  `json:"created_at"`
@@ -152,7 +154,7 @@ func (h *NodeHandler) CreateHost(ctx context.Context, c *hz_app.RequestContext) 
 		return
 	}
 
-	node, err := h.svc.CreateHost(code, req.Location, name, autoSecret, req.TotalSlots, req.NATPortStart, req.NATPortEnd, req.NATBridge)
+	node, err := h.svc.CreateHost(code, req.Location, name, autoSecret, req.TotalSlots, req.NATPortStart, req.NATPortEnd, req.NATBridge, req.NATEntryHost)
 	if err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
 		return
@@ -550,6 +552,7 @@ func toHostResp(n *domain.HostNode, state *domain.NodeState) HostNodeResponse {
 		NATPortStart: n.NATPortStart(), NATPortEnd: n.NATPortEnd(),
 		NATPortPoolSize: n.NATPortPoolSize(),
 		NATBridge:       natBridge,
+		NATEntryHost:    n.NATEntryHost(),
 	}
 	if state != nil {
 		resp.Status = state.Status

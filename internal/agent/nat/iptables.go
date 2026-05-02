@@ -89,20 +89,20 @@ func (f *IPTablesForwarder) EnsureForward(instanceID string, hostPort int, guest
 	commentArgs := []string{"-m", "comment", "--comment", ruleComment(instanceID, hostPort)}
 
 	if f.internalNetwork != "" {
-		if err := f.ensureRule("-t", "nat", "POSTROUTING", "-s", f.internalNetwork, "-j", "MASQUERADE"); err != nil {
+		if err := f.ensureRule("nat", "POSTROUTING", "-s", f.internalNetwork, "-j", "MASQUERADE"); err != nil {
 			return err
 		}
 	}
-	if err := f.ensureRule(append([]string{"-t", "nat", "PREROUTING", "-p", "tcp", "--dport", port}, append(commentArgs, "-j", "DNAT", "--to-destination", target)...)...); err != nil {
+	if err := f.ensureRule("nat", "PREROUTING", append([]string{"-p", "tcp", "--dport", port}, append(commentArgs, "-j", "DNAT", "--to-destination", target)...)...); err != nil {
 		return err
 	}
-	if err := f.ensureRule(append([]string{"-t", "nat", "OUTPUT", "-p", "tcp", "--dport", port}, append(commentArgs, "-j", "DNAT", "--to-destination", target)...)...); err != nil {
+	if err := f.ensureRule("nat", "OUTPUT", append([]string{"-p", "tcp", "--dport", port}, append(commentArgs, "-j", "DNAT", "--to-destination", target)...)...); err != nil {
 		return err
 	}
-	if err := f.ensureRule(append([]string{"FORWARD", "-p", "tcp", "-d", guestIP, "--dport", targetPort}, append(commentArgs, "-j", "ACCEPT")...)...); err != nil {
+	if err := f.ensureRule("", "FORWARD", append([]string{"-p", "tcp", "-d", guestIP, "--dport", targetPort}, append(commentArgs, "-j", "ACCEPT")...)...); err != nil {
 		return err
 	}
-	if err := f.ensureRule(append([]string{"FORWARD", "-p", "tcp", "-s", guestIP, "--sport", targetPort}, append(commentArgs, "-j", "ACCEPT")...)...); err != nil {
+	if err := f.ensureRule("", "FORWARD", append([]string{"-p", "tcp", "-s", guestIP, "--sport", targetPort}, append(commentArgs, "-j", "ACCEPT")...)...); err != nil {
 		return err
 	}
 	return nil
@@ -136,16 +136,26 @@ func (f *IPTablesForwarder) ensureIPForwarding() error {
 	return f.enableErr
 }
 
-func (f *IPTablesForwarder) ensureRule(args ...string) error {
-	checkArgs := append([]string{"-C"}, args...)
+func (f *IPTablesForwarder) ensureRule(table, chain string, args ...string) error {
+	checkArgs := iptablesRuleArgs(table, "-C", chain, args...)
 	if err := f.runner.Run(f.iptablesBinary, checkArgs...); err == nil {
 		return nil
 	}
-	addArgs := append([]string{"-A"}, args...)
+	addArgs := iptablesRuleArgs(table, "-A", chain, args...)
 	if err := f.runner.Run(f.iptablesBinary, addArgs...); err != nil {
-		return fmt.Errorf("nat: ensure iptables rule %v: %w", args, err)
+		return fmt.Errorf("nat: ensure iptables rule %v: %w", addArgs, err)
 	}
 	return nil
+}
+
+func iptablesRuleArgs(table, action, chain string, args ...string) []string {
+	commandArgs := []string{}
+	if table != "" {
+		commandArgs = append(commandArgs, "-t", table)
+	}
+	commandArgs = append(commandArgs, action, chain)
+	commandArgs = append(commandArgs, args...)
+	return commandArgs
 }
 
 func (f *IPTablesForwarder) deleteRulesByComment(table, chain, comment string) error {

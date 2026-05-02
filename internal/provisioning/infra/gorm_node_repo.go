@@ -35,6 +35,7 @@ type HostNodePO struct {
 	NATPortStart int    `gorm:"column:nat_port_start;default:0"`
 	NATPortEnd   int    `gorm:"column:nat_port_end;default:0"`
 	NATBridge    string `gorm:"column:nat_bridge;default:vmbr2"`
+	NATEntryHost string `gorm:"column:nat_entry_host"`
 }
 
 func (HostNodePO) TableName() string { return "host_nodes" }
@@ -355,7 +356,7 @@ func hostToDomain(po HostNodePO) *domain.HostNode {
 		po.ID, po.Code, po.Location, po.RegionID, poolID, po.Name, po.Secret, po.NodeToken,
 		po.CreatedAt,
 		po.TotalSlots, po.UsedSlots, po.Enabled,
-		po.NATPortStart, po.NATPortEnd, po.NATBridge,
+		po.NATPortStart, po.NATPortEnd, po.NATBridge, po.NATEntryHost,
 	)
 }
 
@@ -372,7 +373,7 @@ func hostFromDomain(n *domain.HostNode) HostNodePO {
 		CreatedAt:  n.CreatedAt(),
 		TotalSlots: n.TotalSlots(), UsedSlots: n.UsedSlots(), Enabled: n.Enabled(),
 		NATPortStart: n.NATPortStart(), NATPortEnd: n.NATPortEnd(),
-		NATBridge: n.NATBridge(),
+		NATBridge: n.NATBridge(), NATEntryHost: n.NATEntryHost(),
 	}
 }
 

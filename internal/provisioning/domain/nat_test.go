@@ -173,8 +173,23 @@ func TestHostNode_SetNATBridge(t *testing.T) {
 	}
 }
 
+func TestHostNode_SetNATEntryHost(t *testing.T) {
+	node := ReconstituteHostNode("n1", "DE-01", "DE", "", "", "node1", "secret", "", time.Now(), 10, 0, true)
+
+	if err := node.SetNATEntryHost(" nat.example.com "); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if node.NATEntryHost() != "nat.example.com" {
+		t.Fatalf("expected entry host nat.example.com, got %s", node.NATEntryHost())
+	}
+
+	if err := node.SetNATEntryHost("bad host"); err == nil {
+		t.Fatal("expected error for entry host with whitespace")
+	}
+}
+
 func TestHostNode_FindFreeNATPort(t *testing.T) {
-	node := ReconstituteHostNodeFull("n1", "DE-01", "DE", "", "", "node1", "secret", "", time.Now(), 10, 0, true, 20000, 20005, "vmbr2")
+	node := ReconstituteHostNodeFull("n1", "DE-01", "DE", "", "", "node1", "secret", "", time.Now(), 10, 0, true, 20000, 20005, "vmbr2", "")
 
 	// No ports used
 	port, err := node.FindFreeNATPort(map[int]struct{}{})
@@ -213,7 +228,7 @@ func TestHostNode_FindFreeNATPort_NoPoolConfigured(t *testing.T) {
 }
 
 func TestHostNode_ClearNATPortRange(t *testing.T) {
-	node := ReconstituteHostNodeFull("n1", "DE-01", "DE", "", "", "node1", "secret", "", time.Now(), 10, 0, true, 20000, 60000, "vmbr2")
+	node := ReconstituteHostNodeFull("n1", "DE-01", "DE", "", "", "node1", "secret", "", time.Now(), 10, 0, true, 20000, 60000, "vmbr2", "")
 
 	if !node.HasNATPortPool() {
 		t.Fatal("expected HasNATPortPool=true before clear")

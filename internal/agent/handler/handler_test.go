@@ -12,6 +12,7 @@ type fakeDriver struct {
 	createdSpec contracts.ProvisionSpec
 	waitInfo    *vm.VMInfo
 	waitErr     error
+	waitCalls   int
 }
 
 func (d *fakeDriver) Create(spec contracts.ProvisionSpec) error {
@@ -31,6 +32,7 @@ func (d *fakeDriver) Info(instanceID string) (*vm.VMInfo, error) {
 }
 func (d *fakeDriver) List() ([]*vm.VMInfo, error) { return nil, nil }
 func (d *fakeDriver) WaitForBoot(instanceID string, timeout time.Duration) (*vm.VMInfo, error) {
+	d.waitCalls++
 	if d.waitErr != nil {
 		return nil, d.waitErr
 	}
@@ -152,7 +154,7 @@ func TestProcessTasks_ForwarderErrorMarksTaskFailed(t *testing.T) {
 	}
 }
 
-func TestProcessTasks_UsesSpecIPv4ForNATWhenBootWaitTimesOut(t *testing.T) {
+func TestProcessTasks_UsesSpecIPv4ForNATWithoutGuestAgentWait(t *testing.T) {
 	driver := &fakeDriver{waitErr: errors.New("guest agent timeout")}
 	forwarder := &fakeForwarder{}
 	task := contracts.Task{
@@ -179,8 +181,14 @@ func TestProcessTasks_UsesSpecIPv4ForNATWhenBootWaitTimesOut(t *testing.T) {
 	if result.Status != contracts.TaskStatusCompleted {
 		t.Fatalf("expected completed status, got %s error=%s", result.Status, result.Error)
 	}
-	if result.VMState != "boot_timeout" {
-		t.Fatalf("expected boot_timeout state, got %s", result.VMState)
+	if result.VMState != "running" {
+		t.Fatalf("expected running state, got %s", result.VMState)
+	}
+	if result.IPv4 != "10.0.0.30" {
+		t.Fatalf("expected result IPv4 10.0.0.30, got %s", result.IPv4)
+	}
+	if driver.waitCalls != 0 {
+		t.Fatalf("expected guest-agent boot wait to be skipped, got %d calls", driver.waitCalls)
 	}
 	if forwarder.calls != 1 || forwarder.guestIP != "10.0.0.30" {
 		t.Fatalf("expected NAT forward to spec IPv4, calls=%d ip=%s", forwarder.calls, forwarder.guestIP)

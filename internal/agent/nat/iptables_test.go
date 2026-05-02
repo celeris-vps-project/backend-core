@@ -19,7 +19,7 @@ type fakeRunner struct {
 
 func (r *fakeRunner) Run(name string, args ...string) error {
 	r.commands = append(r.commands, recordedCommand{name: name, args: append([]string(nil), args...)})
-	if len(args) > 0 && args[0] == "-C" {
+	if hasArg(args, "-C") {
 		return errors.New("rule not found")
 	}
 	return nil
@@ -52,9 +52,9 @@ func TestIPTablesForwarder_EnsureForwardInstallsRules(t *testing.T) {
 		t.Fatalf("expected sysctl ip_forward command first, got %s %v", runner.commands[0].name, runner.commands[0].args)
 	}
 
-	assertCommandContains(t, runner.commands, "iptables", []string{"-A", "-t", "nat", "POSTROUTING", "-s", "10.0.0.0/24", "-j", "MASQUERADE"})
-	assertCommandContains(t, runner.commands, "iptables", []string{"-A", "-t", "nat", "PREROUTING", "-p", "tcp", "--dport", "20001", "-m", "comment", "--comment", "celeris-nat:inst-1:20001", "-j", "DNAT", "--to-destination", "10.0.0.15:22"})
-	assertCommandContains(t, runner.commands, "iptables", []string{"-A", "-t", "nat", "OUTPUT", "-p", "tcp", "--dport", "20001", "-m", "comment", "--comment", "celeris-nat:inst-1:20001", "-j", "DNAT", "--to-destination", "10.0.0.15:22"})
+	assertCommandContains(t, runner.commands, "iptables", []string{"-t", "nat", "-A", "POSTROUTING", "-s", "10.0.0.0/24", "-j", "MASQUERADE"})
+	assertCommandContains(t, runner.commands, "iptables", []string{"-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", "20001", "-m", "comment", "--comment", "celeris-nat:inst-1:20001", "-j", "DNAT", "--to-destination", "10.0.0.15:22"})
+	assertCommandContains(t, runner.commands, "iptables", []string{"-t", "nat", "-A", "OUTPUT", "-p", "tcp", "--dport", "20001", "-m", "comment", "--comment", "celeris-nat:inst-1:20001", "-j", "DNAT", "--to-destination", "10.0.0.15:22"})
 	assertCommandContains(t, runner.commands, "iptables", []string{"-A", "FORWARD", "-p", "tcp", "-d", "10.0.0.15", "--dport", "22", "-m", "comment", "--comment", "celeris-nat:inst-1:20001", "-j", "ACCEPT"})
 	assertCommandContains(t, runner.commands, "iptables", []string{"-A", "FORWARD", "-p", "tcp", "-s", "10.0.0.15", "--sport", "22", "-m", "comment", "--comment", "celeris-nat:inst-1:20001", "-j", "ACCEPT"})
 }
@@ -102,4 +102,13 @@ func assertCommandContains(t *testing.T, commands []recordedCommand, name string
 		}
 	}
 	t.Fatalf("expected command %s %v, got %#v", name, expectedArgs, commands)
+}
+
+func hasArg(args []string, expected string) bool {
+	for _, arg := range args {
+		if arg == expected {
+			return true
+		}
+	}
+	return false
 }
