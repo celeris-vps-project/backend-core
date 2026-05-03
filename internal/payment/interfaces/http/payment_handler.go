@@ -152,6 +152,7 @@ func (h *PaymentHandler) Webhook(ctx context.Context, c *hz_app.RequestContext) 
 // app layer via VerifyProviderWebhook().
 func (h *PaymentHandler) EPayWebhook(ctx context.Context, c *hz_app.RequestContext) {
 	providerID := c.Param("providerId")
+	log.Printf("[PaymentHandler.EPayWebhook] providerId=%s", providerID)
 	if providerID == "" {
 		c.String(consts.StatusBadRequest, "provider ID is required")
 		return

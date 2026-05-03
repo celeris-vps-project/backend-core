@@ -22,6 +22,7 @@ type Config struct {
 	Crypto    CryptoPaymentConfig `json:"crypto" yaml:"crypto"`
 	Server    ServerConfig        `json:"server" yaml:"server"`
 	Admin     AdminConfig         `json:"admin" yaml:"admin"`
+	Debug     DebugConfig         `json:"debug" yaml:"debug"`
 }
 
 // AdminConfig holds the initial admin account settings.
@@ -30,6 +31,10 @@ type Config struct {
 // the log exactly once.
 type AdminConfig struct {
 	Email string `json:"email" yaml:"email"` // default: "admin@celeris.local"
+}
+
+type DebugConfig struct {
+	Level string `json:"level" yaml:"level"` // trace, debug, info, notice, warn, error, or fatal
 }
 
 type BillingConfig struct {
@@ -284,6 +289,9 @@ func DefaultConfig() Config {
 		},
 		Admin: AdminConfig{
 			Email: "admin@celeris.local",
+		},
+		Debug: DebugConfig{
+			Level: "info",
 		},
 	}
 }

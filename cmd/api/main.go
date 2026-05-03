@@ -647,7 +647,7 @@ func main() {
 	log.Printf("[api]   standard  = global %.0f QPS, per-IP %.0f QPS", rlCfg.Standard.GlobalQPS, rlCfg.Standard.IPMaxQPS)
 	log.Printf("[api]   admin     = global %.0f QPS, per-IP %.0f QPS", rlCfg.Admin.GlobalQPS, rlCfg.Admin.IPMaxQPS)
 
-	h := apiConfig.NewHertzHandler(cfg.Server)
+	h := apiConfig.NewHertzHandler(cfg.Server, cfg.Debug)
 
 	// Health check endpoint — used by Docker healthcheck and systemd
 	h.GET("/healthz", func(c context.Context, ctx *hertzApp.RequestContext) {

@@ -8,6 +8,9 @@ server:
   listen: 0.0.0.0
   name: "Celeris-api-server"
 
+debug:
+  level: "info"              # set to "debug" to enable framework debug logs
+
 database:
   driver: "sqlite"           # sqlite, postgres, mysql, or mariadb
   dsn: "data.db"             # SQLite database file path
