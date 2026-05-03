@@ -137,26 +137,38 @@ func (h *InstanceHandler) GetByID(ctx context.Context, c *hz_app.RequestContext)
 		c.JSON(consts.StatusNotFound, apperr.Resp(apperr.CodeInstanceNotFound, err.Error()))
 		return
 	}
+	if !canAccessInstance(c, inst.CustomerID()) {
+		c.JSON(consts.StatusForbidden, apperr.Resp(apperr.CodeForbidden, "instance access denied"))
+		return
+	}
 	c.JSON(consts.StatusOK, utils.H{"data": h.toInstResp(inst)})
 }
 
 // POST /instances/:id/start
 func (h *InstanceHandler) Start(ctx context.Context, c *hz_app.RequestContext) {
-	if err := h.svc.StartInstance(c.Param("id")); err != nil {
+	id := c.Param("id")
+	if !h.ensureInstanceAccess(c, id) {
+		return
+	}
+	if err := h.svc.StartInstance(id); err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyInstanceError(err), err.Error()))
 		return
 	}
-	inst, _ := h.svc.GetInstance(c.Param("id"))
+	inst, _ := h.svc.GetInstance(id)
 	c.JSON(consts.StatusOK, utils.H{"data": h.toInstResp(inst)})
 }
 
 // POST /instances/:id/stop
 func (h *InstanceHandler) Stop(ctx context.Context, c *hz_app.RequestContext) {
-	if err := h.svc.StopInstance(c.Param("id")); err != nil {
+	id := c.Param("id")
+	if !h.ensureInstanceAccess(c, id) {
+		return
+	}
+	if err := h.svc.StopInstance(id); err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyInstanceError(err), err.Error()))
 		return
 	}
-	inst, _ := h.svc.GetInstance(c.Param("id"))
+	inst, _ := h.svc.GetInstance(id)
 	c.JSON(consts.StatusOK, utils.H{"data": h.toInstResp(inst)})
 }
 
@@ -206,6 +218,28 @@ func (h *InstanceHandler) AssignIP(ctx context.Context, c *hz_app.RequestContext
 }
 
 // ---- Mapping ----
+
+func (h *InstanceHandler) ensureInstanceAccess(c *hz_app.RequestContext, instanceID string) bool {
+	inst, err := h.svc.GetInstance(instanceID)
+	if err != nil {
+		c.JSON(consts.StatusNotFound, apperr.Resp(apperr.CodeInstanceNotFound, err.Error()))
+		return false
+	}
+	if !canAccessInstance(c, inst.CustomerID()) {
+		c.JSON(consts.StatusForbidden, apperr.Resp(apperr.CodeForbidden, "instance access denied"))
+		return false
+	}
+	return true
+}
+
+func canAccessInstance(c *hz_app.RequestContext, customerID string) bool {
+	role, _ := authn.UserRole(c)
+	if role == "admin" {
+		return true
+	}
+	uid, ok := authn.UserID(c)
+	return ok && uid.String() == customerID
+}
 
 func (h *InstanceHandler) toInstResp(i *domain.Instance) InstanceResponse {
 	resp := InstanceResponse{

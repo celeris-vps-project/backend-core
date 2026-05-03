@@ -18,6 +18,7 @@ import (
 // InitiatePaymentRequest is the app-layer input for starting a payment.
 type InitiatePaymentRequest struct {
 	OrderID    string // required — the order to pay for
+	CustomerID string // optional — when set, order ownership is enforced
 	ProviderID string // optional — dynamic provider selection
 	Network    string // optional — crypto network (e.g. "arbitrum")
 	CouponCode string // optional — activation/coupon code for first payment
@@ -174,6 +175,14 @@ func (s *PaymentAppService) InitiatePayment(ctx context.Context, req *InitiatePa
 	order, err := s.orchestrator.GetOrderForPay(req.OrderID)
 	if err != nil {
 		return nil, apperr.ErrNotFound(apperr.CodeOrderNotFound, "order not found: "+err.Error())
+	}
+	req.CustomerID = strings.TrimSpace(req.CustomerID)
+	if req.CustomerID != "" && order.CustomerID != req.CustomerID {
+		return nil, &apperr.AppError{
+			Code:       apperr.CodeForbidden,
+			Message:    "order access denied",
+			HTTPStatus: 403,
+		}
 	}
 
 	if resp, ok := s.reusePendingPayment(ctx, order); ok {
@@ -645,6 +654,26 @@ func (s *PaymentAppService) GetLocalTerminalPaymentStatus(orderID string) (*Paym
 	default:
 		return nil, nil
 	}
+}
+
+func (s *PaymentAppService) CanAccessOrder(orderID, customerID string) error {
+	orderID = strings.TrimSpace(orderID)
+	customerID = strings.TrimSpace(customerID)
+	if orderID == "" || customerID == "" {
+		return apperr.ErrBadRequest(apperr.CodeInvalidParams, "order_id and customer_id are required")
+	}
+	order, err := s.orchestrator.GetOrderForPay(orderID)
+	if err != nil {
+		return apperr.ErrNotFound(apperr.CodeOrderNotFound, "order not found: "+err.Error())
+	}
+	if order.CustomerID != customerID {
+		return &apperr.AppError{
+			Code:       apperr.CodeForbidden,
+			Message:    "order access denied",
+			HTTPStatus: 403,
+		}
+	}
+	return nil
 }
 
 func (s *PaymentAppService) publishPaymentStatus(event PaymentStatusEvent) {

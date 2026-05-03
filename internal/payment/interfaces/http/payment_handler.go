@@ -7,6 +7,7 @@ import (
 	paymentApp "backend-core/internal/payment/app"
 	"backend-core/internal/payment/domain"
 	"backend-core/pkg/apperr"
+	"backend-core/pkg/authn"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -51,12 +52,18 @@ type PayRequest struct {
 // happens inside PaymentAppService.InitiatePayment().
 func (h *PaymentHandler) Pay(ctx context.Context, c *hz_app.RequestContext) {
 	orderID := c.Param("id")
+	uid, ok := authn.UserID(c)
+	if !ok {
+		c.JSON(consts.StatusUnauthorized, apperr.Resp(apperr.CodeUnauthorized, "unauthorized"))
+		return
+	}
 
 	var req PayRequest
 	_ = c.BindJSON(&req) // ignore errors — all fields are optional
 
 	resp, err := h.paymentSvc.InitiatePayment(ctx, &paymentApp.InitiatePaymentRequest{
 		OrderID:    orderID,
+		CustomerID: uid.String(),
 		ProviderID: req.ProviderID,
 		Network:    req.Network,
 		CouponCode: req.CouponCode,
@@ -233,6 +240,15 @@ func (h *PaymentHandler) PaymentStatusStream(ctx context.Context, c *hz_app.Requ
 	orderID := c.Param("id")
 	if orderID == "" {
 		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, "order id is required"))
+		return
+	}
+	uid, ok := authn.UserID(c)
+	if !ok {
+		c.JSON(consts.StatusUnauthorized, apperr.Resp(apperr.CodeUnauthorized, "unauthorized"))
+		return
+	}
+	if err := h.paymentSvc.CanAccessOrder(orderID, uid.String()); err != nil {
+		apperr.HandleErr(c, err)
 		return
 	}
 

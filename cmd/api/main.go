@@ -717,23 +717,13 @@ func main() {
 		v1.GET("/product-lines", criticalRL, catalogCache, productLineHandler.List)
 
 		// ── Critical tier only (no adaptive cache) ─────────────────────
-		// These endpoints are admin-facing or low-traffic; rate-limited
-		// but no need for adaptive caching.
+		// Regions are public catalog metadata used by the customer ordering
+		// flow. Host nodes and resource pools stay behind /admin below.
 		v1.GET("/regions", criticalRL, rHandler.ListRegions)
 		v1.GET("/regions/:id", criticalRL, rHandler.GetByID)
-		v1.GET("/resource-pools", criticalRL, nHandler.ListResourcePools)
-		v1.GET("/resource-pools/:id", criticalRL, nHandler.GetResourcePool)
-		v1.GET("/locations", criticalRL, nHandler.ListLocations)
-		v1.GET("/nodes", criticalRL, nHandler.ListHosts)
-		v1.GET("/nodes/:id", criticalRL, nHandler.GetHost)
-		v1.GET("/host-nodes", criticalRL, nHandler.ListHosts)
-		v1.GET("/host-nodes/:id", criticalRL, nHandler.GetHost)
 
-		// ── No rate limit: Agent endpoints (internal service-to-service) ──
-		// Heartbeat / task result loss would cause operational issues.
+		// ── Agent bootstrap endpoint (uses one-time bootstrap token) ─────
 		v1.POST("/agent/register", nHandler.AgentRegister)
-		v1.POST("/agent/heartbeat", nHandler.AgentHeartbeat)
-		v1.POST("/agent/tasks/result", nHandler.AgentTaskResult)
 
 		// ── Payment: public endpoints ────────────────────────────────────
 		// Payment network list (no auth needed — used by frontend before login)
@@ -741,10 +731,8 @@ func main() {
 		// Dynamic payment providers (user-facing — shows enabled providers for checkout)
 		v1.GET("/payment/providers", criticalRL, providerHandler.ListEnabled)
 
-		// ── No rate limit: Payment webhook (gateway/blockchain callback) ──
+		// ── No rate limit: Payment webhook (gateway callback) ────────────
 		// Dropping a payment callback could leave orders in limbo.
-		v1.POST("/payments/webhook", payHandler.Webhook)
-		v1.POST("/payments/webhook/simulate", payHandler.SimulateWebhook)
 		// EPay (易支付) webhook — receives GET/POST callbacks from EPay gateways.
 		// Verifies the common v1 MD5 form signature.
 		// Route: /api/v1/payments/webhook/epay/:providerId
@@ -762,72 +750,31 @@ func main() {
 		privateAPI.GET("/me", standardRL, authHandler.Me)
 		privateAPI.PUT("/me/password", standardRL, authHandler.ChangePassword)
 
-		// Billing - Invoice routes
-		privateAPI.POST("/invoices", standardRL, invoiceHandler.Create)
+		// Billing - current user's invoices
 		privateAPI.GET("/invoices", standardRL, invoiceHandler.ListByCustomer)
 		privateAPI.GET("/invoices/:id", standardRL, invoiceHandler.GetByID)
-		privateAPI.POST("/invoices/:id/line-items", standardRL, invoiceHandler.AddLineItem)
-		privateAPI.PUT("/invoices/:id/tax", standardRL, invoiceHandler.SetTax)
-		privateAPI.POST("/invoices/:id/issue", standardRL, invoiceHandler.Issue)
-		privateAPI.POST("/invoices/:id/payments", standardRL, invoiceHandler.RecordPayment)
-		privateAPI.POST("/invoices/:id/void", standardRL, invoiceHandler.Void)
 
-		// Ordering - Order routes
-		privateAPI.POST("/orders", standardRL, orderHandler.Create)
+		// Ordering - current user's orders
 		privateAPI.GET("/orders", standardRL, orderHandler.ListByCustomer)
 		privateAPI.GET("/orders/:id", standardRL, orderHandler.GetByID)
-		privateAPI.POST("/orders/:id/activate", standardRL, orderHandler.Activate)
-		privateAPI.POST("/orders/:id/suspend", standardRL, orderHandler.Suspend)
-		privateAPI.POST("/orders/:id/unsuspend", standardRL, orderHandler.Unsuspend)
-		privateAPI.POST("/orders/:id/cancel", standardRL, orderHandler.Cancel)
-		privateAPI.POST("/orders/:id/terminate", standardRL, orderHandler.Terminate)
 
 		// ── Checkout tier (strict per-IP: purchase/payment writes) ─────
 		// Payment — USDT crypto payment flow
 		privateAPI.POST("/orders/:id/pay", checkoutRL, payHandler.Pay)
 		privateAPI.GET("/orders/:id/payments/status/stream", payHandler.PaymentStatusStream)
-		privateAPI.GET("/payment/charges/:id", standardRL, payHandler.ChargeDetail)
-
-		// Node admin routes (served by node module)
-		privateAPI.POST("/nodes", standardRL, nHandler.CreateHost)
-		privateAPI.POST("/nodes/:id/enable", standardRL, nHandler.EnableHost)
-		privateAPI.POST("/nodes/:id/disable", standardRL, nHandler.DisableHost)
 
 		// Instance - Customer routes
-		privateAPI.POST("/instances", standardRL, instHandler.Purchase)
 		privateAPI.GET("/instances", standardRL, instHandler.ListByCustomer)
 		privateAPI.GET("/instances/:id", standardRL, instHandler.GetByID)
 		privateAPI.POST("/instances/:id/start", standardRL, instHandler.Start)
 		privateAPI.POST("/instances/:id/stop", standardRL, instHandler.Stop)
-		privateAPI.POST("/instances/:id/suspend", standardRL, instHandler.Suspend)
-		privateAPI.POST("/instances/:id/unsuspend", standardRL, instHandler.Unsuspend)
-		privateAPI.POST("/instances/:id/terminate", standardRL, instHandler.Terminate)
-		privateAPI.PUT("/instances/:id/ip", standardRL, instHandler.AssignIP)
 		privateAPI.POST("/ws/instances/ticket", standardRL, instanceWSHub.IssueTicket)
 
 		// ── Checkout tier: Product purchase & unified checkout ──────────
 		// These involve inventory/funds and need strict per-IP limiting.
-		privateAPI.POST("/products/purchase", checkoutRL, prodHandler.Purchase)
 		privateAPI.POST("/checkout", checkoutRL, coHandler.Checkout)
 		privateAPI.GET("/checkout/orders/:id", standardRL, coHandler.OrderStatus)
 		privateAPI.GET("/checkout/orders/:id/stream", coHandler.OrderStatusStream) // SSE — no rate limit (long-lived connection)
-		privateAPI.GET("/checkout/stats", standardRL, coHandler.Stats)
-
-		// Product - Admin routes (standard tier)
-		privateAPI.POST("/products", standardRL, prodHandler.Create)
-		privateAPI.GET("/products/all", standardRL, prodHandler.ListAll)
-		privateAPI.POST("/products/:id/enable", standardRL, prodHandler.Enable)
-		privateAPI.POST("/products/:id/disable", standardRL, prodHandler.Disable)
-		privateAPI.PUT("/products/:id/price", standardRL, prodHandler.UpdatePrice)
-		privateAPI.PUT("/products/:id/network", standardRL, prodHandler.UpdateNetworkMode)
-		privateAPI.PUT("/products/:id/stock", standardRL, prodHandler.AdjustStock)
-		privateAPI.PUT("/products/:id/region", standardRL, prodHandler.SetRegion)
-
-		// Host Node - Admin routes (standard tier)
-		privateAPI.POST("/host-nodes", standardRL, nHandler.CreateHost)
-		privateAPI.POST("/host-nodes/:id/ips", standardRL, nHandler.AddIP)
-		privateAPI.GET("/host-nodes/:id/ips", standardRL, nHandler.ListIPs)
-		privateAPI.POST("/host-nodes/:id/tasks", standardRL, nHandler.EnqueueTask)
 	}
 
 	// ---- WebSocket routes (auth via ?ticket= one-time token) ----
@@ -874,8 +821,11 @@ func main() {
 
 		// Node management (admin)
 		adminAPI.POST("/nodes", nHandler.CreateHost)
+		adminAPI.GET("/nodes", nHandler.ListHosts)
+		adminAPI.GET("/nodes/:id", nHandler.GetHost)
 		adminAPI.POST("/nodes/:id/enable", nHandler.EnableHost)
 		adminAPI.POST("/nodes/:id/disable", nHandler.DisableHost)
+		adminAPI.POST("/nodes/:id/revoke-token", nHandler.RevokeNodeToken)
 
 		// Region management
 		adminAPI.POST("/regions", rHandler.Create)
@@ -889,12 +839,35 @@ func main() {
 		adminAPI.GET("/bootstrap-tokens", nHandler.ListBootstrapTokens)
 		adminAPI.DELETE("/bootstrap-tokens/:id", nHandler.RevokeBootstrapToken)
 
-		// Node token revocation (force agent to re-bootstrap)
-		adminAPI.POST("/nodes/:id/revoke-token", nHandler.RevokeNodeToken)
-
 		// Unified Checkout — admin endpoints
 		adminAPI.PUT("/checkout/threshold", coHandler.SetThreshold)
 		adminAPI.GET("/checkout/stats", coHandler.Stats)
+
+		// Billing management
+		adminAPI.POST("/invoices", invoiceHandler.Create)
+		adminAPI.POST("/invoices/:id/line-items", invoiceHandler.AddLineItem)
+		adminAPI.PUT("/invoices/:id/tax", invoiceHandler.SetTax)
+		adminAPI.POST("/invoices/:id/issue", invoiceHandler.Issue)
+		adminAPI.POST("/invoices/:id/payments", invoiceHandler.RecordPayment)
+		adminAPI.POST("/invoices/:id/void", invoiceHandler.Void)
+
+		// Order management
+		adminAPI.POST("/orders", orderHandler.Create)
+		adminAPI.POST("/orders/:id/activate", orderHandler.Activate)
+		adminAPI.POST("/orders/:id/suspend", orderHandler.Suspend)
+		adminAPI.POST("/orders/:id/unsuspend", orderHandler.Unsuspend)
+		adminAPI.POST("/orders/:id/cancel", orderHandler.Cancel)
+		adminAPI.POST("/orders/:id/terminate", orderHandler.Terminate)
+
+		// Instance management
+		adminAPI.POST("/instances", instHandler.Purchase)
+		adminAPI.POST("/instances/:id/suspend", instHandler.Suspend)
+		adminAPI.POST("/instances/:id/unsuspend", instHandler.Unsuspend)
+		adminAPI.POST("/instances/:id/terminate", instHandler.Terminate)
+		adminAPI.PUT("/instances/:id/ip", instHandler.AssignIP)
+
+		// Payment test hook
+		adminAPI.POST("/payments/webhook/simulate", payHandler.SimulateWebhook)
 
 		// Performance monitoring — admin endpoints
 		adminAPI.POST("/ws/perf-ticket", perfHub.IssueTicket)

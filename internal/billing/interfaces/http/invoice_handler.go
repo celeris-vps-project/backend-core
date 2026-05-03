@@ -144,6 +144,10 @@ func (h *InvoiceHandler) GetByID(ctx context.Context, c *hz_app.RequestContext) 
 		c.JSON(consts.StatusNotFound, apperr.Resp(apperr.CodeInvoiceNotFound, err.Error()))
 		return
 	}
+	if !canAccessInvoice(c, invoice.CustomerID()) {
+		c.JSON(consts.StatusForbidden, apperr.Resp(apperr.CodeForbidden, "invoice access denied"))
+		return
+	}
 	c.JSON(consts.StatusOK, utils.H{"data": toInvoiceResponse(invoice)})
 }
 
@@ -362,6 +366,15 @@ func (h *InvoiceHandler) Renew(ctx context.Context, c *hz_app.RequestContext) {
 }
 
 // ---- Mapping helpers ----
+
+func canAccessInvoice(c *hz_app.RequestContext, customerID string) bool {
+	role, _ := authn.UserRole(c)
+	if role == "admin" {
+		return true
+	}
+	uid, ok := authn.UserID(c)
+	return ok && uid.String() == customerID
+}
 
 func toInvoiceResponse(inv *domain.Invoice) InvoiceResponse {
 	items := make([]LineItemResponse, len(inv.LineItems()))

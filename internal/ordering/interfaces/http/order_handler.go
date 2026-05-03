@@ -143,6 +143,10 @@ func (h *OrderHandler) GetByID(ctx context.Context, c *hz_app.RequestContext) {
 		c.JSON(consts.StatusNotFound, apperr.Resp(apperr.CodeOrderNotFound, err.Error()))
 		return
 	}
+	if !canAccessOrder(c, order.CustomerID()) {
+		c.JSON(consts.StatusForbidden, apperr.Resp(apperr.CodeForbidden, "order access denied"))
+		return
+	}
 	c.JSON(consts.StatusOK, utils.H{"data": toOrderResponse(order)})
 }
 
@@ -249,6 +253,15 @@ func (h *OrderHandler) Terminate(ctx context.Context, c *hz_app.RequestContext) 
 }
 
 // ---- Mapping helpers ----
+
+func canAccessOrder(c *hz_app.RequestContext, customerID string) bool {
+	role, _ := authn.UserRole(c)
+	if role == "admin" {
+		return true
+	}
+	uid, ok := authn.UserID(c)
+	return ok && uid.String() == customerID
+}
 
 func toOrderResponse(o *domain.Order) OrderResponse {
 	cfg := o.VPSConfig()
