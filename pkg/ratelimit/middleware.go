@@ -63,6 +63,11 @@ func ForRoutes(globalQPS, ipQPS float64) app.HandlerFunc {
 	return Middleware(limiter)
 }
 
+func ForRoutesWithIPBurst(globalQPS, ipQPS, ipBurst float64) app.HandlerFunc {
+	limiter := NewRateLimiterWithIPBurst(globalQPS, ipQPS, ipBurst)
+	return Middleware(limiter)
+}
+
 // clientIP extracts the real client IP from the request, respecting common
 // reverse-proxy headers.
 func clientIP(ctx *app.RequestContext) string {

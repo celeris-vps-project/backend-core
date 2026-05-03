@@ -15,6 +15,7 @@ type VerificationCode struct {
 	Email     string
 	Purpose   string
 	CodeHash  string
+	Plain     string
 	ExpiresAt time.Time
 	UsedAt    *time.Time
 	CreatedAt time.Time

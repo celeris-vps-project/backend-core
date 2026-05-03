@@ -14,17 +14,21 @@ import (
 //	rl := ratelimit.NewRateLimiter(1000, 10)  // global 1000 QPS, per-IP 10 QPS
 //	if !rl.Allow(clientIP) { /* reject */ }
 type RateLimiter struct {
-	global    *TokenBucket
-	ipRate    float64 // per-IP tokens/sec
-	ipBurst   float64 // per-IP max burst
-	mu        sync.Mutex
-	buckets   map[string]*ipEntry
-	gcTicker  *time.Ticker
-	stopGC    chan struct{}
+	global *TokenBucket
+	perIP  *KeyLimiter
+}
+
+type KeyLimiter struct {
+	rate     float64
+	burst    float64
+	buckets  map[string]*keyEntry
+	gcTicker *time.Ticker
+	stopGC   chan struct{}
+	mu       sync.Mutex
 }
 
 // ipEntry wraps a per-IP bucket with a last-seen timestamp for GC.
-type ipEntry struct {
+type keyEntry struct {
 	bucket   *TokenBucket
 	lastSeen time.Time
 }
@@ -36,23 +40,62 @@ type ipEntry struct {
 // A background goroutine periodically evicts stale per-IP buckets (idle > 5 min)
 // to prevent memory leaks from long-tail IPs.
 func NewRateLimiter(globalQPS float64, ipQPS float64) *RateLimiter {
-	rl := &RateLimiter{
-		ipRate:  ipQPS,
-		ipBurst: ipQPS, // burst == rate → no burst allowance beyond steady state
-		buckets: make(map[string]*ipEntry),
+	rl := &KeyLimiter{
+		rate:    ipQPS,
+		burst:   ipQPS, // burst == rate → no burst allowance beyond steady state
+		buckets: make(map[string]*keyEntry),
 		stopGC:  make(chan struct{}),
 	}
-
+	var globalTokenBucket *TokenBucket
 	// Global bucket: capacity == QPS so a full second of burst is tolerated.
 	if globalQPS > 0 {
-		rl.global = NewTokenBucket(globalQPS, globalQPS)
+		globalTokenBucket = NewTokenBucket(globalQPS, globalQPS)
 	}
 
 	// Start background GC for per-IP buckets every 60 seconds.
 	rl.gcTicker = time.NewTicker(60 * time.Second)
 	go rl.gc()
 
+	return &RateLimiter{
+		global: globalTokenBucket,
+		perIP:  rl,
+	}
+}
+
+func NewKeyLimiter(rate float64, burst float64) *KeyLimiter {
+	rl := &KeyLimiter{
+		rate:    rate,
+		burst:   burst, // burst == rate → no burst allowance beyond steady state
+		buckets: make(map[string]*keyEntry),
+		stopGC:  make(chan struct{}),
+	}
+	// Start background GC for per-IP buckets every 60 seconds.
+	rl.gcTicker = time.NewTicker(60 * time.Second)
+	go rl.gc()
 	return rl
+}
+
+// NewRateLimiterWithIPBurst with per-minute limit
+func NewRateLimiterWithIPBurst(globalQPS, ipQPS, ipBurst float64) *RateLimiter {
+	rl := &KeyLimiter{
+		rate:    ipQPS,
+		burst:   ipBurst,
+		buckets: make(map[string]*keyEntry),
+		stopGC:  make(chan struct{}),
+	}
+
+	var globalTokenBucket *TokenBucket
+	// Global bucket: capacity == QPS so a full second of burst is tolerated.
+	if globalQPS > 0 {
+		globalTokenBucket = NewTokenBucket(globalQPS, globalQPS)
+	}
+
+	rl.gcTicker = time.NewTicker(60 * time.Second)
+	go rl.gc()
+	return &RateLimiter{
+		global: globalTokenBucket,
+		perIP:  rl,
+	}
 }
 
 // Allow checks both the global and per-IP buckets.
@@ -64,27 +107,31 @@ func (rl *RateLimiter) Allow(ip string) bool {
 	}
 
 	// 2. Per-IP check.
-	if rl.ipRate <= 0 {
+	if rl.perIP.rate <= 0 {
 		return true // per-IP limiting disabled
 	}
 
-	bucket := rl.getOrCreate(ip)
+	bucket := rl.perIP.getOrCreate(ip)
 	return bucket.Allow()
+}
+
+func (kl *KeyLimiter) Allow(key string) bool {
+	return kl.getOrCreate(key).Allow()
 }
 
 // getOrCreate returns the token bucket for the given IP, creating one if
 // it does not yet exist.
-func (rl *RateLimiter) getOrCreate(ip string) *TokenBucket {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
+func (kl *KeyLimiter) getOrCreate(ip string) *TokenBucket {
+	kl.mu.Lock()
+	defer kl.mu.Unlock()
 
-	entry, ok := rl.buckets[ip]
+	entry, ok := kl.buckets[ip]
 	if !ok {
-		entry = &ipEntry{
-			bucket:   NewTokenBucket(rl.ipRate, rl.ipBurst),
+		entry = &keyEntry{
+			bucket:   NewTokenBucket(kl.rate, kl.burst),
 			lastSeen: time.Now(),
 		}
-		rl.buckets[ip] = entry
+		kl.buckets[ip] = entry
 	} else {
 		entry.lastSeen = time.Now()
 	}
@@ -92,27 +139,27 @@ func (rl *RateLimiter) getOrCreate(ip string) *TokenBucket {
 }
 
 // gc evicts per-IP buckets that have been idle for more than 5 minutes.
-func (rl *RateLimiter) gc() {
+func (kl *KeyLimiter) gc() {
 	const maxIdle = 5 * time.Minute
 	for {
 		select {
-		case <-rl.gcTicker.C:
-			rl.mu.Lock()
+		case <-kl.gcTicker.C:
+			kl.mu.Lock()
 			now := time.Now()
-			for ip, entry := range rl.buckets {
+			for ip, entry := range kl.buckets {
 				if now.Sub(entry.lastSeen) > maxIdle {
-					delete(rl.buckets, ip)
+					delete(kl.buckets, ip)
 				}
 			}
-			rl.mu.Unlock()
-		case <-rl.stopGC:
-			rl.gcTicker.Stop()
+			kl.mu.Unlock()
+		case <-kl.stopGC:
+			kl.gcTicker.Stop()
 			return
 		}
 	}
 }
 
 // Stop shuts down the background GC goroutine. Call this on graceful shutdown.
-func (rl *RateLimiter) Stop() {
-	close(rl.stopGC)
+func (kl *KeyLimiter) Stop() {
+	close(kl.stopGC)
 }

@@ -145,7 +145,9 @@ func main() {
 	jwtService := infra.NewJWTService(cfg.JWT.Secret, cfg.JWT.Issuer)
 	mailSettingsRepo := mailInfra.NewGormSettingsRepo(db)
 	mailCodeRepo := mailInfra.NewGormVerificationCodeRepo(db)
-	mailSvc := mailApp.NewMailAppService(mailSettingsRepo, mailCodeRepo, mailInfra.NewSMTPSender())
+	mailCodeLimiter := ratelimit.NewKeyLimiter(1.0/60, 1)
+	mailSvc := mailApp.NewMailAppService(mailSettingsRepo, mailCodeRepo, mailInfra.NewSMTPSender(), mailCodeLimiter)
+
 	if err := mailSvc.EnsurePublicBaseURL(context.Background(), cfg.Server.PublicBaseURL); err != nil {
 		log.Printf("[api] invalid server.public_base_url ignored: %v", err)
 	}
@@ -654,6 +656,7 @@ func main() {
 	authRL := ratelimit.ForRoutes(rlCfg.Auth.GlobalQPS, rlCfg.Auth.IPMaxQPS)
 	standardRL := ratelimit.ForRoutes(rlCfg.Standard.GlobalQPS, rlCfg.Standard.IPMaxQPS)
 	adminRL := ratelimit.ForRoutes(rlCfg.Admin.GlobalQPS, rlCfg.Admin.IPMaxQPS)
+	emailCodeRL := ratelimit.ForRoutesWithIPBurst(0, 1.0/60.0, 1.0)
 
 	log.Printf("[api] tiered rate limiters enabled:")
 	log.Printf("[api]   baseline  = global %.0f QPS, per-IP %.0f QPS", rlCfg.Baseline.GlobalQPS, rlCfg.Baseline.IPMaxQPS)
@@ -699,10 +702,10 @@ func main() {
 	{
 		// ── Auth tier (strict per-IP: anti brute-force) ────────────────
 		v1.GET("/auth/options", authRL, mailHandler.PublicOptions)
-		v1.POST("/auth/register/code", authRL, mailHandler.SendRegistrationCode)
+		v1.POST("/auth/register/code", emailCodeRL, authRL, mailHandler.SendRegistrationCode)
+		v1.POST("/auth/password/forgot", emailCodeRL, authRL, mailHandler.SendPasswordResetCode)
 		v1.POST("/auth/register", authRL, authHandler.Register)
 		v1.POST("/auth/login", authRL, authHandler.Login)
-		v1.POST("/auth/password/forgot", authRL, mailHandler.SendPasswordResetCode)
 		v1.POST("/auth/password/reset", authRL, mailHandler.ResetPassword)
 
 		// ── Critical tier + Adaptive Cache (user ordering flow) ────────

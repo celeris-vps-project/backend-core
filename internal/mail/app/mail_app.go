@@ -2,6 +2,7 @@ package app
 
 import (
 	"backend-core/internal/mail/domain"
+	"backend-core/pkg/ratelimit"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -43,14 +44,17 @@ type MailAppService struct {
 	codeRepo     domain.VerificationCodeRepository
 	sender       Sender
 	now          func() time.Time
+	limiter      *ratelimit.KeyLimiter
 }
 
-func NewMailAppService(settingsRepo domain.SettingsRepository, codeRepo domain.VerificationCodeRepository, sender Sender) *MailAppService {
+func NewMailAppService(settingsRepo domain.SettingsRepository, codeRepo domain.VerificationCodeRepository, sender Sender, emailRateLimiter *ratelimit.KeyLimiter) *MailAppService {
+
 	return &MailAppService{
 		settingsRepo: settingsRepo,
 		codeRepo:     codeRepo,
 		sender:       sender,
 		now:          time.Now,
+		limiter:      emailRateLimiter,
 	}
 }
 
@@ -212,9 +216,21 @@ func (s *MailAppService) sendCode(ctx context.Context, email, purpose, subject s
 	if err != nil {
 		return err
 	}
+	if !s.limiter.Allow(email) {
+		return errorsAsMailSend("only one code can be sent per minute")
+	}
 	code, err := generateCode()
 	if err != nil {
 		return err
+	}
+
+	// Reuse here in ten minute
+	if code, err := s.codeRepo.FindLatestValid(ctx, email, purpose, time.Now()); err == nil && code != nil {
+		body := fmt.Sprintf("Your Celeris verification code is %s. It expires in 10 minutes.", code.Plain)
+		if err := s.sender.Send(ctx, settings.SMTP, email, subject, body); err != nil {
+			return fmt.Errorf("%w: %v", domain.ErrMailSendFailed, err)
+		}
+		return nil
 	}
 
 	now := s.now()
@@ -222,6 +238,7 @@ func (s *MailAppService) sendCode(ctx context.Context, email, purpose, subject s
 		ID:        uuid.New().String(),
 		Email:     email,
 		Purpose:   purpose,
+		Plain:     code,
 		CodeHash:  hashCode(email, purpose, code),
 		ExpiresAt: now.Add(verificationCodeTTL),
 		CreatedAt: now,
@@ -229,7 +246,6 @@ func (s *MailAppService) sendCode(ctx context.Context, email, purpose, subject s
 	if err := s.codeRepo.Create(ctx, record); err != nil {
 		return err
 	}
-
 	body := fmt.Sprintf("Your Celeris verification code is %s. It expires in 10 minutes.", code)
 	if err := s.sender.Send(ctx, settings.SMTP, email, subject, body); err != nil {
 		return fmt.Errorf("%w: %v", domain.ErrMailSendFailed, err)
