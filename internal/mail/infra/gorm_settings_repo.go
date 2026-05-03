@@ -13,6 +13,7 @@ import (
 type MailSettingsPO struct {
 	ID                              string `gorm:"primaryKey;size:32"`
 	RegistrationVerificationEnabled bool   `gorm:"column:registration_verification_enabled;default:false"`
+	PublicBaseURL                   string `gorm:"column:public_base_url;size:512"`
 	SMTPEnabled                     bool   `gorm:"column:smtp_enabled;default:false"`
 	SMTPHost                        string `gorm:"column:smtp_host;size:255"`
 	SMTPPort                        int    `gorm:"column:smtp_port;default:587"`
@@ -67,6 +68,7 @@ func (r *GormSettingsRepo) Save(ctx context.Context, settings *domain.Settings) 
 func poToSettings(po *MailSettingsPO) *domain.Settings {
 	return &domain.Settings{
 		RegistrationVerificationEnabled: po.RegistrationVerificationEnabled,
+		PublicBaseURL:                   po.PublicBaseURL,
 		SMTP: domain.SMTPSettings{
 			Enabled:     po.SMTPEnabled,
 			Host:        po.SMTPHost,
@@ -85,6 +87,7 @@ func settingsToPO(settings *domain.Settings) *MailSettingsPO {
 	return &MailSettingsPO{
 		ID:                              domain.DefaultSettingsID,
 		RegistrationVerificationEnabled: settings.RegistrationVerificationEnabled,
+		PublicBaseURL:                   settings.PublicBaseURL,
 		SMTPEnabled:                     settings.SMTP.Enabled,
 		SMTPHost:                        settings.SMTP.Host,
 		SMTPPort:                        settings.SMTP.Port,

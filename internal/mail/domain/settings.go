@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"net/mail"
+	"net/url"
 	"strings"
 )
 
@@ -34,6 +35,7 @@ type SMTPSettings struct {
 
 type Settings struct {
 	RegistrationVerificationEnabled bool
+	PublicBaseURL                   string
 	SMTP                            SMTPSettings
 }
 
@@ -50,6 +52,26 @@ func DefaultSettings() *Settings {
 
 func (s Settings) RegistrationVerificationRequired() bool {
 	return s.RegistrationVerificationEnabled && s.SMTP.Enabled
+}
+
+func NormalizePublicBaseURL(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", nil
+	}
+	if !strings.Contains(value, "://") {
+		value = "https://" + value
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", errors.New("public base url is invalid")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", errors.New("public base url scheme must be http or https")
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
 func (s SMTPSettings) Validate() error {

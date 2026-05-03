@@ -4,6 +4,8 @@
 # server config
 server:
   domain: "www.example.com"
+  # Optional bootstrap value for admin general settings public_base_url.
+  # After startup, update it in Admin -> General without restarting the API.
   public_base_url: "https://www.example.com"
   port: 8080
   listen: 0.0.0.0

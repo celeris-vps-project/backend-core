@@ -20,6 +20,7 @@ import (
 	instanceHttp "backend-core/internal/instance/interfaces/http"
 	instanceWs "backend-core/internal/instance/interfaces/ws"
 	mailApp "backend-core/internal/mail/app"
+	mailDomain "backend-core/internal/mail/domain"
 	mailInfra "backend-core/internal/mail/infra"
 	mailHttp "backend-core/internal/mail/interfaces/http"
 	orderingApp "backend-core/internal/ordering/app"
@@ -57,7 +58,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -146,6 +146,9 @@ func main() {
 	mailSettingsRepo := mailInfra.NewGormSettingsRepo(db)
 	mailCodeRepo := mailInfra.NewGormVerificationCodeRepo(db)
 	mailSvc := mailApp.NewMailAppService(mailSettingsRepo, mailCodeRepo, mailInfra.NewSMTPSender())
+	if err := mailSvc.EnsurePublicBaseURL(context.Background(), cfg.Server.PublicBaseURL); err != nil {
+		log.Printf("[api] invalid server.public_base_url ignored: %v", err)
+	}
 	var msgClient *messageclient.Client
 	var registrationNotifier app.RegistrationNotifier
 	var instanceProvisionedNotifier *messageclient.InstanceProvisionedNotifier
@@ -516,24 +519,21 @@ func main() {
 	providerSvc.RegisterFactory(paymentDomain.ProviderTypeEPay, func(cfg *paymentDomain.PaymentProviderConfig, cb func(*paymentDomain.WebhookPayload)) paymentDomain.PaymentProvider {
 		return paymentInfra.NewEPayPaymentProvider(cfg, cb)
 	})
-	// Register notify URL builder — used by ProviderAppService to auto-fill EPay config.
-	// Builds an absolute URL using the configured public base URL so that external
-	// payment gateways (EPay) can call back to this server.
-	providerSvc.RegisterNotifyURLBuilder(func(providerID string) string {
-		if baseURL := strings.TrimRight(strings.TrimSpace(cfg.Server.PublicBaseURL), "/"); baseURL != "" {
-			return baseURL + "/api/v1/payments/webhook/epay/" + providerID
+	// Register notify URL builder. EPay callback URLs are derived from the
+	// runtime admin general setting, not persisted into provider config.
+	providerSvc.RegisterNotifyURLBuilder(func(providerID string) (string, error) {
+		settings, err := mailSvc.GetSettings(context.Background())
+		if err != nil {
+			return "", err
 		}
-		domain := cfg.Server.Domain
-		port := cfg.Server.Port.String()
-		scheme := "https"
-		if domain == "localhost" || domain == "127.0.0.1" {
-			scheme = "http"
+		baseURL, err := mailDomain.NormalizePublicBaseURL(settings.PublicBaseURL)
+		if err != nil {
+			return "", err
 		}
-		host := domain
-		if port != "443" && port != "80" && port != "" {
-			host = host + ":" + port
+		if baseURL == "" {
+			return "", paymentDomain.ErrPublicBaseURLRequired
 		}
-		return scheme + "://" + host + "/api/v1/payments/webhook/epay/" + providerID
+		return baseURL + "/api/v1/payments/webhook/epay/" + providerID, nil
 	})
 	cryptoProvider := paymentInfra.NewCryptoPaymentProvider(&cryptoCfg, nil) // callback set below
 

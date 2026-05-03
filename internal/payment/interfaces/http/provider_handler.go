@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"errors"
 
 	paymentApp "backend-core/internal/payment/app"
 	"backend-core/internal/payment/domain"
@@ -46,12 +47,9 @@ func (h *ProviderHandler) Create(ctx context.Context, c *hz_app.RequestContext) 
 
 	p, err := h.svc.CreateProvider(req.Type, req.Name, req.SortOrder, req.Config)
 	if err != nil {
-		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(apperr.CodeInternalError, err.Error()))
+		writeProviderError(c, err, consts.StatusUnprocessableEntity, apperr.CodeInternalError)
 		return
 	}
-
-	// EPay notify_url is now auto-filled by ProviderAppService.CreateProvider()
-	// via the registered NotifyURLBuilder — no infra import needed here.
 
 	c.JSON(consts.StatusCreated, utils.H{"data": p})
 }
@@ -95,7 +93,7 @@ func (h *ProviderHandler) Update(ctx context.Context, c *hz_app.RequestContext) 
 
 	p, err := h.svc.UpdateProvider(id, req.Name, req.SortOrder, req.Config)
 	if err != nil {
-		c.JSON(consts.StatusNotFound, apperr.Resp(apperr.CodeProviderNotFound, err.Error()))
+		writeProviderError(c, err, consts.StatusNotFound, apperr.CodeProviderNotFound)
 		return
 	}
 
@@ -106,7 +104,7 @@ func (h *ProviderHandler) Update(ctx context.Context, c *hz_app.RequestContext) 
 func (h *ProviderHandler) Enable(ctx context.Context, c *hz_app.RequestContext) {
 	id := c.Param("id")
 	if err := h.svc.EnableProvider(id); err != nil {
-		c.JSON(consts.StatusNotFound, apperr.Resp(apperr.CodeProviderNotFound, err.Error()))
+		writeProviderError(c, err, consts.StatusNotFound, apperr.CodeProviderNotFound)
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"message": "provider enabled"})
@@ -179,4 +177,12 @@ func (h *ProviderHandler) ListEnabled(ctx context.Context, c *hz_app.RequestCont
 	}
 
 	c.JSON(consts.StatusOK, utils.H{"data": result})
+}
+
+func writeProviderError(c *hz_app.RequestContext, err error, fallbackStatus int, fallbackCode string) {
+	if errors.Is(err, domain.ErrPublicBaseURLRequired) {
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
+		return
+	}
+	c.JSON(fallbackStatus, apperr.Resp(fallbackCode, err.Error()))
 }

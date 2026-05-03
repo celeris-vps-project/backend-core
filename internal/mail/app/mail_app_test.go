@@ -46,7 +46,7 @@ func TestRegistrationVerificationRequiredNeedsSMTPEnabled(t *testing.T) {
 	svc, _ := newMailTestApp(t)
 	ctx := context.Background()
 
-	if _, err := svc.UpdateGeneral(ctx, true); err != nil {
+	if _, err := svc.UpdateGeneral(ctx, GeneralUpdate{RegistrationVerificationEnabled: true}); err != nil {
 		t.Fatalf("UpdateGeneral: %v", err)
 	}
 	required, err := svc.IsRegistrationVerificationRequired(ctx)

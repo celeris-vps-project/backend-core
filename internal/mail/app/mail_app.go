@@ -33,6 +33,11 @@ type SMTPUpdate struct {
 	UseStartTLS bool
 }
 
+type GeneralUpdate struct {
+	RegistrationVerificationEnabled bool
+	PublicBaseURL                   string
+}
+
 type MailAppService struct {
 	settingsRepo domain.SettingsRepository
 	codeRepo     domain.VerificationCodeRepository
@@ -53,16 +58,37 @@ func (s *MailAppService) GetSettings(ctx context.Context) (*domain.Settings, err
 	return s.settingsRepo.Get(ctx)
 }
 
-func (s *MailAppService) UpdateGeneral(ctx context.Context, registrationVerificationEnabled bool) (*domain.Settings, error) {
+func (s *MailAppService) UpdateGeneral(ctx context.Context, update GeneralUpdate) (*domain.Settings, error) {
 	settings, err := s.settingsRepo.Get(ctx)
 	if err != nil {
 		return nil, err
 	}
-	settings.RegistrationVerificationEnabled = registrationVerificationEnabled
+	publicBaseURL, err := domain.NormalizePublicBaseURL(update.PublicBaseURL)
+	if err != nil {
+		return nil, err
+	}
+	settings.RegistrationVerificationEnabled = update.RegistrationVerificationEnabled
+	settings.PublicBaseURL = publicBaseURL
 	if err := s.settingsRepo.Save(ctx, settings); err != nil {
 		return nil, err
 	}
 	return settings, nil
+}
+
+func (s *MailAppService) EnsurePublicBaseURL(ctx context.Context, raw string) error {
+	publicBaseURL, err := domain.NormalizePublicBaseURL(raw)
+	if err != nil || publicBaseURL == "" {
+		return err
+	}
+	settings, err := s.settingsRepo.Get(ctx)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(settings.PublicBaseURL) != "" {
+		return nil
+	}
+	settings.PublicBaseURL = publicBaseURL
+	return s.settingsRepo.Save(ctx, settings)
 }
 
 func (s *MailAppService) UpdateSMTP(ctx context.Context, update SMTPUpdate) (*domain.Settings, error) {

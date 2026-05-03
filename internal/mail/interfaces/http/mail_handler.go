@@ -95,9 +95,10 @@ func (h *MailHandler) ResetPassword(ctx context.Context, c *hz_app.RequestContex
 }
 
 type generalSettingsResponse struct {
-	RegistrationVerificationEnabled  bool `json:"registration_verification_enabled"`
-	RegistrationVerificationRequired bool `json:"registration_verification_required"`
-	SMTPEnabled                      bool `json:"smtp_enabled"`
+	RegistrationVerificationEnabled  bool   `json:"registration_verification_enabled"`
+	RegistrationVerificationRequired bool   `json:"registration_verification_required"`
+	SMTPEnabled                      bool   `json:"smtp_enabled"`
+	PublicBaseURL                    string `json:"public_base_url"`
 }
 
 func (h *MailHandler) GetGeneral(ctx context.Context, c *hz_app.RequestContext) {
@@ -110,11 +111,13 @@ func (h *MailHandler) GetGeneral(ctx context.Context, c *hz_app.RequestContext) 
 		RegistrationVerificationEnabled:  settings.RegistrationVerificationEnabled,
 		RegistrationVerificationRequired: settings.RegistrationVerificationRequired(),
 		SMTPEnabled:                      settings.SMTP.Enabled,
+		PublicBaseURL:                    settings.PublicBaseURL,
 	}})
 }
 
 type updateGeneralRequest struct {
-	RegistrationVerificationEnabled bool `json:"registration_verification_enabled"`
+	RegistrationVerificationEnabled bool   `json:"registration_verification_enabled"`
+	PublicBaseURL                   string `json:"public_base_url"`
 }
 
 func (h *MailHandler) UpdateGeneral(ctx context.Context, c *hz_app.RequestContext) {
@@ -123,7 +126,10 @@ func (h *MailHandler) UpdateGeneral(ctx context.Context, c *hz_app.RequestContex
 		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, "invalid request body"))
 		return
 	}
-	settings, err := h.mailApp.UpdateGeneral(ctx, req.RegistrationVerificationEnabled)
+	settings, err := h.mailApp.UpdateGeneral(ctx, mailApp.GeneralUpdate{
+		RegistrationVerificationEnabled: req.RegistrationVerificationEnabled,
+		PublicBaseURL:                   req.PublicBaseURL,
+	})
 	if err != nil {
 		writeMailError(c, err)
 		return
@@ -132,6 +138,7 @@ func (h *MailHandler) UpdateGeneral(ctx context.Context, c *hz_app.RequestContex
 		RegistrationVerificationEnabled:  settings.RegistrationVerificationEnabled,
 		RegistrationVerificationRequired: settings.RegistrationVerificationRequired(),
 		SMTPEnabled:                      settings.SMTP.Enabled,
+		PublicBaseURL:                    settings.PublicBaseURL,
 	}})
 }
 

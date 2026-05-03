@@ -1,19 +1,25 @@
 package domain
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+var ErrPublicBaseURLRequired = errors.New("public_base_url is required before configuring EPay; set it in admin general settings")
 
 // PaymentProviderConfig represents a payment provider configured by the admin.
 // Instead of hardcoding payment methods, admins dynamically add providers
 // (e.g. crypto wallets, Stripe, PayPal) and users choose at checkout time.
 type PaymentProviderConfig struct {
-	ID        string                 `json:"id"`
-	Type      string                 `json:"type"` // "crypto_usdt", "stripe", "paypal", "alipay", etc.
-	Name      string                 `json:"name"` // Display name, e.g. "USDT (Multi-Chain)"
-	Enabled   bool                   `json:"enabled"`
-	SortOrder int                    `json:"sort_order"` // Lower = higher priority in display
-	Config    map[string]interface{} `json:"config"`     // Provider-specific configuration (JSON)
-	CreatedAt time.Time              `json:"created_at"`
-	UpdatedAt time.Time              `json:"updated_at"`
+	ID         string                 `json:"id"`
+	Type       string                 `json:"type"` // "crypto_usdt", "stripe", "paypal", "alipay", etc.
+	Name       string                 `json:"name"` // Display name, e.g. "USDT (Multi-Chain)"
+	Enabled    bool                   `json:"enabled"`
+	SortOrder  int                    `json:"sort_order"` // Lower = higher priority in display
+	Config     map[string]interface{} `json:"config"`     // Provider-specific configuration (JSON)
+	WebhookURL string                 `json:"webhook_url,omitempty"`
+	CreatedAt  time.Time              `json:"created_at"`
+	UpdatedAt  time.Time              `json:"updated_at"`
 }
 
 // Well-known provider types.
@@ -109,7 +115,6 @@ func SupportedProviderTypes() []ProviderTypeInfo {
 				{Key: "webhook_secret", Label: "Webhook Secret", Type: "string", Required: true, HelpText: "Secret used to verify POST webhooks with HMAC-SHA256(timestamp + '.' + body)"},
 				{Key: "timestamp_header", Label: "Webhook Timestamp Header", Type: "string", Required: false, Placeholder: "timestamp", HelpText: "Optional. Defaults to timestamp. For v1-style webhook verification, change this only when the gateway uses a non-standard timestamp header name (for example x-my-timestamp)."},
 				{Key: "signature_header", Label: "Webhook Signature Header", Type: "string", Required: false, Placeholder: "signature", HelpText: "Optional. Defaults to signature. For v1-style webhook verification, change this only when the gateway uses a non-standard signature header name (for example x-my-signature)."},
-				{Key: "notify_url", Label: "Notify URL", Type: "string", Required: false, Placeholder: "Auto-generated after creation", HelpText: "Async callback URL for EPay gateway. Auto-filled: /api/v1/payments/webhook/epay/{id}"},
 				{Key: "return_url", Label: "Return URL", Type: "string", Required: false, Placeholder: "https://your-site.com/orders/{order_id}/checkout", HelpText: "Browser redirect URL after payment success"},
 				{Key: "product_name", Label: "Product Name Template", Type: "string", Required: false, Placeholder: "VPS Service", HelpText: "Product name sent to EPay. Default: 'VPS Service'"},
 				{Key: "mock_mode", Label: "Mock Mode", Type: "bool", Required: false, HelpText: "Auto-confirm payments after a short delay (for testing)"},

@@ -4,6 +4,7 @@ import (
 	"backend-core/internal/payment/domain"
 	"backend-core/pkg/apperr"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -266,7 +267,7 @@ func (s *PaymentAppService) chargeViaDynamicProvider(ctx context.Context, req *I
 	case domain.ProviderTypeEPay:
 		prov, err := s.providerSvc.GetProvider(providerCfg.ID)
 		if err != nil {
-			return nil, apperr.ErrNotFound(apperr.CodeProviderNotFound, "unexpected payment provider failed: "+err.Error())
+			return nil, providerRuntimeError(err)
 		}
 		res, err := prov.CreateCharge(ctx, order.ID, order.Currency, order.PriceAmount)
 		if err != nil {
@@ -370,7 +371,7 @@ func (s *PaymentAppService) VerifyProviderWebhook(providerID string, rawBody []b
 
 	provider, err := s.providerSvc.GetProvider(providerID)
 	if err != nil {
-		return nil, apperr.ErrInternal("failed to construct provider: " + err.Error())
+		return nil, providerRuntimeError(err)
 	}
 
 	payload, err := provider.VerifyWebhook(rawBody, headers)
@@ -378,6 +379,13 @@ func (s *PaymentAppService) VerifyProviderWebhook(providerID string, rawBody []b
 		return nil, apperr.ErrBadRequest(apperr.CodeWebhookFailed, "webhook verification failed: "+err.Error())
 	}
 	return payload, nil
+}
+
+func providerRuntimeError(err error) error {
+	if errors.Is(err, domain.ErrPublicBaseURLRequired) {
+		return apperr.ErrUnprocessable(apperr.CodeInvalidParams, err.Error())
+	}
+	return apperr.ErrInternal("failed to construct provider: " + err.Error())
 }
 
 // GetCryptoNetworks returns supported blockchain networks.

@@ -14,8 +14,8 @@ type ProviderFactory func(cfg *domain.PaymentProviderConfig, callback func(*doma
 
 // NotifyURLBuilder builds the webhook callback URL for a given provider.
 // Infra registers an implementation at startup so the app layer can
-// auto-fill the notify_url without importing infra.
-type NotifyURLBuilder func(providerID string) string
+// derive the notify_url without importing infra.
+type NotifyURLBuilder func(providerID string) (string, error)
 
 // IDGen generates unique IDs. Reuses the same interface used by other contexts.
 type IDGen interface {
@@ -49,7 +49,7 @@ func (s *ProviderAppService) RegisterFactory(providerType string, factory Provid
 }
 
 // RegisterNotifyURLBuilder registers a function that builds webhook callback
-// URLs. Called at startup so the app layer can auto-fill provider configs
+// URLs. Called at startup so the app layer can derive runtime callback config
 // without importing infra.
 func (s *ProviderAppService) RegisterNotifyURLBuilder(builder NotifyURLBuilder) {
 	s.notifyURLBuilder = builder
@@ -76,8 +76,10 @@ func (s *ProviderAppService) CreateProvider(providerType, name string, sortOrder
 		UpdatedAt: now,
 	}
 
-	// Auto-fill provider-specific config fields (e.g. EPay notify_url)
-	s.autoFillConfig(p)
+	// Validate and normalize provider-specific config before persistence.
+	if err := s.prepareForStorage(p, true); err != nil {
+		return nil, err
+	}
 
 	if err := s.repo.Create(p); err != nil {
 		return nil, fmt.Errorf("create provider: %w", err)
@@ -87,39 +89,102 @@ func (s *ProviderAppService) CreateProvider(providerType, name string, sortOrder
 	return p, nil
 }
 
-// autoFillConfig fills in computed config fields for specific provider types.
-// For EPay: auto-generates the notify_url and defaults pay_type to "alipay".
-func (s *ProviderAppService) autoFillConfig(p *domain.PaymentProviderConfig) {
+// prepareForStorage normalizes provider config before persistence. EPay
+// notify_url is derived at runtime, so stale values are stripped from storage.
+func (s *ProviderAppService) prepareForStorage(p *domain.PaymentProviderConfig, requireWebhookURL bool) error {
 	if p.Type != domain.ProviderTypeEPay {
-		return
+		return nil
 	}
 	if p.Config == nil {
 		p.Config = make(map[string]interface{})
 	}
-	// EPay notify_url is derived from server public_base_url. Always refresh it
-	// so stale persisted values do not leak old listen ports into new charges.
-	if s.notifyURLBuilder != nil {
-		p.Config["notify_url"] = s.notifyURLBuilder(p.ID)
-	}
+	delete(p.Config, "notify_url")
 	// Default pay_type to "alipay" if not provided
 	if existing, _ := p.Config["pay_type"].(string); existing == "" {
 		p.Config["pay_type"] = "alipay"
 	}
+	if requireWebhookURL {
+		return s.attachWebhookURL(p)
+	}
+	s.attachWebhookURLBestEffort(p)
+	return nil
+}
+
+func (s *ProviderAppService) attachWebhookURL(p *domain.PaymentProviderConfig) error {
+	if p.Type != domain.ProviderTypeEPay {
+		return nil
+	}
+	if s.notifyURLBuilder == nil {
+		return domain.ErrPublicBaseURLRequired
+	}
+	webhookURL, err := s.notifyURLBuilder(p.ID)
+	if err != nil {
+		return err
+	}
+	if webhookURL == "" {
+		return domain.ErrPublicBaseURLRequired
+	}
+	p.WebhookURL = webhookURL
+	return nil
+}
+
+func (s *ProviderAppService) attachWebhookURLBestEffort(p *domain.PaymentProviderConfig) {
+	_ = s.attachWebhookURL(p)
+}
+
+func (s *ProviderAppService) runtimeConfig(p *domain.PaymentProviderConfig) (*domain.PaymentProviderConfig, error) {
+	cfg := *p
+	if p.Config != nil {
+		cfg.Config = make(map[string]interface{}, len(p.Config)+1)
+		for k, v := range p.Config {
+			if k != "notify_url" {
+				cfg.Config[k] = v
+			}
+		}
+	} else {
+		cfg.Config = make(map[string]interface{}, 1)
+	}
+	if cfg.Type == domain.ProviderTypeEPay {
+		if err := s.attachWebhookURL(&cfg); err != nil {
+			return nil, err
+		}
+		cfg.Config["notify_url"] = cfg.WebhookURL
+	}
+	return &cfg, nil
 }
 
 // GetProviderConfig returns a single provider by ID.
 func (s *ProviderAppService) GetProviderConfig(id string) (*domain.PaymentProviderConfig, error) {
-	return s.repo.GetByID(id)
+	p, err := s.repo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	_ = s.prepareForStorage(p, false)
+	return p, nil
 }
 
 // ListAllProviders returns all providers (for admin).
 func (s *ProviderAppService) ListAllProviders() ([]*domain.PaymentProviderConfig, error) {
-	return s.repo.ListAll()
+	providers, err := s.repo.ListAll()
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range providers {
+		_ = s.prepareForStorage(p, false)
+	}
+	return providers, nil
 }
 
 // ListEnabledProviders returns only enabled providers (for user-facing display).
 func (s *ProviderAppService) ListEnabledProviders() ([]*domain.PaymentProviderConfig, error) {
-	return s.repo.ListEnabled()
+	providers, err := s.repo.ListEnabled()
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range providers {
+		_ = s.prepareForStorage(p, false)
+	}
+	return providers, nil
 }
 
 // UpdateProvider updates a provider's configuration.
@@ -136,7 +201,9 @@ func (s *ProviderAppService) UpdateProvider(id, name string, sortOrder int, conf
 	if config != nil {
 		existing.Config = config
 	}
-	s.autoFillConfig(existing)
+	if err := s.prepareForStorage(existing, true); err != nil {
+		return nil, err
+	}
 	existing.UpdatedAt = time.Now()
 
 	if err := s.repo.Update(existing); err != nil {
@@ -155,6 +222,9 @@ func (s *ProviderAppService) EnableProvider(id string) error {
 		return fmt.Errorf("provider not found: %w", err)
 	}
 	p.Enabled = true
+	if err := s.prepareForStorage(p, true); err != nil {
+		return err
+	}
 	p.UpdatedAt = time.Now()
 	if err := s.repo.Update(p); err != nil {
 		return err
@@ -170,6 +240,9 @@ func (s *ProviderAppService) DisableProvider(id string) error {
 		return fmt.Errorf("provider not found: %w", err)
 	}
 	p.Enabled = false
+	if err := s.prepareForStorage(p, false); err != nil {
+		return err
+	}
 	p.UpdatedAt = time.Now()
 	if err := s.repo.Update(p); err != nil {
 		return err
@@ -210,14 +283,20 @@ func (s *ProviderAppService) GetProvider(id string) (domain.PaymentProvider, err
 	if err != nil {
 		return nil, fmt.Errorf("provider not found: %w", err)
 	}
-	s.autoFillConfig(cfg)
-
-	factory, ok := s.factories[cfg.Type]
-	if !ok {
-		return nil, fmt.Errorf("no factory registered for provider type %q", cfg.Type)
+	runtimeCfg, err := s.runtimeConfig(cfg)
+	if err != nil {
+		return nil, err
 	}
 
-	prov := factory(cfg, s.callback)
+	factory, ok := s.factories[runtimeCfg.Type]
+	if !ok {
+		return nil, fmt.Errorf("no factory registered for provider type %q", runtimeCfg.Type)
+	}
+
+	prov := factory(runtimeCfg, s.callback)
+	if runtimeCfg.Type == domain.ProviderTypeEPay {
+		return prov, nil
+	}
 	s.cache.LoadOrStore(id, prov)
 	return prov, nil
 }

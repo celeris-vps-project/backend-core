@@ -51,7 +51,9 @@ var (
 	// httpClient is shared across all EPay providers. Individual requests
 	// use context-based deadlines, so the client timeout is set generously
 	// as a safety net only.
-	httpClient = &http.Client{Timeout: 30 * time.Second}
+	httpClient = &http.Client{
+		Timeout: 30 * time.Second,
+	}
 )
 
 const (
@@ -297,8 +299,31 @@ func (p *EPayPaymentProvider) createChargeV1(chargeID, orderID, money string) (s
 	for k, v := range params {
 		q.Set(k, v)
 	}
+	httpClient := *httpClient
+	httpClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	res, err := httpClient.PostForm(submitURL, q)
+	if err != nil {
+		return "", err
+	}
 
-	fullURL := submitURL + "?" + q.Encode()
+	defer res.Body.Close()
+	_, err = io.ReadAll(res.Body)
+	if err != nil {
+		return "", err
+	}
+	if res.StatusCode != 302 {
+		return "", fmt.Errorf("[EPayProvider:%s] V1 redirect URL Expected 302, found %d",
+			p.providerID[:8], res.StatusCode)
+	}
+
+	if res.Header.Get("Location") == "" {
+		return "", fmt.Errorf("[EPayProvider:%s] V1 redirect URL Expected Location not found",
+			p.providerID[:8])
+	}
+
+	fullURL := res.Header.Get("Location")
 
 	log.Printf("[EPayProvider:%s] V1 redirect URL built: order=%s url=%s",
 		p.providerID[:8], orderID, submitURL)
@@ -883,8 +908,8 @@ func parseRSAPublicKey(pemStr string) (*rsa.PublicKey, error) {
 
 // ── Static helpers ─────────────────────────────────────────────────────
 
-// BuildEPayNotifyURL generates the standard webhook callback URL for an
-// EPay provider. Called after provider creation to auto-fill the notify_url.
+// BuildEPayNotifyURL generates the standard relative webhook callback URL for
+// an EPay provider.
 func BuildEPayNotifyURL(providerID string) string {
 	return fmt.Sprintf("/api/v1/payments/webhook/epay/%s", providerID)
 }
