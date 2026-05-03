@@ -133,7 +133,7 @@ func main() {
 		&provisioningInfra.RegionPO{}, &provisioningInfra.ResourcePoolPO{}, &provisioningInfra.HostNodePO{},
 		&provisioningInfra.IPAddressPO{}, &provisioningInfra.NATPortAllocationPO{}, &provisioningInfra.TaskPO{},
 		&provisioningInfra.BootstrapTokenPO{},
-		&paymentInfra.PaymentProviderPO{},
+		&paymentInfra.PaymentProviderPO{}, &paymentInfra.PaymentAttemptPO{},
 		&mailInfra.MailSettingsPO{}, &mailInfra.MailVerificationCodePO{},
 	); err != nil {
 		log.Fatalf("failed to migrate database schema: %v", err)
@@ -550,6 +550,7 @@ func main() {
 	paySvc := paymentApp.NewPaymentAppService(providerSvc, postPayOrch, cryptoProvider)
 	paySvc.SetRenewalService(renewalSvc)
 	paySvc.SetCouponApplier(promotionInfra.NewPaymentCouponAdapter(couponApp))
+	paySvc.SetPaymentAttemptStore(paymentInfra.NewGormPaymentAttemptRepo(db), idGen)
 	// PaymentHandler is now a thin HTTP adapter — only parses/serialises.
 	payHandler := paymentHttp.NewPaymentHandler(paySvc)
 	providerHandler := paymentHttp.NewProviderHandler(providerSvc)
@@ -578,6 +579,8 @@ func main() {
 	cryptoProvider.SetCallback(paySvc.HandleWebhookPayload)
 	// Also set the callback on providerSvc so factory-built providers can use it.
 	providerSvc.SetCallback(paySvc.HandleWebhookPayload)
+	pendingPaymentPollerCtx, pendingPaymentPollerCancel := context.WithCancel(context.Background())
+	paySvc.StartPendingPaymentPoller(pendingPaymentPollerCtx, 15*time.Second)
 
 	// Region handler (using ProvisioningAppService)
 	rHandler := provisioningHttp.NewRegionHandler(provSvc)
@@ -742,9 +745,10 @@ func main() {
 		// Dropping a payment callback could leave orders in limbo.
 		v1.POST("/payments/webhook", payHandler.Webhook)
 		v1.POST("/payments/webhook/simulate", payHandler.SimulateWebhook)
-		// EPay (易支付) webhook — receives POST callbacks from EPay gateways.
+		// EPay (易支付) webhook — receives GET/POST callbacks from EPay gateways.
 		// Verifies the common v1 MD5 form signature.
 		// Route: /api/v1/payments/webhook/epay/:providerId
+		v1.GET("/payments/webhook/epay/:providerId", payHandler.EPayWebhook)
 		v1.POST("/payments/webhook/epay/:providerId", payHandler.EPayWebhook)
 		v1.GET("/payments/return/epay/:providerId", payHandler.EPayReturn)
 	}
@@ -975,6 +979,8 @@ func main() {
 	// 2. Stop background workers
 	provPollerCancel() // stop provision poller goroutine
 	log.Printf("[api] provision poller stopped")
+	pendingPaymentPollerCancel()
+	log.Printf("[api] pending payment poller stopped")
 	renewalWorkerCancel()
 	log.Printf("[api] renewal worker stopped")
 

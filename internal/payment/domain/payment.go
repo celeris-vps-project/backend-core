@@ -1,10 +1,15 @@
 package domain
 
-import "context"
+import (
+	"context"
+	"errors"
+	"time"
+)
 
 // ChargeResult represents the outcome of a payment charge request.
 type ChargeResult struct {
 	ChargeID   string              // unique identifier from the payment gateway
+	OutTradeNo string              // merchant-side payment attempt id sent to the gateway
 	Status     string              // "success", "pending", "failed"
 	PaymentURL string              // redirect URL for hosted checkout (empty if direct charge)
 	Crypto     *CryptoChargeDetail // non-nil when payment is crypto (USDT)
@@ -15,6 +20,9 @@ const (
 	ChargeStatusPending = "pending"
 	ChargeStatusFailed  = "failed"
 )
+
+var ErrPaymentOrderNotFound = errors.New("payment order not found")
+var ErrPaymentAttemptNotFound = errors.New("payment attempt not found")
 
 // WebhookPayload is the normalised data extracted from a gateway callback.
 type WebhookPayload struct {
@@ -28,6 +36,57 @@ type WebhookPayload struct {
 // WebhookHeaders contains HTTP headers from a gateway callback.
 // Keys should be normalised to lower-case by the HTTP adapter.
 type WebhookHeaders map[string]string
+
+type PaymentOrderQuery struct {
+	OutTradeNo string
+	TradeNo    string
+}
+
+type PaymentOrderQueryResult struct {
+	ChargeID           string
+	OrderID            string
+	Status             string
+	Amount             string
+	ProviderMerchantID string
+	RawBody            []byte
+}
+
+func (r *PaymentOrderQueryResult) WebhookPayload() *WebhookPayload {
+	if r == nil {
+		return nil
+	}
+	return &WebhookPayload{
+		ChargeID: r.ChargeID,
+		OrderID:  r.OrderID,
+		Status:   r.Status,
+		RawBody:  r.RawBody,
+	}
+}
+
+type PaymentOrderQuerier interface {
+	QueryOrder(ctx context.Context, query PaymentOrderQuery) (*PaymentOrderQueryResult, error)
+}
+
+type PaymentAttempt struct {
+	ID         string
+	OrderID    string
+	ProviderID string
+	PayType    string
+	TradeNo    string
+	OutTradeNo string
+	PayURL     string
+	Status     string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+type PaymentAttemptRepo interface {
+	Create(ctx context.Context, attempt *PaymentAttempt) error
+	Update(ctx context.Context, attempt *PaymentAttempt) error
+	FindLatestByOrderID(ctx context.Context, orderID string) (*PaymentAttempt, error)
+	FindByOutTradeNo(ctx context.Context, outTradeNo string) (*PaymentAttempt, error)
+	ListPending(ctx context.Context, limit int) ([]*PaymentAttempt, error)
+}
 
 // PaymentProvider abstracts an external payment gateway (Stripe, Alipay, WeChat …).
 // Implement this interface for each real gateway; during the thesis stage a Mock

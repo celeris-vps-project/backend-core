@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -124,7 +125,7 @@ func (p *EPayPaymentProvider) CreateCharge(ctx context.Context, orderID string, 
 	var paymentURL string
 	var err error
 	if p.config.MockMode {
-		paymentURL = fmt.Sprintf("/orders/%s/payments/status", orderID)
+		paymentURL = fmt.Sprintf("/payment/result/%s", orderID)
 	} else {
 		paymentURL, err = p.createChargeV1(ctx, orderID, money)
 	}
@@ -134,6 +135,7 @@ func (p *EPayPaymentProvider) CreateCharge(ctx context.Context, orderID string, 
 
 	result := &domain.ChargeResult{
 		ChargeID:   chargeID,
+		OutTradeNo: orderID,
 		Status:     domain.ChargeStatusPending,
 		PaymentURL: paymentURL,
 	}
@@ -161,6 +163,7 @@ func (p *EPayPaymentProvider) CreateCharge(ctx context.Context, orderID string, 
 }
 
 func (p *EPayPaymentProvider) createChargeV1(ctx context.Context, orderID, money string) (string, error) {
+	_ = ctx
 	if p.config.APIURL == "" {
 		return "", fmt.Errorf("api_url is required")
 	}
@@ -199,39 +202,71 @@ func (p *EPayPaymentProvider) createChargeV1(ctx context.Context, orderID, money
 		form.Set(k, v)
 	}
 
-	submitURL := p.config.APIURL + "/submit.php"
-	client := *epayHTTPClient
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		return http.ErrUseLastResponse
+	submitURL := p.config.APIURL + "/submit.php?" + form.Encode()
+	log.Printf("[EPayProvider:%s] v1 submit url built: order=%s type=%s",
+		shortEPayID(p.providerID), orderID, p.config.PayType)
+	return submitURL, nil
+}
+
+func (p *EPayPaymentProvider) QueryOrder(ctx context.Context, query domain.PaymentOrderQuery) (*domain.PaymentOrderQueryResult, error) {
+	if p.config.MockMode {
+		return p.queryMockOrder(query)
+	}
+	if p.config.APIURL == "" {
+		return nil, fmt.Errorf("api_url is required")
+	}
+	if p.config.PID == "" {
+		return nil, fmt.Errorf("pid is required")
+	}
+	if p.config.MerchantKey == "" {
+		return nil, fmt.Errorf("merchant_key is required")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, submitURL, strings.NewReader(form.Encode()))
+	outTradeNo := strings.TrimSpace(query.OutTradeNo)
+	tradeNo := strings.TrimSpace(query.TradeNo)
+	if outTradeNo == "" && tradeNo == "" {
+		return nil, fmt.Errorf("out_trade_no or trade_no is required")
+	}
+
+	form := url.Values{}
+	form.Set("act", "order")
+	form.Set("pid", p.config.PID)
+	form.Set("key", p.config.MerchantKey)
+	if outTradeNo != "" {
+		form.Set("out_trade_no", outTradeNo)
+	}
+	if tradeNo != "" {
+		form.Set("trade_no", tradeNo)
+	}
+
+	endpoint := p.config.APIURL + "/api.php"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	res, err := client.Do(req)
+	res, err := epayHTTPClient.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer res.Body.Close()
 	body, readErr := io.ReadAll(res.Body)
 	if readErr != nil {
-		return "", readErr
+		return nil, readErr
 	}
-	if res.StatusCode != http.StatusFound {
-		return "", fmt.Errorf("submit.php expected 302, got %d: %s", res.StatusCode, string(body))
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, fmt.Errorf("api.php act=order returned %d: %s", res.StatusCode, string(body))
 	}
-
-	location := strings.TrimSpace(res.Header.Get("Location"))
-	if location == "" {
-		return "", fmt.Errorf("submit.php returned 302 without Location")
+	result, err := parseEPayOrderQueryResult(body, outTradeNo)
+	if err != nil {
+		return nil, err
 	}
-
-	log.Printf("[EPayProvider:%s] v1 submit accepted: order=%s type=%s",
-		shortEPayID(p.providerID), orderID, p.config.PayType)
-	return location, nil
+	if result.ProviderMerchantID != "" && result.ProviderMerchantID != p.config.PID {
+		return nil, fmt.Errorf("api.php act=order pid mismatch")
+	}
+	p.updateChargeStatus(result.OrderID, result.Status)
+	return result, nil
 }
 
 // VerifyWebhook validates a v1-compatible EPay form callback.
@@ -278,6 +313,87 @@ func (p *EPayPaymentProvider) verifySignV1(values url.Values, actual string) err
 	}
 	return nil
 }
+
+func (p *EPayPaymentProvider) queryMockOrder(query domain.PaymentOrderQuery) (*domain.PaymentOrderQueryResult, error) {
+	outTradeNo := strings.TrimSpace(query.OutTradeNo)
+	tradeNo := strings.TrimSpace(query.TradeNo)
+	var found *epayChargeRecord
+	p.charges.Range(func(_, value interface{}) bool {
+		rec := value.(*epayChargeRecord)
+		if outTradeNo != "" && rec.OrderID == outTradeNo {
+			found = rec
+			return false
+		}
+		if tradeNo != "" && rec.ChargeID == tradeNo {
+			found = rec
+			return false
+		}
+		return true
+	})
+	if found == nil {
+		return nil, domain.ErrPaymentOrderNotFound
+	}
+	return &domain.PaymentOrderQueryResult{
+		ChargeID:           found.ChargeID,
+		OrderID:            found.OrderID,
+		Status:             found.Status,
+		Amount:             fmt.Sprintf("%.2f", float64(found.Amount)/100.0),
+		ProviderMerchantID: p.config.PID,
+		RawBody:            []byte(fmt.Sprintf("mock query order=%s status=%s", found.OrderID, found.Status)),
+	}, nil
+}
+
+type epayOrderQueryResponse struct {
+	Code       int    `json:"code"`
+	Msg        string `json:"msg"`
+	TradeNo    string `json:"trade_no"`
+	OutTradeNo string `json:"out_trade_no"`
+	Type       string `json:"type"`
+	PID        string `json:"pid"`
+	Money      string `json:"money"`
+	Status     int    `json:"status"`
+}
+
+func parseEPayOrderQueryResult(body []byte, fallbackOrderID string) (*domain.PaymentOrderQueryResult, error) {
+	var resp epayOrderQueryResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("decode api.php act=order response: %w", err)
+	}
+	if resp.Code != 1 {
+		if strings.Contains(resp.Msg, "\u4e0d\u5b58\u5728") || strings.Contains(strings.ToLower(resp.Msg), "not found") {
+			return nil, domain.ErrPaymentOrderNotFound
+		}
+		return nil, fmt.Errorf("api.php act=order failed: %s", strings.TrimSpace(resp.Msg))
+	}
+
+	orderID := strings.TrimSpace(resp.OutTradeNo)
+	if orderID == "" {
+		orderID = strings.TrimSpace(fallbackOrderID)
+	}
+	if orderID == "" {
+		return nil, fmt.Errorf("api.php act=order missing out_trade_no")
+	}
+
+	status := domain.ChargeStatusPending
+	if resp.Status == 1 {
+		status = domain.ChargeStatusSuccess
+	}
+
+	chargeID := strings.TrimSpace(resp.TradeNo)
+	if chargeID == "" {
+		chargeID = orderID
+	}
+	return &domain.PaymentOrderQueryResult{
+		ChargeID:           chargeID,
+		OrderID:            orderID,
+		Status:             status,
+		Amount:             strings.TrimSpace(resp.Money),
+		ProviderMerchantID: strings.TrimSpace(resp.PID),
+		RawBody:            body,
+	}, nil
+}
+
+var _ domain.PaymentOrderQuerier = (*EPayPaymentProvider)(nil)
 
 func (p *EPayPaymentProvider) parseFormWebhook(values url.Values) (*domain.WebhookPayload, error) {
 	orderID := firstFormValue(values, "out_trade_no", "merchant_order_id", "merchantOrderNo", "order_id")

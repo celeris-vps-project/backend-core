@@ -19,13 +19,30 @@ import (
 // ── Minimal mock implementations for testing ───────────────────────────
 
 type mockOrderActivator struct {
-	order  app.PayableOrder
-	getErr error
+	order       app.PayableOrder
+	orders      []app.PayableOrder
+	getErr      error
+	activateHit bool
 }
 
-func (m *mockOrderActivator) ActivateOrder(orderID string) error { return nil }
+func (m *mockOrderActivator) ActivateOrder(orderID string) error {
+	m.activateHit = true
+	m.order.Status = "active"
+	for i := range m.orders {
+		if m.orders[i].ID == orderID {
+			m.orders[i].Status = "active"
+		}
+	}
+	return nil
+}
 func (m *mockOrderActivator) GetOrderForPayment(orderID string) (app.PayableOrder, error) {
 	return m.order, m.getErr
+}
+func (m *mockOrderActivator) ListOrders() ([]app.PayableOrder, error) {
+	if m.orders != nil {
+		return m.orders, nil
+	}
+	return []app.PayableOrder{m.order}, nil
 }
 func (m *mockOrderActivator) LinkInvoiceToOrder(orderID, invoiceID string) error { return nil }
 func (m *mockOrderActivator) CancelOrder(orderID, reason string) error           { return nil }
@@ -181,12 +198,80 @@ type noOpIDGen struct{}
 
 func (noOpIDGen) NewID() string { return "id-1" }
 
+type memoryAttemptRepo struct {
+	attempts []*domain.PaymentAttempt
+}
+
+func (r *memoryAttemptRepo) Create(_ context.Context, attempt *domain.PaymentAttempt) error {
+	cp := *attempt
+	r.attempts = append(r.attempts, &cp)
+	return nil
+}
+
+func (r *memoryAttemptRepo) Update(_ context.Context, attempt *domain.PaymentAttempt) error {
+	for i := range r.attempts {
+		if r.attempts[i].ID == attempt.ID {
+			cp := *attempt
+			r.attempts[i] = &cp
+			return nil
+		}
+	}
+	cp := *attempt
+	r.attempts = append(r.attempts, &cp)
+	return nil
+}
+
+func (r *memoryAttemptRepo) FindLatestByOrderID(_ context.Context, orderID string) (*domain.PaymentAttempt, error) {
+	for i := len(r.attempts) - 1; i >= 0; i-- {
+		if r.attempts[i].OrderID == orderID {
+			cp := *r.attempts[i]
+			return &cp, nil
+		}
+	}
+	return nil, domain.ErrPaymentAttemptNotFound
+}
+
+func (r *memoryAttemptRepo) FindByOutTradeNo(_ context.Context, outTradeNo string) (*domain.PaymentAttempt, error) {
+	for i := len(r.attempts) - 1; i >= 0; i-- {
+		if r.attempts[i].OutTradeNo == outTradeNo {
+			cp := *r.attempts[i]
+			return &cp, nil
+		}
+	}
+	return nil, domain.ErrPaymentAttemptNotFound
+}
+
+func (r *memoryAttemptRepo) ListPending(_ context.Context, limit int) ([]*domain.PaymentAttempt, error) {
+	if limit <= 0 {
+		limit = len(r.attempts)
+	}
+	out := make([]*domain.PaymentAttempt, 0, len(r.attempts))
+	for _, attempt := range r.attempts {
+		if attempt.Status == domain.ChargeStatusPending {
+			cp := *attempt
+			out = append(out, &cp)
+			if len(out) == limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
 type epayTestProvider struct {
 	merchantKey string
+	createOrder string
+	queryResult *domain.PaymentOrderQueryResult
 }
 
 func (p *epayTestProvider) CreateCharge(_ context.Context, orderID string, currency string, amountMinor int64) (*domain.ChargeResult, error) {
-	return nil, nil
+	p.createOrder = orderID
+	return &domain.ChargeResult{
+		ChargeID:   "epay-local-1",
+		OutTradeNo: orderID,
+		Status:     domain.ChargeStatusPending,
+		PaymentURL: "https://pay.example.com/submit.php?out_trade_no=" + orderID,
+	}, nil
 }
 
 func (p *epayTestProvider) VerifyWebhook(rawBody []byte, headers domain.WebhookHeaders) (*domain.WebhookPayload, error) {
@@ -218,6 +303,24 @@ func (p *epayTestProvider) VerifyWebhook(rawBody []byte, headers domain.WebhookH
 		Status:    status,
 		RawBody:   rawBody,
 		Signature: actual,
+	}, nil
+}
+
+func (p *epayTestProvider) QueryOrder(_ context.Context, query domain.PaymentOrderQuery) (*domain.PaymentOrderQueryResult, error) {
+	if p.queryResult != nil {
+		return p.queryResult, nil
+	}
+	orderID := strings.TrimSpace(query.OutTradeNo)
+	if orderID == "" {
+		orderID = "order-1"
+	}
+	return &domain.PaymentOrderQueryResult{
+		ChargeID:           "epay-queried-1",
+		OrderID:            orderID,
+		Status:             domain.ChargeStatusSuccess,
+		Amount:             "0.07",
+		ProviderMerchantID: "merch_1",
+		RawBody:            []byte(`{"code":1}`),
 	}, nil
 }
 
@@ -298,6 +401,145 @@ func TestHandleProviderReturn_RejectsAmountMismatch(t *testing.T) {
 	}
 }
 
+func TestReconcileEPayOrder_QuerySuccessConfirmsOrder(t *testing.T) {
+	order := app.PayableOrder{
+		ID:          "order-1",
+		Status:      "pending",
+		CustomerID:  "cust-1",
+		ProductID:   "prod-1",
+		Currency:    "USD",
+		PriceAmount: 7,
+	}
+	orders := &mockOrderActivator{order: order}
+	orch := app.NewPostPaymentOrchestrator(
+		orders,
+		&mockProductPurchaser{},
+		nil,
+		&mockInvoiceCreator{},
+		nil,
+	)
+	providerSvc := newEPayProviderServiceForTest("provider-1", "merch_1", "secret")
+	svc := app.NewPaymentAppService(providerSvc, orch, nil)
+
+	result, err := svc.ReconcileEPayOrder(context.Background(), "provider-1", "order-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != domain.ChargeStatusSuccess {
+		t.Fatalf("expected success, got %s", result.Status)
+	}
+	if !result.Updated {
+		t.Fatal("expected query reconciliation to update order")
+	}
+	if !orders.activateHit {
+		t.Fatal("expected order activation")
+	}
+}
+
+func TestInitiatePayment_RecordsEPayAttempt(t *testing.T) {
+	order := app.PayableOrder{
+		ID:          "order-1",
+		Status:      "pending",
+		CustomerID:  "cust-1",
+		ProductID:   "prod-1",
+		Currency:    "USD",
+		PriceAmount: 7,
+	}
+	orch := app.NewPostPaymentOrchestrator(
+		&mockOrderActivator{order: order},
+		&mockProductPurchaser{},
+		nil,
+		&mockInvoiceCreator{},
+		nil,
+	)
+	providerSvc := newEPayProviderServiceForTest("provider-1", "merch_1", "secret")
+	attempts := &memoryAttemptRepo{}
+	svc := app.NewPaymentAppService(providerSvc, orch, nil)
+	svc.SetPaymentAttemptStore(attempts, noOpIDGen{})
+
+	result, err := svc.InitiatePayment(context.Background(), &app.InitiatePaymentRequest{
+		OrderID:    "order-1",
+		ProviderID: "provider-1",
+		PayType:    "alipay",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.PaymentURL == "" {
+		t.Fatal("expected payment url")
+	}
+	if len(attempts.attempts) != 1 {
+		t.Fatalf("expected one payment attempt, got %d", len(attempts.attempts))
+	}
+	attempt := attempts.attempts[0]
+	if attempt.OrderID != "order-1" || attempt.ProviderID != "provider-1" || attempt.PayType != "alipay" {
+		t.Fatalf("unexpected attempt: %+v", attempt)
+	}
+	if attempt.OutTradeNo == "" || attempt.OutTradeNo == "order-1" {
+		t.Fatalf("expected independent out_trade_no, got %+v", attempt)
+	}
+	if attempt.PayURL != result.PaymentURL || attempt.Status != domain.ChargeStatusPending {
+		t.Fatalf("unexpected attempt fields: %+v", attempt)
+	}
+	if !strings.Contains(result.PaymentURL, "out_trade_no="+url.QueryEscape(attempt.OutTradeNo)) {
+		t.Fatalf("expected payment url to contain attempt out_trade_no, got %s", result.PaymentURL)
+	}
+	if attempt.TradeNo != "" {
+		t.Fatalf("expected empty trade_no before callback, got %s", attempt.TradeNo)
+	}
+}
+
+func TestReconcileEPayOrder_UsesPersistedAttemptProvider(t *testing.T) {
+	order := app.PayableOrder{
+		ID:          "order-1",
+		Status:      "pending",
+		CustomerID:  "cust-1",
+		ProductID:   "prod-1",
+		Currency:    "USD",
+		PriceAmount: 7,
+	}
+	orders := &mockOrderActivator{order: order}
+	orch := app.NewPostPaymentOrchestrator(
+		orders,
+		&mockProductPurchaser{},
+		nil,
+		&mockInvoiceCreator{},
+		nil,
+	)
+	providerSvc := newEPayProviderServiceForTest("provider-1", "merch_1", "secret")
+	attempts := &memoryAttemptRepo{}
+	if err := attempts.Create(context.Background(), &domain.PaymentAttempt{
+		ID:         "attempt-1",
+		OrderID:    "order-1",
+		ProviderID: "provider-1",
+		PayType:    "alipay",
+		OutTradeNo: "order-1",
+		Status:     domain.ChargeStatusPending,
+	}); err != nil {
+		t.Fatalf("create attempt: %v", err)
+	}
+	svc := app.NewPaymentAppService(providerSvc, orch, nil)
+	svc.SetPaymentAttemptStore(attempts, noOpIDGen{})
+
+	result, err := svc.ReconcileEPayOrder(context.Background(), "", "order-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.ProviderID != "provider-1" {
+		t.Fatalf("expected provider-1, got %s", result.ProviderID)
+	}
+	if !result.Updated || !orders.activateHit {
+		t.Fatal("expected order activation through attempt provider")
+	}
+	updated, err := attempts.FindByOutTradeNo(context.Background(), "order-1")
+	if err != nil {
+		t.Fatalf("find attempt: %v", err)
+	}
+	if updated.Status != domain.ChargeStatusSuccess || updated.TradeNo != "epay-queried-1" {
+		t.Fatalf("expected attempt success update, got %+v", updated)
+	}
+}
+
 func newEPayProviderServiceForTest(providerID, pid, merchantKey string) *app.ProviderAppService {
 	repo := &stubProviderRepo{
 		provider: &domain.PaymentProviderConfig{
@@ -354,6 +596,60 @@ func epayTestSign(values url.Values, key string) string {
 	}
 	hash := md5.Sum([]byte(strings.Join(pairs, "&") + key))
 	return strings.ToLower(hex.EncodeToString(hash[:]))
+}
+
+func TestHandleProviderReturn_MapsAttemptOutTradeNoToOrder(t *testing.T) {
+	order := app.PayableOrder{
+		ID:          "order-1",
+		Status:      "pending",
+		CustomerID:  "cust-1",
+		ProductID:   "prod-1",
+		Currency:    "USD",
+		PriceAmount: 7,
+	}
+	orders := &mockOrderActivator{order: order}
+	orch := app.NewPostPaymentOrchestrator(
+		orders,
+		&mockProductPurchaser{},
+		nil,
+		&mockInvoiceCreator{},
+		nil,
+	)
+	providerSvc := newEPayProviderServiceForTest("provider-1", "merch_1", "secret")
+	attempts := &memoryAttemptRepo{}
+	if err := attempts.Create(context.Background(), &domain.PaymentAttempt{
+		ID:         "attempt-1",
+		OrderID:    "order-1",
+		ProviderID: "provider-1",
+		PayType:    "alipay",
+		OutTradeNo: "pay-attempt-1",
+		Status:     domain.ChargeStatusPending,
+	}); err != nil {
+		t.Fatalf("create attempt: %v", err)
+	}
+	svc := app.NewPaymentAppService(providerSvc, orch, nil)
+	svc.SetPaymentAttemptStore(attempts, noOpIDGen{})
+
+	result, err := svc.HandleProviderReturn("provider-1", epayReturnQuery(url.Values{
+		"pid":          {"merch_1"},
+		"out_trade_no": {"pay-attempt-1"},
+		"trade_no":     {"epay-1"},
+		"trade_status": {"TRADE_SUCCESS"},
+		"money":        {"0.07"},
+	}, "secret"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.OrderID != "order-1" || !orders.activateHit {
+		t.Fatalf("expected mapped order activation, result=%+v activate=%v", result, orders.activateHit)
+	}
+	updated, err := attempts.FindByOutTradeNo(context.Background(), "pay-attempt-1")
+	if err != nil {
+		t.Fatalf("find attempt: %v", err)
+	}
+	if updated.TradeNo != "epay-1" || updated.Status != domain.ChargeStatusSuccess {
+		t.Fatalf("expected attempt update, got %+v", updated)
+	}
 }
 
 type mockCryptoProvider struct {

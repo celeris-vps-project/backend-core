@@ -148,10 +148,11 @@ func (h *PaymentHandler) Webhook(ctx context.Context, c *hz_app.RequestContext) 
 	c.JSON(consts.StatusOK, utils.H{"message": "payment confirmed, order activated, provisioning triggered"})
 }
 
-// EPayWebhook handles POST /api/v1/payments/webhook/epay/:providerId
+// EPayWebhook handles /api/v1/payments/webhook/epay/:providerId callbacks.
 //
 // This endpoint receives callbacks from EPay (易支付) payment gateways.
-// EPay v1 sends payment notifications as form payloads with an MD5 sign field.
+// EPay v1 may send payment notifications as form POST or signed GET query
+// parameters, both with an MD5 sign field.
 // The handler delegates provider lookup and signature verification to the
 // app layer via VerifyProviderWebhook().
 func (h *PaymentHandler) EPayWebhook(ctx context.Context, c *hz_app.RequestContext) {
@@ -164,7 +165,10 @@ func (h *PaymentHandler) EPayWebhook(ctx context.Context, c *hz_app.RequestConte
 
 	rawBody := c.Request.Body()
 	if len(rawBody) == 0 {
-		c.String(consts.StatusBadRequest, "empty request body")
+		rawBody = c.Request.URI().QueryString()
+	}
+	if len(rawBody) == 0 {
+		c.String(consts.StatusBadRequest, "empty webhook payload")
 		return
 	}
 	headers := collectWebhookHeaders(c)
@@ -180,13 +184,6 @@ func (h *PaymentHandler) EPayWebhook(ctx context.Context, c *hz_app.RequestConte
 
 	log.Printf("[PaymentHandler.EPayWebhook] received: provider=%s trade_no=%s order=%s status=%s",
 		providerID, payload.ChargeID, payload.OrderID, payload.Status)
-
-	if payload.Status != domain.ChargeStatusSuccess {
-		log.Printf("[PaymentHandler.EPayWebhook] payment not successful (status=%s), skipping", payload.Status)
-		// EPay requires "success" response to acknowledge receipt
-		c.String(consts.StatusOK, "success")
-		return
-	}
 
 	h.paymentSvc.HandleWebhookPayload(payload)
 
@@ -213,6 +210,9 @@ func (h *PaymentHandler) EPayReturn(ctx context.Context, c *hz_app.RequestContex
 	if err != nil {
 		log.Printf("[PaymentHandler.EPayReturn] verification failed: provider=%s err=%v", providerID, err)
 		orderID := strings.TrimSpace(c.Query("out_trade_no"))
+		if resolved, resolveErr := h.paymentSvc.ResolvePaymentAttemptOrderID(providerID, orderID); resolveErr == nil {
+			orderID = resolved
+		}
 		if orderID == "" {
 			apperr.HandleErr(c, err)
 			return
@@ -250,8 +250,8 @@ func (h *PaymentHandler) PaymentStatusStream(ctx context.Context, c *hz_app.Requ
 		defer pw.Close()
 		defer unsubscribe()
 
-		heartbeat := time.NewTicker(15 * time.Second)
-		defer heartbeat.Stop()
+		localStatusTicker := time.NewTicker(5 * time.Second)
+		defer localStatusTicker.Stop()
 		timeout := time.After(5 * time.Minute)
 
 		for {
@@ -266,7 +266,17 @@ func (h *PaymentHandler) PaymentStatusStream(ctx context.Context, c *hz_app.Requ
 				if event.Status == domain.ChargeStatusSuccess || event.Status == domain.ChargeStatusFailed {
 					return
 				}
-			case <-heartbeat.C:
+			case <-localStatusTicker.C:
+				event, err := h.paymentSvc.GetLocalTerminalPaymentStatus(orderID)
+				if err != nil {
+					log.Printf("[PaymentHandler.PaymentStatusStream] local status check failed: order=%s err=%v", orderID, err)
+				}
+				if event != nil {
+					if err := writePaymentSSEEvent(pw, *event); err != nil {
+						return
+					}
+					return
+				}
 				if _, err := fmt.Fprintf(pw, ": heartbeat\n\n"); err != nil {
 					return
 				}
@@ -281,7 +291,7 @@ func (h *PaymentHandler) PaymentStatusStream(ctx context.Context, c *hz_app.Requ
 }
 
 func (h *PaymentHandler) redirectToPaymentStatus(c *hz_app.RequestContext, orderID, result string) {
-	target := "/orders/" + url.PathEscape(orderID) + "/payments/status"
+	target := "/payment/result/" + url.PathEscape(orderID)
 	if result != "" {
 		q := url.Values{}
 		q.Set("result", result)

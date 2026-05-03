@@ -22,6 +22,7 @@ import (
 type OrderActivator interface {
 	ActivateOrder(orderID string) error
 	GetOrderForPayment(orderID string) (PayableOrder, error)
+	ListOrders() ([]PayableOrder, error)
 	LinkInvoiceToOrder(orderID, invoiceID string) error
 	CancelOrder(orderID, reason string) error
 }
@@ -191,6 +192,10 @@ func (s *PostPaymentOrchestrator) HandlePaymentConfirmed(orderID string) error {
 // into the interface layer.
 func (s *PostPaymentOrchestrator) GetOrderForPay(orderID string) (PayableOrder, error) {
 	return s.orders.GetOrderForPayment(orderID)
+}
+
+func (s *PostPaymentOrchestrator) ListOrdersForPay() ([]PayableOrder, error) {
+	return s.orders.ListOrders()
 }
 
 func (s *PostPaymentOrchestrator) GetInvoiceForPayment(invoiceID string) (PayableInvoice, error) {
