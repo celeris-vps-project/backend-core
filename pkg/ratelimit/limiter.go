@@ -116,6 +116,9 @@ func (rl *RateLimiter) Allow(ip string) bool {
 }
 
 func (kl *KeyLimiter) Allow(key string) bool {
+	if kl.rate <= 0 {
+		return true
+	}
 	return kl.getOrCreate(key).Allow()
 }
 

@@ -83,6 +83,10 @@ func clientIP(ctx *app.RequestContext) string {
 	if xri := ctx.Request.Header.Get("X-Real-Ip"); xri != "" {
 		return strings.TrimSpace(xri)
 	}
+	// CF-Connecting-IP
+	if CCI := ctx.Request.Header.Get("CF-Connecting-IP"); CCI != "" {
+		return strings.TrimSpace(CCI)
+	}
 
 	// 3. Fallback to TCP remote address (strip port)
 	addr := ctx.RemoteAddr().String()

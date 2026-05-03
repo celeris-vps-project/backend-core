@@ -216,21 +216,12 @@ func (s *MailAppService) sendCode(ctx context.Context, email, purpose, subject s
 	if err != nil {
 		return err
 	}
-	if !s.limiter.Allow(email) {
+	if !s.limiter.Allow(purpose + ":" + email) {
 		return errorsAsMailSend("only one code can be sent per minute")
 	}
 	code, err := generateCode()
 	if err != nil {
 		return err
-	}
-
-	// Reuse here in ten minute
-	if code, err := s.codeRepo.FindLatestValid(ctx, email, purpose, time.Now()); err == nil && code != nil {
-		body := fmt.Sprintf("Your Celeris verification code is %s. It expires in 10 minutes.", code.Plain)
-		if err := s.sender.Send(ctx, settings.SMTP, email, subject, body); err != nil {
-			return fmt.Errorf("%w: %v", domain.ErrMailSendFailed, err)
-		}
-		return nil
 	}
 
 	now := s.now()
