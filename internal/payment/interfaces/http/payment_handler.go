@@ -8,9 +8,12 @@ import (
 	"backend-core/internal/payment/domain"
 	"backend-core/pkg/apperr"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"strings"
+	"time"
 
 	"context"
 
@@ -38,6 +41,7 @@ type PayRequest struct {
 	Network    string `json:"network,omitempty"`     // e.g. "arbitrum", "solana"
 	ProviderID string `json:"provider_id,omitempty"` // dynamic provider selection
 	CouponCode string `json:"coupon_code,omitempty"` // optional activation/coupon code
+	PayType    string `json:"pay_type,omitempty"`    // EPay v1 payment channel
 }
 
 // Pay handles POST /orders/:id/pay
@@ -56,6 +60,7 @@ func (h *PaymentHandler) Pay(ctx context.Context, c *hz_app.RequestContext) {
 		ProviderID: req.ProviderID,
 		Network:    req.Network,
 		CouponCode: req.CouponCode,
+		PayType:    req.PayType,
 	})
 	if err != nil {
 		apperr.HandleErr(c, err)
@@ -146,8 +151,7 @@ func (h *PaymentHandler) Webhook(ctx context.Context, c *hz_app.RequestContext) 
 // EPayWebhook handles POST /api/v1/payments/webhook/epay/:providerId
 //
 // This endpoint receives callbacks from EPay (易支付) payment gateways.
-// EPay sends payment notifications as POST requests, usually with JSON or
-// application/x-www-form-urlencoded payloads and timestamp/signature headers.
+// EPay v1 sends payment notifications as form payloads with an MD5 sign field.
 // The handler delegates provider lookup and signature verification to the
 // app layer via VerifyProviderWebhook().
 func (h *PaymentHandler) EPayWebhook(ctx context.Context, c *hz_app.RequestContext) {
@@ -190,6 +194,110 @@ func (h *PaymentHandler) EPayWebhook(ctx context.Context, c *hz_app.RequestConte
 
 	// Return "success" as required by EPay protocol
 	c.String(consts.StatusOK, "success")
+}
+
+// EPayReturn handles the browser return_url from EPay gateways.
+//
+// It verifies the signed query string server-side, reconciles successful
+// payments through the normal webhook path, then redirects the browser to the
+// provider-neutral order status page without leaking gateway parameters.
+func (h *PaymentHandler) EPayReturn(ctx context.Context, c *hz_app.RequestContext) {
+	providerID := c.Param("providerId")
+	if providerID == "" {
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, "provider ID is required"))
+		return
+	}
+
+	rawQuery := c.Request.URI().QueryString()
+	result, err := h.paymentSvc.HandleProviderReturn(providerID, rawQuery)
+	if err != nil {
+		log.Printf("[PaymentHandler.EPayReturn] verification failed: provider=%s err=%v", providerID, err)
+		orderID := strings.TrimSpace(c.Query("out_trade_no"))
+		if orderID == "" {
+			apperr.HandleErr(c, err)
+			return
+		}
+		h.redirectToPaymentStatus(c, orderID, "")
+		return
+	}
+
+	redirectResult := result.Status
+	if redirectResult == domain.ChargeStatusPending {
+		redirectResult = ""
+	}
+	h.redirectToPaymentStatus(c, result.OrderID, redirectResult)
+}
+
+// PaymentStatusStream handles GET /orders/:id/payments/status/stream.
+func (h *PaymentHandler) PaymentStatusStream(ctx context.Context, c *hz_app.RequestContext) {
+	orderID := c.Param("id")
+	if orderID == "" {
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, "order id is required"))
+		return
+	}
+
+	events, unsubscribe := h.paymentSvc.SubscribePaymentStatus(orderID)
+	c.Response.Header.Set("Content-Type", "text/event-stream")
+	c.Response.Header.Set("Cache-Control", "no-cache")
+	c.Response.Header.Set("Connection", "keep-alive")
+	c.Response.Header.Set("X-Accel-Buffering", "no")
+	c.SetStatusCode(consts.StatusOK)
+
+	pr, pw := io.Pipe()
+	c.SetBodyStream(pr, -1)
+
+	go func() {
+		defer pw.Close()
+		defer unsubscribe()
+
+		heartbeat := time.NewTicker(15 * time.Second)
+		defer heartbeat.Stop()
+		timeout := time.After(5 * time.Minute)
+
+		for {
+			select {
+			case event, ok := <-events:
+				if !ok {
+					return
+				}
+				if err := writePaymentSSEEvent(pw, event); err != nil {
+					return
+				}
+				if event.Status == domain.ChargeStatusSuccess || event.Status == domain.ChargeStatusFailed {
+					return
+				}
+			case <-heartbeat.C:
+				if _, err := fmt.Fprintf(pw, ": heartbeat\n\n"); err != nil {
+					return
+				}
+			case <-timeout:
+				_, _ = fmt.Fprintf(pw, "event: timeout\ndata: {\"error\":\"stream_timeout\"}\n\n")
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+func (h *PaymentHandler) redirectToPaymentStatus(c *hz_app.RequestContext, orderID, result string) {
+	target := "/orders/" + url.PathEscape(orderID) + "/payments/status"
+	if result != "" {
+		q := url.Values{}
+		q.Set("result", result)
+		target += "?" + q.Encode()
+	}
+	c.Response.Header.Set("Location", target)
+	c.SetStatusCode(consts.StatusFound)
+}
+
+func writePaymentSSEEvent(w io.Writer, event paymentApp.PaymentStatusEvent) error {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(w, "data: %s\n\n", data)
+	return err
 }
 
 func collectWebhookHeaders(c *hz_app.RequestContext) domain.WebhookHeaders {

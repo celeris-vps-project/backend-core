@@ -519,9 +519,7 @@ func main() {
 	providerSvc.RegisterFactory(paymentDomain.ProviderTypeEPay, func(cfg *paymentDomain.PaymentProviderConfig, cb func(*paymentDomain.WebhookPayload)) paymentDomain.PaymentProvider {
 		return paymentInfra.NewEPayPaymentProvider(cfg, cb)
 	})
-	// Register notify URL builder. EPay callback URLs are derived from the
-	// runtime admin general setting, not persisted into provider config.
-	providerSvc.RegisterNotifyURLBuilder(func(providerID string) (string, error) {
+	publicBaseURL := func() (string, error) {
 		settings, err := mailSvc.GetSettings(context.Background())
 		if err != nil {
 			return "", err
@@ -533,8 +531,18 @@ func main() {
 		if baseURL == "" {
 			return "", paymentDomain.ErrPublicBaseURLRequired
 		}
+		return baseURL, nil
+	}
+	// Register notify URL builder. EPay callback URLs are derived from the
+	// runtime admin general setting, not persisted into provider config.
+	providerSvc.RegisterNotifyURLBuilder(func(providerID string) (string, error) {
+		baseURL, err := publicBaseURL()
+		if err != nil {
+			return "", err
+		}
 		return baseURL + "/api/v1/payments/webhook/epay/" + providerID, nil
 	})
+	providerSvc.RegisterPublicBaseURLBuilder(publicBaseURL)
 	cryptoProvider := paymentInfra.NewCryptoPaymentProvider(&cryptoCfg, nil) // callback set below
 
 	// PaymentAppService now owns all business logic: provider routing, invoice
@@ -735,9 +743,10 @@ func main() {
 		v1.POST("/payments/webhook", payHandler.Webhook)
 		v1.POST("/payments/webhook/simulate", payHandler.SimulateWebhook)
 		// EPay (易支付) webhook — receives POST callbacks from EPay gateways.
-		// Verifies timestamp + raw body HMAC signatures with configurable header names.
+		// Verifies the common v1 MD5 form signature.
 		// Route: /api/v1/payments/webhook/epay/:providerId
 		v1.POST("/payments/webhook/epay/:providerId", payHandler.EPayWebhook)
+		v1.GET("/payments/return/epay/:providerId", payHandler.EPayReturn)
 	}
 
 	// 傳入真實的 jwtService 給中間件
@@ -772,6 +781,7 @@ func main() {
 		// ── Checkout tier (strict per-IP: purchase/payment writes) ─────
 		// Payment — USDT crypto payment flow
 		privateAPI.POST("/orders/:id/pay", checkoutRL, payHandler.Pay)
+		privateAPI.GET("/orders/:id/payments/status/stream", payHandler.PaymentStatusStream)
 		privateAPI.GET("/payment/charges/:id", standardRL, payHandler.ChargeDetail)
 
 		// Node admin routes (served by node module)

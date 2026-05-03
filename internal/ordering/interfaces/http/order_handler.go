@@ -14,13 +14,15 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 )
 
+const orderCurrencyCNY = "cny"
+
 // ---- Request / Response DTOs ----
 
 type CreateOrderRequest struct {
 	ProductID    string `json:"product_id" vd:"len($)>0"`
 	InvoiceID    string `json:"invoice_id"`
 	BillingCycle string `json:"billing_cycle"` // one_time | monthly | yearly; defaults to one_time
-	Currency     string `json:"currency" vd:"len($)>0"`
+	Currency     string `json:"currency"`
 	PriceAmount  int64  `json:"price_amount" vd:"$>0"`
 	Hostname     string `json:"hostname" vd:"len($)>0"`
 	Plan         string `json:"plan" vd:"len($)>0"`
@@ -123,7 +125,7 @@ func (h *OrderHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 		customerID, req.ProductID, invoiceID, billingCycle,
 		req.Hostname, req.Plan, req.Region, req.OS, networkMode,
 		req.CPU, req.MemoryMB, req.DiskGB,
-		req.Currency, req.PriceAmount,
+		orderCurrencyCNY, req.PriceAmount,
 	)
 	if err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyOrderError(err), err.Error()))

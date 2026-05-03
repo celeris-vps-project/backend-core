@@ -103,6 +103,19 @@ func (m *trackingInvoiceManager) GetInvoiceStatus(invoiceID string) (string, err
 	return status, nil
 }
 
+func (m *trackingInvoiceManager) GetInvoiceForPayment(invoiceID string) (app.PayableInvoice, error) {
+	status, ok := m.statuses[invoiceID]
+	if !ok {
+		return app.PayableInvoice{}, fmt.Errorf("invoice %s not found", invoiceID)
+	}
+	return app.PayableInvoice{
+		ID:       invoiceID,
+		Status:   status,
+		Currency: "USD",
+		Total:    2999,
+	}, nil
+}
+
 func (m *trackingInvoiceManager) GetInvoice(invoiceID string) (app.RenewalInvoice, error) {
 	status, ok := m.statuses[invoiceID]
 	if !ok {

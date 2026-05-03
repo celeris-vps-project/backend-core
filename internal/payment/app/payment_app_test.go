@@ -5,8 +5,15 @@ import (
 	"backend-core/internal/payment/domain"
 	"backend-core/pkg/apperr"
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"net/url"
+	"sort"
+	"strings"
 	"testing"
+	"time"
 )
 
 // ── Minimal mock implementations for testing ───────────────────────────
@@ -52,6 +59,14 @@ func (m *mockInvoiceCreator) RecordInvoicePayment(invoiceID string, amount int64
 func (m *mockInvoiceCreator) VoidInvoice(invoiceID, reason string) error { return nil }
 func (m *mockInvoiceCreator) GetInvoiceStatus(invoiceID string) (string, error) {
 	return "issued", nil
+}
+func (m *mockInvoiceCreator) GetInvoiceForPayment(invoiceID string) (app.PayableInvoice, error) {
+	return app.PayableInvoice{
+		ID:       invoiceID,
+		Status:   "issued",
+		Currency: "USD",
+		Total:    7,
+	}, nil
 }
 
 type mockCouponApplier struct {
@@ -113,6 +128,232 @@ func TestInitiatePayment_ZeroCouponConfirmsImmediately(t *testing.T) {
 	if resp.ChargeID != "coupon:coupon-1" {
 		t.Fatalf("expected coupon charge id, got %s", resp.ChargeID)
 	}
+}
+
+type stubProviderRepo struct {
+	provider *domain.PaymentProviderConfig
+}
+
+func (r *stubProviderRepo) Create(p *domain.PaymentProviderConfig) error {
+	r.provider = p
+	return nil
+}
+
+func (r *stubProviderRepo) GetByID(id string) (*domain.PaymentProviderConfig, error) {
+	if r.provider == nil || r.provider.ID != id {
+		return nil, errors.New("provider not found")
+	}
+	cp := *r.provider
+	if r.provider.Config != nil {
+		cp.Config = make(map[string]interface{}, len(r.provider.Config))
+		for k, v := range r.provider.Config {
+			cp.Config[k] = v
+		}
+	}
+	return &cp, nil
+}
+
+func (r *stubProviderRepo) ListAll() ([]*domain.PaymentProviderConfig, error) {
+	if r.provider == nil {
+		return nil, nil
+	}
+	return []*domain.PaymentProviderConfig{r.provider}, nil
+}
+
+func (r *stubProviderRepo) ListEnabled() ([]*domain.PaymentProviderConfig, error) {
+	if r.provider == nil || !r.provider.Enabled {
+		return nil, nil
+	}
+	return []*domain.PaymentProviderConfig{r.provider}, nil
+}
+
+func (r *stubProviderRepo) Update(p *domain.PaymentProviderConfig) error {
+	r.provider = p
+	return nil
+}
+
+func (r *stubProviderRepo) Delete(id string) error {
+	r.provider = nil
+	return nil
+}
+
+type noOpIDGen struct{}
+
+func (noOpIDGen) NewID() string { return "id-1" }
+
+type epayTestProvider struct {
+	merchantKey string
+}
+
+func (p *epayTestProvider) CreateCharge(_ context.Context, orderID string, currency string, amountMinor int64) (*domain.ChargeResult, error) {
+	return nil, nil
+}
+
+func (p *epayTestProvider) VerifyWebhook(rawBody []byte, headers domain.WebhookHeaders) (*domain.WebhookPayload, error) {
+	values, err := url.ParseQuery(string(rawBody))
+	if err != nil {
+		return nil, err
+	}
+	actual := strings.TrimSpace(values.Get("sign"))
+	if actual == "" {
+		return nil, errors.New("missing sign")
+	}
+	if expected := epayTestSign(values, p.merchantKey); expected != strings.ToLower(actual) {
+		return nil, errors.New("signature mismatch")
+	}
+	status := domain.ChargeStatusPending
+	switch strings.ToUpper(strings.TrimSpace(values.Get("trade_status"))) {
+	case "TRADE_SUCCESS", "SUCCESS", "PAID":
+		status = domain.ChargeStatusSuccess
+	case "TRADE_CLOSED", "FAILED":
+		status = domain.ChargeStatusFailed
+	}
+	chargeID := strings.TrimSpace(values.Get("trade_no"))
+	if chargeID == "" {
+		chargeID = strings.TrimSpace(values.Get("out_trade_no"))
+	}
+	return &domain.WebhookPayload{
+		ChargeID:  chargeID,
+		OrderID:   strings.TrimSpace(values.Get("out_trade_no")),
+		Status:    status,
+		RawBody:   rawBody,
+		Signature: actual,
+	}, nil
+}
+
+func TestHandleProviderReturn_EPaySuccessConfirmsOrder(t *testing.T) {
+	order := app.PayableOrder{
+		ID:          "order-1",
+		Status:      "pending",
+		CustomerID:  "cust-1",
+		ProductID:   "prod-1",
+		Currency:    "USD",
+		PriceAmount: 7,
+	}
+	orders := &mockOrderActivator{order: order}
+	orch := app.NewPostPaymentOrchestrator(
+		orders,
+		&mockProductPurchaser{},
+		nil,
+		&mockInvoiceCreator{},
+		nil,
+	)
+	providerSvc := newEPayProviderServiceForTest("provider-1", "merch_1", "secret")
+	svc := app.NewPaymentAppService(providerSvc, orch, nil)
+
+	result, err := svc.HandleProviderReturn("provider-1", epayReturnQuery(url.Values{
+		"pid":          {"merch_1"},
+		"out_trade_no": {"order-1"},
+		"trade_no":     {"epay-1"},
+		"trade_status": {"TRADE_SUCCESS"},
+		"money":        {"0.07"},
+	}, "secret"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.OrderID != "order-1" {
+		t.Fatalf("expected order-1, got %s", result.OrderID)
+	}
+	if result.Status != domain.ChargeStatusSuccess {
+		t.Fatalf("expected success, got %s", result.Status)
+	}
+}
+
+func TestHandleProviderReturn_RejectsAmountMismatch(t *testing.T) {
+	order := app.PayableOrder{
+		ID:          "order-1",
+		Status:      "pending",
+		CustomerID:  "cust-1",
+		ProductID:   "prod-1",
+		InvoiceID:   "inv-1",
+		Currency:    "USD",
+		PriceAmount: 7,
+	}
+	orch := app.NewPostPaymentOrchestrator(
+		&mockOrderActivator{order: order},
+		&mockProductPurchaser{},
+		nil,
+		&mockInvoiceCreator{},
+		nil,
+	)
+	providerSvc := newEPayProviderServiceForTest("provider-1", "merch_1", "secret")
+	svc := app.NewPaymentAppService(providerSvc, orch, nil)
+
+	_, err := svc.HandleProviderReturn("provider-1", epayReturnQuery(url.Values{
+		"pid":          {"merch_1"},
+		"out_trade_no": {"order-1"},
+		"trade_no":     {"epay-1"},
+		"trade_status": {"TRADE_SUCCESS"},
+		"money":        {"0.08"},
+	}, "secret"))
+	if err == nil {
+		t.Fatal("expected amount mismatch error")
+	}
+	var appErr *apperr.AppError
+	if !errors.As(err, &appErr) {
+		t.Fatalf("expected *AppError, got %T", err)
+	}
+	if appErr.Code != apperr.CodeWebhookFailed {
+		t.Fatalf("expected code %s, got %s", apperr.CodeWebhookFailed, appErr.Code)
+	}
+}
+
+func newEPayProviderServiceForTest(providerID, pid, merchantKey string) *app.ProviderAppService {
+	repo := &stubProviderRepo{
+		provider: &domain.PaymentProviderConfig{
+			ID:        providerID,
+			Type:      domain.ProviderTypeEPay,
+			Name:      "EPay",
+			Enabled:   true,
+			SortOrder: 0,
+			Config: map[string]interface{}{
+				"pid":          pid,
+				"merchant_key": merchantKey,
+				"api_url":      "https://pay.example.com",
+			},
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+	}
+	providerSvc := app.NewProviderAppService(repo, noOpIDGen{})
+	providerSvc.RegisterNotifyURLBuilder(func(providerID string) (string, error) {
+		return "https://example.com/api/v1/payments/webhook/epay/" + providerID, nil
+	})
+	providerSvc.RegisterPublicBaseURLBuilder(func() (string, error) {
+		return "https://example.com", nil
+	})
+	providerSvc.RegisterFactory(domain.ProviderTypeEPay, func(cfg *domain.PaymentProviderConfig, cb func(*domain.WebhookPayload)) domain.PaymentProvider {
+		key, _ := cfg.Config["merchant_key"].(string)
+		return &epayTestProvider{merchantKey: key}
+	})
+	return providerSvc
+}
+
+func epayReturnQuery(values url.Values, key string) []byte {
+	values.Set("sign", epayTestSign(values, key))
+	values.Set("sign_type", "MD5")
+	return []byte(values.Encode())
+}
+
+func epayTestSign(values url.Values, key string) string {
+	keys := make([]string, 0, len(values))
+	for k := range values {
+		if strings.EqualFold(k, "sign") || strings.EqualFold(k, "sign_type") {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	pairs := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if values.Get(k) == "" {
+			continue
+		}
+		pairs = append(pairs, fmt.Sprintf("%s=%s", k, values.Get(k)))
+	}
+	hash := md5.Sum([]byte(strings.Join(pairs, "&") + key))
+	return strings.ToLower(hex.EncodeToString(hash[:]))
 }
 
 type mockCryptoProvider struct {

@@ -11,6 +11,8 @@ import (
 	"strings"
 )
 
+const checkoutOrderCurrency = "cny"
+
 // CheckoutAppService orchestrates the cross-domain checkout flow.
 type CheckoutAppService struct {
 	productSvc  *productApp.ProductAppService
@@ -37,7 +39,7 @@ func (s *CheckoutAppService) Execute(ctx context.Context, req domain.CheckoutReq
 		return nil, fmt.Errorf("checkout_error: hostname is required")
 	}
 	if req.OS == "" {
-		req.OS = "ubuntu-22.04"
+		req.OS = "node-default"
 	}
 
 	// 1. Look up the product to get pricing info
@@ -64,7 +66,7 @@ func (s *CheckoutAppService) Execute(ctx context.Context, req domain.CheckoutReq
 		product.CPU(),
 		product.MemoryMB(),
 		product.DiskGB(),
-		product.Currency(),
+		checkoutOrderCurrency,
 		product.PriceAmount(),
 	)
 	if err != nil {

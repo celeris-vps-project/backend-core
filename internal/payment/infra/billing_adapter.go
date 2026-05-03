@@ -120,6 +120,19 @@ func (a *BillingAdapter) GetInvoiceStatus(invoiceID string) (string, error) {
 	return invoice.Status(), nil
 }
 
+func (a *BillingAdapter) GetInvoiceForPayment(invoiceID string) (paymentApp.PayableInvoice, error) {
+	invoice, err := a.svc.GetInvoice(invoiceID)
+	if err != nil {
+		return paymentApp.PayableInvoice{}, err
+	}
+	return paymentApp.PayableInvoice{
+		ID:       invoice.ID(),
+		Status:   invoice.Status(),
+		Currency: invoice.Total().Currency(),
+		Total:    invoice.Total().Amount(),
+	}, nil
+}
+
 func (a *BillingAdapter) GetInvoice(invoiceID string) (paymentApp.RenewalInvoice, error) {
 	invoice, err := a.svc.GetInvoice(invoiceID)
 	if err != nil {

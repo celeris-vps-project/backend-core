@@ -77,6 +77,14 @@ type InvoiceCreator interface {
 	RecordInvoicePayment(invoiceID string, amount int64, currency string) error
 	VoidInvoice(invoiceID, reason string) error
 	GetInvoiceStatus(invoiceID string) (string, error)
+	GetInvoiceForPayment(invoiceID string) (PayableInvoice, error)
+}
+
+type PayableInvoice struct {
+	ID       string
+	Status   string
+	Currency string
+	Total    int64
 }
 
 // PostPaymentOrchestrator wires together the ordering, catalog, instance,
@@ -183,6 +191,13 @@ func (s *PostPaymentOrchestrator) HandlePaymentConfirmed(orderID string) error {
 // into the interface layer.
 func (s *PostPaymentOrchestrator) GetOrderForPay(orderID string) (PayableOrder, error) {
 	return s.orders.GetOrderForPayment(orderID)
+}
+
+func (s *PostPaymentOrchestrator) GetInvoiceForPayment(invoiceID string) (PayableInvoice, error) {
+	if s.invoices == nil {
+		return PayableInvoice{}, fmt.Errorf("invoice service not configured")
+	}
+	return s.invoices.GetInvoiceForPayment(invoiceID)
 }
 
 // CreateInvoiceForPayment creates and issues an invoice for a pending order,

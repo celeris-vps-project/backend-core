@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -18,6 +21,7 @@ type InitiatePaymentRequest struct {
 	ProviderID string // optional — dynamic provider selection
 	Network    string // optional — crypto network (e.g. "arbitrum")
 	CouponCode string // optional — activation/coupon code for first payment
+	PayType    string // optional EPay v1 payment channel
 }
 
 // InitiatePaymentResponse is the app-layer output after initiating a payment.
@@ -32,6 +36,18 @@ type InitiatePaymentResponse struct {
 	DiscountAmount int64                      `json:"discount_amount,omitempty"`
 	CouponID       string                     `json:"coupon_id,omitempty"`
 	Crypto         *domain.CryptoChargeDetail `json:"crypto,omitempty"`
+}
+
+type PaymentStatusEvent struct {
+	OrderID  string `json:"order_id"`
+	ChargeID string `json:"charge_id,omitempty"`
+	Status   string `json:"status"`
+	Message  string `json:"message,omitempty"`
+}
+
+type ProviderReturnResult struct {
+	OrderID string
+	Status  string
 }
 
 type CouponApplicationRequest struct {
@@ -70,6 +86,9 @@ type PaymentAppService struct {
 	cryptoProv   domain.CryptoPaymentProvider // optional legacy crypto provider
 	renewals     *RenewalService
 	coupons      CouponApplier
+
+	statusMu          sync.RWMutex
+	statusSubscribers map[string]map[chan PaymentStatusEvent]struct{}
 }
 
 func NewPaymentAppService(
@@ -78,9 +97,10 @@ func NewPaymentAppService(
 	cryptoProv domain.CryptoPaymentProvider,
 ) *PaymentAppService {
 	return &PaymentAppService{
-		providerSvc:  providerSvc,
-		orchestrator: orchestrator,
-		cryptoProv:   cryptoProv,
+		providerSvc:       providerSvc,
+		orchestrator:      orchestrator,
+		cryptoProv:        cryptoProv,
+		statusSubscribers: make(map[string]map[chan PaymentStatusEvent]struct{}),
 	}
 }
 
@@ -265,7 +285,13 @@ func (s *PaymentAppService) chargeViaDynamicProvider(ctx context.Context, req *I
 		}
 		return result, nil
 	case domain.ProviderTypeEPay:
-		prov, err := s.providerSvc.GetProvider(providerCfg.ID)
+		payType := strings.TrimSpace(req.PayType)
+		if payType == "" {
+			return nil, apperr.ErrBadRequest(apperr.CodeInvalidParams, "pay_type is required for EPay")
+		}
+		prov, err := s.providerSvc.GetProviderWithConfigOverride(providerCfg.ID, map[string]interface{}{
+			"pay_type": payType,
+		})
 		if err != nil {
 			return nil, providerRuntimeError(err)
 		}
@@ -314,6 +340,12 @@ func (s *PaymentAppService) chargeViaCrypto(ctx context.Context, req *InitiatePa
 func (s *PaymentAppService) HandleWebhookPayload(payload *domain.WebhookPayload) {
 	log.Printf("[PaymentAppService.HandleWebhookPayload] processing: charge=%s order=%s status=%s",
 		payload.ChargeID, payload.OrderID, payload.Status)
+	defer s.publishPaymentStatus(PaymentStatusEvent{
+		OrderID:  payload.OrderID,
+		ChargeID: payload.ChargeID,
+		Status:   payload.Status,
+		Message:  "payment webhook processed",
+	})
 
 	if payload.Status != domain.ChargeStatusSuccess {
 		if payload.Status == domain.ChargeStatusFailed {
@@ -354,6 +386,45 @@ func (s *PaymentAppService) HandleWebhookPayload(payload *domain.WebhookPayload)
 	}
 }
 
+func (s *PaymentAppService) SubscribePaymentStatus(orderID string) (<-chan PaymentStatusEvent, func()) {
+	ch := make(chan PaymentStatusEvent, 4)
+	s.statusMu.Lock()
+	if s.statusSubscribers[orderID] == nil {
+		s.statusSubscribers[orderID] = make(map[chan PaymentStatusEvent]struct{})
+	}
+	s.statusSubscribers[orderID][ch] = struct{}{}
+	s.statusMu.Unlock()
+
+	unsubscribe := func() {
+		s.statusMu.Lock()
+		if subscribers := s.statusSubscribers[orderID]; subscribers != nil {
+			if _, ok := subscribers[ch]; ok {
+				delete(subscribers, ch)
+				close(ch)
+			}
+			if len(subscribers) == 0 {
+				delete(s.statusSubscribers, orderID)
+			}
+		}
+		s.statusMu.Unlock()
+	}
+	return ch, unsubscribe
+}
+
+func (s *PaymentAppService) publishPaymentStatus(event PaymentStatusEvent) {
+	if event.OrderID == "" {
+		return
+	}
+	s.statusMu.RLock()
+	defer s.statusMu.RUnlock()
+	for ch := range s.statusSubscribers[event.OrderID] {
+		select {
+		case ch <- event:
+		default:
+		}
+	}
+}
+
 // VerifyProviderWebhook looks up a provider by ID and verifies a webhook payload.
 // Used for provider-specific webhook endpoints (e.g. EPay).
 func (s *PaymentAppService) VerifyProviderWebhook(providerID string, rawBody []byte, headers domain.WebhookHeaders) (*domain.WebhookPayload, error) {
@@ -379,6 +450,85 @@ func (s *PaymentAppService) VerifyProviderWebhook(providerID string, rawBody []b
 		return nil, apperr.ErrBadRequest(apperr.CodeWebhookFailed, "webhook verification failed: "+err.Error())
 	}
 	return payload, nil
+}
+
+// HandleProviderReturn validates a gateway browser return and reconciles it
+// through the same internal confirmation path used by webhooks. Return URLs are
+// not the primary delivery mechanism, but they provide a useful fast path when
+// the customer lands back before the async notify_url arrives.
+func (s *PaymentAppService) HandleProviderReturn(providerID string, rawQuery []byte) (*ProviderReturnResult, error) {
+	if len(rawQuery) == 0 {
+		return nil, apperr.ErrBadRequest(apperr.CodeInvalidParams, "empty payment return query")
+	}
+
+	payload, err := s.VerifyProviderWebhook(providerID, rawQuery, nil)
+	if err != nil {
+		return nil, err
+	}
+	if payload.OrderID == "" {
+		return nil, apperr.ErrBadRequest(apperr.CodeWebhookFailed, "payment return missing order id")
+	}
+
+	order, err := s.orchestrator.GetOrderForPay(payload.OrderID)
+	if err != nil {
+		return nil, apperr.ErrNotFound(apperr.CodeOrderNotFound, "order not found: "+err.Error())
+	}
+	if err := s.validateEPayReturn(providerID, rawQuery, order); err != nil {
+		return nil, err
+	}
+
+	if payload.Status == domain.ChargeStatusSuccess {
+		s.HandleWebhookPayload(payload)
+	} else {
+		s.publishPaymentStatus(PaymentStatusEvent{
+			OrderID:  payload.OrderID,
+			ChargeID: payload.ChargeID,
+			Status:   payload.Status,
+			Message:  "payment return verified",
+		})
+	}
+
+	return &ProviderReturnResult{
+		OrderID: payload.OrderID,
+		Status:  payload.Status,
+	}, nil
+}
+
+func (s *PaymentAppService) validateEPayReturn(providerID string, rawQuery []byte, order PayableOrder) error {
+	values, err := url.ParseQuery(string(rawQuery))
+	if err != nil {
+		return apperr.ErrBadRequest(apperr.CodeInvalidParams, "invalid payment return query: "+err.Error())
+	}
+
+	providerCfg, err := s.providerSvc.GetProviderConfig(providerID)
+	if err != nil {
+		return apperr.ErrNotFound(apperr.CodeProviderNotFound, "provider not found")
+	}
+	if pid, _ := providerCfg.Config["pid"].(string); strings.TrimSpace(pid) != "" {
+		if got := strings.TrimSpace(values.Get("pid")); got != strings.TrimSpace(pid) {
+			return apperr.ErrBadRequest(apperr.CodeWebhookFailed, "payment return pid mismatch")
+		}
+	}
+
+	outTradeNo := strings.TrimSpace(values.Get("out_trade_no"))
+	if outTradeNo != "" && outTradeNo != order.ID {
+		return apperr.ErrBadRequest(apperr.CodeWebhookFailed, "payment return order mismatch")
+	}
+
+	if money := strings.TrimSpace(values.Get("money")); money != "" {
+		expectedAmount := order.PriceAmount
+		if order.InvoiceID != "" {
+			if invoice, err := s.orchestrator.GetInvoiceForPayment(order.InvoiceID); err == nil {
+				expectedAmount = invoice.Total
+			}
+		}
+		expected := fmt.Sprintf("%.2f", float64(expectedAmount)/100.0)
+		if money != expected {
+			return apperr.ErrBadRequest(apperr.CodeWebhookFailed, "payment return amount mismatch")
+		}
+	}
+
+	return nil
 }
 
 func providerRuntimeError(err error) error {

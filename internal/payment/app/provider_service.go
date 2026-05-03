@@ -17,6 +17,8 @@ type ProviderFactory func(cfg *domain.PaymentProviderConfig, callback func(*doma
 // derive the notify_url without importing infra.
 type NotifyURLBuilder func(providerID string) (string, error)
 
+type PublicBaseURLBuilder func() (string, error)
+
 // IDGen generates unique IDs. Reuses the same interface used by other contexts.
 type IDGen interface {
 	NewID() string
@@ -31,6 +33,7 @@ type ProviderAppService struct {
 	callback         func(*domain.WebhookPayload)
 	factories        map[string]ProviderFactory
 	notifyURLBuilder NotifyURLBuilder // optional — registered at startup
+	publicBaseURL    PublicBaseURLBuilder
 }
 
 func NewProviderAppService(repo domain.PaymentProviderRepo, idGen IDGen) *ProviderAppService {
@@ -53,6 +56,10 @@ func (s *ProviderAppService) RegisterFactory(providerType string, factory Provid
 // without importing infra.
 func (s *ProviderAppService) RegisterNotifyURLBuilder(builder NotifyURLBuilder) {
 	s.notifyURLBuilder = builder
+}
+
+func (s *ProviderAppService) RegisterPublicBaseURLBuilder(builder PublicBaseURLBuilder) {
+	s.publicBaseURL = builder
 }
 
 // CreateProvider creates a new payment provider configuration.
@@ -99,10 +106,13 @@ func (s *ProviderAppService) prepareForStorage(p *domain.PaymentProviderConfig, 
 		p.Config = make(map[string]interface{})
 	}
 	delete(p.Config, "notify_url")
-	// Default pay_type to "alipay" if not provided
-	if existing, _ := p.Config["pay_type"].(string); existing == "" {
-		p.Config["pay_type"] = "alipay"
-	}
+	delete(p.Config, "api_version")
+	delete(p.Config, "pay_type")
+	delete(p.Config, "merchant_private_key")
+	delete(p.Config, "platform_public_key")
+	delete(p.Config, "webhook_secret")
+	delete(p.Config, "timestamp_header")
+	delete(p.Config, "signature_header")
 	if requireWebhookURL {
 		return s.attachWebhookURL(p)
 	}
@@ -132,10 +142,31 @@ func (s *ProviderAppService) attachWebhookURLBestEffort(p *domain.PaymentProvide
 	_ = s.attachWebhookURL(p)
 }
 
-func (s *ProviderAppService) runtimeConfig(p *domain.PaymentProviderConfig) (*domain.PaymentProviderConfig, error) {
+func (s *ProviderAppService) attachReturnURL(p *domain.PaymentProviderConfig) error {
+	if p.Type != domain.ProviderTypeEPay {
+		return nil
+	}
+	if existing, _ := p.Config["return_url"].(string); existing != "" {
+		return nil
+	}
+	if s.publicBaseURL == nil {
+		return domain.ErrPublicBaseURLRequired
+	}
+	baseURL, err := s.publicBaseURL()
+	if err != nil {
+		return err
+	}
+	if baseURL == "" {
+		return domain.ErrPublicBaseURLRequired
+	}
+	p.Config["return_url"] = baseURL + "/api/v1/payments/return/epay/" + p.ID
+	return nil
+}
+
+func (s *ProviderAppService) runtimeConfig(p *domain.PaymentProviderConfig, overrides map[string]interface{}) (*domain.PaymentProviderConfig, error) {
 	cfg := *p
 	if p.Config != nil {
-		cfg.Config = make(map[string]interface{}, len(p.Config)+1)
+		cfg.Config = make(map[string]interface{}, len(p.Config)+len(overrides)+2)
 		for k, v := range p.Config {
 			if k != "notify_url" {
 				cfg.Config[k] = v
@@ -149,6 +180,12 @@ func (s *ProviderAppService) runtimeConfig(p *domain.PaymentProviderConfig) (*do
 			return nil, err
 		}
 		cfg.Config["notify_url"] = cfg.WebhookURL
+		if err := s.attachReturnURL(&cfg); err != nil {
+			return nil, err
+		}
+	}
+	for k, v := range overrides {
+		cfg.Config[k] = v
 	}
 	return &cfg, nil
 }
@@ -283,7 +320,7 @@ func (s *ProviderAppService) GetProvider(id string) (domain.PaymentProvider, err
 	if err != nil {
 		return nil, fmt.Errorf("provider not found: %w", err)
 	}
-	runtimeCfg, err := s.runtimeConfig(cfg)
+	runtimeCfg, err := s.runtimeConfig(cfg, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -299,4 +336,20 @@ func (s *ProviderAppService) GetProvider(id string) (domain.PaymentProvider, err
 	}
 	s.cache.LoadOrStore(id, prov)
 	return prov, nil
+}
+
+func (s *ProviderAppService) GetProviderWithConfigOverride(id string, overrides map[string]interface{}) (domain.PaymentProvider, error) {
+	cfg, err := s.repo.GetByID(id)
+	if err != nil {
+		return nil, fmt.Errorf("provider not found: %w", err)
+	}
+	runtimeCfg, err := s.runtimeConfig(cfg, overrides)
+	if err != nil {
+		return nil, err
+	}
+	factory, ok := s.factories[runtimeCfg.Type]
+	if !ok {
+		return nil, fmt.Errorf("no factory registered for provider type %q", runtimeCfg.Type)
+	}
+	return factory(runtimeCfg, s.callback), nil
 }

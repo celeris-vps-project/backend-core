@@ -59,6 +59,12 @@ func (a *BillingAdapterWithCB) GetInvoiceStatus(invoiceID string) (string, error
 	})
 }
 
+func (a *BillingAdapterWithCB) GetInvoiceForPayment(invoiceID string) (paymentApp.PayableInvoice, error) {
+	return circuitbreaker.Execute(a.cb, func() (paymentApp.PayableInvoice, error) {
+		return a.inner.GetInvoiceForPayment(invoiceID)
+	})
+}
+
 func (a *BillingAdapterWithCB) GetInvoice(invoiceID string) (paymentApp.RenewalInvoice, error) {
 	return circuitbreaker.Execute(a.cb, func() (paymentApp.RenewalInvoice, error) {
 		return a.inner.GetInvoice(invoiceID)
