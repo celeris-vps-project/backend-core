@@ -32,8 +32,9 @@ func Middleware(limiter *RateLimiter) app.HandlerFunc {
 	log.Printf("[ratelimit] middleware enabled")
 
 	return func(c context.Context, ctx *app.RequestContext) {
-		ip := clientIP(ctx)
 
+		ip := clientIP(ctx)
+		log.Printf("[ratelimit] receive ip %s", ip)
 		if !limiter.Allow(ip) {
 			ctx.JSON(consts.StatusTooManyRequests, utils.H{
 				"error": "rate limit exceeded, please try again later",
