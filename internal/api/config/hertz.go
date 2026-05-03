@@ -9,8 +9,8 @@ import (
 	"github.com/cloudwego/hertz/pkg/common/hlog"
 )
 
-func NewHertzHandler(serverConfig ServerConfig, debugConfig DebugConfig) *server.Hertz {
-	hlog.SetLevel(hertzLogLevel(debugConfig.Level))
+func NewHertzHandler(serverConfig ServerConfig, logConfig LogConfig) *server.Hertz {
+	hlog.SetLevel(hertzLogLevel(logConfig.Level))
 
 	HertzOptions := config.Option{
 		F: func(o *config.Options) {

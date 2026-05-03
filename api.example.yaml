@@ -4,11 +4,12 @@
 # server config
 server:
   domain: "www.example.com"
+  public_base_url: "https://www.example.com"
   port: 8080
   listen: 0.0.0.0
   name: "Celeris-api-server"
 
-debug:
+log:
   level: "info"              # set to "debug" to enable framework debug logs
 
 database:

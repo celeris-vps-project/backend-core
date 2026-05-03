@@ -22,7 +22,7 @@ type Config struct {
 	Crypto    CryptoPaymentConfig `json:"crypto" yaml:"crypto"`
 	Server    ServerConfig        `json:"server" yaml:"server"`
 	Admin     AdminConfig         `json:"admin" yaml:"admin"`
-	Debug     DebugConfig         `json:"debug" yaml:"debug"`
+	Log       LogConfig           `json:"log" yaml:"log"`
 }
 
 // AdminConfig holds the initial admin account settings.
@@ -33,8 +33,17 @@ type AdminConfig struct {
 	Email string `json:"email" yaml:"email"` // default: "admin@celeris.local"
 }
 
-type DebugConfig struct {
+type LogConfig struct {
 	Level string `json:"level" yaml:"level"` // trace, debug, info, notice, warn, error, or fatal
+}
+
+func (c LogConfig) AccessLogEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(c.Level)) {
+	case "trace", "debug":
+		return true
+	default:
+		return false
+	}
 }
 
 type BillingConfig struct {
@@ -190,10 +199,11 @@ type CryptoPaymentConfig struct {
 }
 
 type ServerConfig struct {
-	Port   PortConfig `json:"port" yaml:"port"`
-	Domain string     `json:"domain" yaml:"domain"`
-	Listen string     `json:"listen" yaml:"listen"`
-	Name   string     `json:"name" yaml:"name"`
+	Port          PortConfig `json:"port" yaml:"port"`
+	Domain        string     `json:"domain" yaml:"domain"`
+	Listen        string     `json:"listen" yaml:"listen"`
+	Name          string     `json:"name" yaml:"name"`
+	PublicBaseURL string     `json:"public_base_url" yaml:"public_base_url"`
 }
 
 func (p *PortConfig) String() string {
@@ -290,7 +300,7 @@ func DefaultConfig() Config {
 		Admin: AdminConfig{
 			Email: "admin@celeris.local",
 		},
-		Debug: DebugConfig{
+		Log: LogConfig{
 			Level: "info",
 		},
 	}

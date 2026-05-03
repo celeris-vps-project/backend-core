@@ -38,6 +38,7 @@ import (
 	provisioningHttp "backend-core/internal/provisioning/interfaces/http"
 	provisioningWs "backend-core/internal/provisioning/interfaces/ws"
 	"backend-core/internal/web"
+	"backend-core/pkg/accesslog"
 	"backend-core/pkg/adaptive"
 	"backend-core/pkg/agentpb"
 	"backend-core/pkg/circuitbreaker"
@@ -56,6 +57,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -515,9 +517,12 @@ func main() {
 		return paymentInfra.NewEPayPaymentProvider(cfg, cb)
 	})
 	// Register notify URL builder — used by ProviderAppService to auto-fill EPay config.
-	// Builds an absolute URL using the configured server domain so that external
+	// Builds an absolute URL using the configured public base URL so that external
 	// payment gateways (EPay) can call back to this server.
 	providerSvc.RegisterNotifyURLBuilder(func(providerID string) string {
+		if baseURL := strings.TrimRight(strings.TrimSpace(cfg.Server.PublicBaseURL), "/"); baseURL != "" {
+			return baseURL + "/api/v1/payments/webhook/epay/" + providerID
+		}
 		domain := cfg.Server.Domain
 		port := cfg.Server.Port.String()
 		scheme := "https"
@@ -647,7 +652,10 @@ func main() {
 	log.Printf("[api]   standard  = global %.0f QPS, per-IP %.0f QPS", rlCfg.Standard.GlobalQPS, rlCfg.Standard.IPMaxQPS)
 	log.Printf("[api]   admin     = global %.0f QPS, per-IP %.0f QPS", rlCfg.Admin.GlobalQPS, rlCfg.Admin.IPMaxQPS)
 
-	h := apiConfig.NewHertzHandler(cfg.Server, cfg.Debug)
+	h := apiConfig.NewHertzHandler(cfg.Server, cfg.Log)
+	if cfg.Log.AccessLogEnabled() {
+		h.Use(accesslog.Middleware())
+	}
 
 	// Health check endpoint — used by Docker healthcheck and systemd
 	h.GET("/healthz", func(c context.Context, ctx *hertzApp.RequestContext) {

@@ -96,11 +96,10 @@ func (s *ProviderAppService) autoFillConfig(p *domain.PaymentProviderConfig) {
 	if p.Config == nil {
 		p.Config = make(map[string]interface{})
 	}
-	// Only set notify_url if not manually provided (requires notifyURLBuilder)
+	// EPay notify_url is derived from server public_base_url. Always refresh it
+	// so stale persisted values do not leak old listen ports into new charges.
 	if s.notifyURLBuilder != nil {
-		if existing, _ := p.Config["notify_url"].(string); existing == "" {
-			p.Config["notify_url"] = s.notifyURLBuilder(p.ID)
-		}
+		p.Config["notify_url"] = s.notifyURLBuilder(p.ID)
 	}
 	// Default pay_type to "alipay" if not provided
 	if existing, _ := p.Config["pay_type"].(string); existing == "" {
@@ -137,6 +136,7 @@ func (s *ProviderAppService) UpdateProvider(id, name string, sortOrder int, conf
 	if config != nil {
 		existing.Config = config
 	}
+	s.autoFillConfig(existing)
 	existing.UpdatedAt = time.Now()
 
 	if err := s.repo.Update(existing); err != nil {
@@ -210,6 +210,7 @@ func (s *ProviderAppService) GetProvider(id string) (domain.PaymentProvider, err
 	if err != nil {
 		return nil, fmt.Errorf("provider not found: %w", err)
 	}
+	s.autoFillConfig(cfg)
 
 	factory, ok := s.factories[cfg.Type]
 	if !ok {
