@@ -44,8 +44,16 @@ func (m *mockOrderActivator) ListOrders() ([]app.PayableOrder, error) {
 	}
 	return []app.PayableOrder{m.order}, nil
 }
-func (m *mockOrderActivator) LinkInvoiceToOrder(orderID, invoiceID string) error { return nil }
-func (m *mockOrderActivator) CancelOrder(orderID, reason string) error           { return nil }
+func (m *mockOrderActivator) LinkInvoiceToOrder(orderID, invoiceID string) error {
+	m.order.InvoiceID = invoiceID
+	for i := range m.orders {
+		if m.orders[i].ID == orderID {
+			m.orders[i].InvoiceID = invoiceID
+		}
+	}
+	return nil
+}
+func (m *mockOrderActivator) CancelOrder(orderID, reason string) error { return nil }
 
 type mockProductPurchaser struct {
 	networkMode string
@@ -65,10 +73,13 @@ func (m *mockInstanceCreator) CreatePendingInstance(customerID, orderID, region,
 	return app.PendingInstance{ID: "inst-1", InitialPassword: "pwd-1"}, nil
 }
 
-type mockInvoiceCreator struct{}
+type mockInvoiceCreator struct {
+	createCount int
+}
 
 func (m *mockInvoiceCreator) CreateAndIssueInvoice(customerID, currency, billingCycle, description string, priceAmount int64) (string, error) {
-	return "inv-1", nil
+	m.createCount++
+	return fmt.Sprintf("inv-%d", m.createCount), nil
 }
 func (m *mockInvoiceCreator) RecordInvoicePayment(invoiceID string, amount int64, currency string) error {
 	return nil
@@ -261,10 +272,14 @@ func (r *memoryAttemptRepo) ListPending(_ context.Context, limit int) ([]*domain
 type epayTestProvider struct {
 	merchantKey string
 	createOrder string
+	createCalls *int
 	queryResult *domain.PaymentOrderQueryResult
 }
 
 func (p *epayTestProvider) CreateCharge(_ context.Context, orderID string, currency string, amountMinor int64) (*domain.ChargeResult, error) {
+	if p.createCalls != nil {
+		*p.createCalls = *p.createCalls + 1
+	}
 	p.createOrder = orderID
 	return &domain.ChargeResult{
 		ChargeID:   "epay-local-1",
@@ -540,7 +555,71 @@ func TestReconcileEPayOrder_UsesPersistedAttemptProvider(t *testing.T) {
 	}
 }
 
+func TestInitiatePayment_ReusesPendingEPayAttemptForOrder(t *testing.T) {
+	order := app.PayableOrder{
+		ID:          "order-1",
+		Status:      "pending",
+		CustomerID:  "cust-1",
+		ProductID:   "prod-1",
+		Currency:    "USD",
+		PriceAmount: 7,
+	}
+	invoices := &mockInvoiceCreator{}
+	orch := app.NewPostPaymentOrchestrator(
+		&mockOrderActivator{order: order},
+		&mockProductPurchaser{},
+		nil,
+		invoices,
+		nil,
+	)
+	createCalls := 0
+	providerSvc := newEPayProviderServiceForTestWithCreateCounter("provider-1", "merch_1", "secret", &createCalls)
+	attempts := &memoryAttemptRepo{}
+	svc := app.NewPaymentAppService(providerSvc, orch, nil)
+	svc.SetPaymentAttemptStore(attempts, noOpIDGen{})
+
+	first, err := svc.InitiatePayment(context.Background(), &app.InitiatePaymentRequest{
+		OrderID:    "order-1",
+		ProviderID: "provider-1",
+		PayType:    "alipay",
+	})
+	if err != nil {
+		t.Fatalf("first payment unexpected error: %v", err)
+	}
+	second, err := svc.InitiatePayment(context.Background(), &app.InitiatePaymentRequest{
+		OrderID:    "order-1",
+		ProviderID: "provider-1",
+		PayType:    "alipay",
+	})
+	if err != nil {
+		t.Fatalf("second payment unexpected error: %v", err)
+	}
+
+	if createCalls != 1 {
+		t.Fatalf("expected one provider charge creation, got %d", createCalls)
+	}
+	if invoices.createCount != 1 {
+		t.Fatalf("expected one invoice creation, got %d", invoices.createCount)
+	}
+	if len(attempts.attempts) != 1 {
+		t.Fatalf("expected one payment attempt, got %d", len(attempts.attempts))
+	}
+	if second.PaymentURL != first.PaymentURL {
+		t.Fatalf("expected reused payment url %s, got %s", first.PaymentURL, second.PaymentURL)
+	}
+	if second.InvoiceID != first.InvoiceID || second.Status != domain.ChargeStatusPending {
+		t.Fatalf("unexpected reused response: first=%+v second=%+v", first, second)
+	}
+	if second.Message != "existing pending payment returned" {
+		t.Fatalf("expected idempotent reuse message, got %q", second.Message)
+	}
+}
+
 func newEPayProviderServiceForTest(providerID, pid, merchantKey string) *app.ProviderAppService {
+	return newEPayProviderServiceForTestWithCreateCounter(providerID, pid, merchantKey, nil)
+}
+
+func newEPayProviderServiceForTestWithCreateCounter(providerID, pid, merchantKey string, createCalls *int) *app.ProviderAppService {
 	repo := &stubProviderRepo{
 		provider: &domain.PaymentProviderConfig{
 			ID:        providerID,
@@ -566,7 +645,7 @@ func newEPayProviderServiceForTest(providerID, pid, merchantKey string) *app.Pro
 	})
 	providerSvc.RegisterFactory(domain.ProviderTypeEPay, func(cfg *domain.PaymentProviderConfig, cb func(*domain.WebhookPayload)) domain.PaymentProvider {
 		key, _ := cfg.Config["merchant_key"].(string)
-		return &epayTestProvider{merchantKey: key}
+		return &epayTestProvider{merchantKey: key, createCalls: createCalls}
 	})
 	return providerSvc
 }

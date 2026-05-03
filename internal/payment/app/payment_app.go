@@ -98,6 +98,14 @@ type PaymentAppService struct {
 
 	statusMu          sync.RWMutex
 	statusSubscribers map[string]map[chan PaymentStatusEvent]struct{}
+
+	initiationMu    sync.Mutex
+	initiationLocks map[string]*paymentInitiationLock
+}
+
+type paymentInitiationLock struct {
+	mu   sync.Mutex
+	refs int
 }
 
 func NewPaymentAppService(
@@ -110,6 +118,7 @@ func NewPaymentAppService(
 		orchestrator:      orchestrator,
 		cryptoProv:        cryptoProv,
 		statusSubscribers: make(map[string]map[chan PaymentStatusEvent]struct{}),
+		initiationLocks:   make(map[string]*paymentInitiationLock),
 	}
 }
 
@@ -153,15 +162,24 @@ func (s *PaymentAppService) StartPendingPaymentPoller(ctx context.Context, inter
 // Returns *AppError for all known business errors so the handler can
 // call apperr.HandleErr() without any business logic.
 func (s *PaymentAppService) InitiatePayment(ctx context.Context, req *InitiatePaymentRequest) (*InitiatePaymentResponse, error) {
-	if req.OrderID == "" {
+	if req == nil || strings.TrimSpace(req.OrderID) == "" {
 		return nil, apperr.ErrBadRequest(apperr.CodeInvalidParams, "order_id is required")
 	}
+	req.OrderID = strings.TrimSpace(req.OrderID)
+
+	unlock := s.lockPaymentInitiation(req.OrderID)
+	defer unlock()
 
 	// 1. Look up the order
 	order, err := s.orchestrator.GetOrderForPay(req.OrderID)
 	if err != nil {
 		return nil, apperr.ErrNotFound(apperr.CodeOrderNotFound, "order not found: "+err.Error())
 	}
+
+	if resp, ok := s.reusePendingPayment(ctx, order); ok {
+		return resp, nil
+	}
+
 	invoiceID := ""
 	payableOrder := order
 	couponResult := CouponApplicationResult{FinalAmount: order.PriceAmount}
@@ -245,6 +263,85 @@ func (s *PaymentAppService) InitiatePayment(ctx context.Context, req *InitiatePa
 		CouponID:       couponResult.CouponID,
 		Crypto:         chargeResult.Crypto,
 	}, nil
+}
+
+func (s *PaymentAppService) lockPaymentInitiation(orderID string) func() {
+	s.initiationMu.Lock()
+	if s.initiationLocks == nil {
+		s.initiationLocks = make(map[string]*paymentInitiationLock)
+	}
+	lock := s.initiationLocks[orderID]
+	if lock == nil {
+		lock = &paymentInitiationLock{}
+		s.initiationLocks[orderID] = lock
+	}
+	lock.refs++
+	s.initiationMu.Unlock()
+
+	lock.mu.Lock()
+
+	return func() {
+		lock.mu.Unlock()
+
+		s.initiationMu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(s.initiationLocks, orderID)
+		}
+		s.initiationMu.Unlock()
+	}
+}
+
+func (s *PaymentAppService) reusePendingPayment(ctx context.Context, order PayableOrder) (*InitiatePaymentResponse, bool) {
+	if order.Status != "pending" || s.attempts == nil {
+		return nil, false
+	}
+	attempt, err := s.attempts.FindLatestByOrderID(ctx, order.ID)
+	if err != nil {
+		if !errors.Is(err, domain.ErrPaymentAttemptNotFound) {
+			log.Printf("[PaymentAppService] WARNING: payment attempt lookup failed for idempotent pay: order=%s err=%v",
+				order.ID, err)
+		}
+		return nil, false
+	}
+	if attempt == nil || attempt.Status != domain.ChargeStatusPending || strings.TrimSpace(attempt.PayURL) == "" {
+		return nil, false
+	}
+
+	payableAmount := order.PriceAmount
+	if order.InvoiceID != "" && s.orchestrator != nil {
+		invoice, err := s.orchestrator.GetInvoiceForPayment(order.InvoiceID)
+		if err != nil {
+			log.Printf("[PaymentAppService] WARNING: invoice lookup failed for idempotent pay: order=%s invoice=%s err=%v",
+				order.ID, order.InvoiceID, err)
+		} else {
+			if invoice.Status == "void" {
+				return nil, false
+			}
+			payableAmount = invoice.Total
+		}
+	}
+
+	log.Printf("[PaymentAppService] reusing pending payment: order=%s attempt=%s provider=%s",
+		order.ID, attempt.ID, attempt.ProviderID)
+	return &InitiatePaymentResponse{
+		OrderID:       order.ID,
+		InvoiceID:     order.InvoiceID,
+		ChargeID:      pendingAttemptChargeID(attempt),
+		Status:        domain.ChargeStatusPending,
+		PaymentURL:    strings.TrimSpace(attempt.PayURL),
+		Message:       "existing pending payment returned",
+		PayableAmount: payableAmount,
+	}, true
+}
+
+func pendingAttemptChargeID(attempt *domain.PaymentAttempt) string {
+	for _, value := range []string{attempt.TradeNo, attempt.OutTradeNo} {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return attempt.ID
 }
 
 func (s *PaymentAppService) applyCoupon(ctx context.Context, code string, order PayableOrder) (CouponApplicationResult, error) {
