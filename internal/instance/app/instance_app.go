@@ -92,7 +92,7 @@ func (s *InstanceAppService) PurchaseInstance(
 	}
 
 	// 2. Allocate a slot on the chosen node
-	if err := node.AllocateSlot(); err != nil {
+	if err := s.nodeRepo.AllocateSlotAtomic(node.ID()); err != nil {
 		return nil, err
 	}
 
@@ -100,19 +100,19 @@ func (s *InstanceAppService) PurchaseInstance(
 	id := s.ids.NewID()
 	inst, err := domain.NewInstance(id, customerID, orderID, node.ID(), hostname, plan, os, "", cpu, memoryMB, diskGB)
 	if err != nil {
+		_ = s.nodeRepo.ReleaseSlotAtomic(node.ID())
 		return nil, err
 	}
 	password, err := generateInitialPassword()
 	if err != nil {
+		_ = s.nodeRepo.ReleaseSlotAtomic(node.ID())
 		return nil, err
 	}
 	inst.SetInitialPassword(password)
 
-	// 4. Persist both
-	if err := s.nodeRepo.Save(node); err != nil {
-		return nil, err
-	}
+	// 4. Persist the instance. Node capacity was already updated atomically.
 	if err := s.instanceRepo.Save(inst); err != nil {
+		_ = s.nodeRepo.ReleaseSlotAtomic(node.ID())
 		return nil, err
 	}
 	s.publishState(inst)
@@ -166,6 +166,10 @@ func (s *InstanceAppService) GetByOrderID(orderID string) (*domain.Instance, err
 
 func (s *InstanceAppService) ListByCustomer(customerID string) ([]*domain.Instance, error) {
 	return s.instanceRepo.ListByCustomerID(customerID)
+}
+
+func (s *InstanceAppService) ListAll() ([]*domain.Instance, error) {
+	return s.instanceRepo.ListAll()
 }
 
 func (s *InstanceAppService) ListByNode(nodeID string) ([]*domain.Instance, error) {
@@ -320,10 +324,8 @@ func (s *InstanceAppService) TerminateInstance(instanceID string) error {
 	}
 
 	// Release the node slot
-	node, err := s.nodeRepo.GetByID(inst.NodeID())
-	if err == nil {
-		_ = node.ReleaseSlot()
-		_ = s.nodeRepo.Save(node)
+	if inst.NodeID() != "" {
+		_ = s.nodeRepo.ReleaseSlotAtomic(inst.NodeID())
 	}
 
 	if err := s.instanceRepo.Save(inst); err != nil {

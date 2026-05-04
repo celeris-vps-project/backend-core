@@ -6,6 +6,7 @@ import (
 	"backend-core/pkg/database"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -416,6 +417,32 @@ func (r *GormTaskRepo) ListPendingByNodeID(nodeID string) ([]contracts.Task, err
 			return nil, err
 		}
 		out[i] = task
+	}
+	return out, nil
+}
+
+func (r *GormTaskRepo) ListActiveByInstanceID(instanceID string) ([]contracts.Task, error) {
+	if instanceID == "" {
+		return nil, nil
+	}
+	var pos []TaskPO
+	needle := fmt.Sprintf("%%\"instance_id\":\"%s\"%%", instanceID)
+	if err := r.db.Where(
+		"spec LIKE ? AND status IN ?",
+		needle,
+		[]string{string(contracts.TaskStatusQueued), string(contracts.TaskStatusRunning)},
+	).Find(&pos).Error; err != nil {
+		return nil, err
+	}
+	out := make([]contracts.Task, 0, len(pos))
+	for _, po := range pos {
+		task, err := taskToDomain(po)
+		if err != nil {
+			return nil, err
+		}
+		if task.Spec.InstanceID == instanceID {
+			out = append(out, task)
+		}
 	}
 	return out, nil
 }

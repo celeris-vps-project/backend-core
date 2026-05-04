@@ -1,6 +1,7 @@
 package main
 
 import (
+	adminApp "backend-core/internal/admin"
 	apiConfig "backend-core/internal/api/config"
 	billingApp "backend-core/internal/billing/app"
 	billingInfra "backend-core/internal/billing/infra"
@@ -556,6 +557,8 @@ func main() {
 	// PaymentHandler is now a thin HTTP adapter — only parses/serialises.
 	payHandler := paymentHttp.NewPaymentHandler(paySvc)
 	providerHandler := paymentHttp.NewProviderHandler(providerSvc)
+	repairSvc := adminApp.NewRepairService(orderRepo, instRepo, prodApp, provSvc, taskRepo, provDispatcher)
+	repairHandler := adminApp.NewRepairHandler(repairSvc)
 	log.Printf("[api] payment provider management enabled (dynamic admin configuration)")
 	log.Printf("[api] payment orchestrator circuit breakers enabled (ordering=5/30s, catalog=5/30s, instance=3/20s)")
 	if cryptoCfg.MockMode {
@@ -797,6 +800,7 @@ func main() {
 		adminAPI.GET("/host-nodes", nHandler.ListHosts)
 		adminAPI.GET("/host-nodes/:id", nHandler.GetHost)
 		adminAPI.POST("/host-nodes", nHandler.CreateHost)
+		adminAPI.PUT("/host-nodes/:id/slots", nHandler.UpdateHostSlots)
 		adminAPI.PUT("/host-nodes/:id/nat-entry", nHandler.UpdateNATEntryHost)
 		adminAPI.POST("/host-nodes/:id/ips", nHandler.AddIP)
 		adminAPI.GET("/host-nodes/:id/ips", nHandler.ListIPs)
@@ -826,9 +830,14 @@ func main() {
 		adminAPI.POST("/nodes", nHandler.CreateHost)
 		adminAPI.GET("/nodes", nHandler.ListHosts)
 		adminAPI.GET("/nodes/:id", nHandler.GetHost)
+		adminAPI.PUT("/nodes/:id/slots", nHandler.UpdateHostSlots)
 		adminAPI.POST("/nodes/:id/enable", nHandler.EnableHost)
 		adminAPI.POST("/nodes/:id/disable", nHandler.DisableHost)
 		adminAPI.POST("/nodes/:id/revoke-token", nHandler.RevokeNodeToken)
+
+		// Manual repair queue
+		adminAPI.GET("/repairs/provisioning", repairHandler.ListProvisioning)
+		adminAPI.POST("/repairs/provisioning/:orderId", repairHandler.RepairProvisioning)
 
 		// Region management
 		adminAPI.POST("/regions", rHandler.Create)

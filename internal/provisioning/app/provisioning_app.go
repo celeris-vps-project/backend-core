@@ -96,7 +96,9 @@ func (s *ProvisioningAppService) CreateHost(code, location, name, secret string,
 		return nil, err
 	}
 	if totalSlots > 0 {
-		h.SetTotalSlots(totalSlots)
+		if err := h.SetTotalSlots(totalSlots); err != nil {
+			return nil, err
+		}
 	}
 	if regionID := s.ensureRegion(location); regionID != "" {
 		h.SetRegionID(regionID)
@@ -178,26 +180,26 @@ func (s *ProvisioningAppService) UpdateNATEntryHost(nodeID, natEntryHost string)
 	return s.hostRepo.Save(h)
 }
 
-func (s *ProvisioningAppService) AllocateSlot(nodeID string) error {
+func (s *ProvisioningAppService) UpdateHostTotalSlots(nodeID string, totalSlots int) (*domain.HostNode, error) {
 	h, err := s.hostRepo.GetByID(nodeID)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if err := h.AllocateSlot(); err != nil {
-		return err
+	if err := h.SetTotalSlots(totalSlots); err != nil {
+		return nil, err
 	}
-	return s.hostRepo.Save(h)
+	if err := s.hostRepo.Save(h); err != nil {
+		return nil, err
+	}
+	return h, nil
+}
+
+func (s *ProvisioningAppService) AllocateSlot(nodeID string) error {
+	return s.hostRepo.AllocateSlotAtomic(nodeID)
 }
 
 func (s *ProvisioningAppService) ReleaseSlot(nodeID string) error {
-	h, err := s.hostRepo.GetByID(nodeID)
-	if err != nil {
-		return err
-	}
-	if err := h.ReleaseSlot(); err != nil {
-		return err
-	}
-	return s.hostRepo.Save(h)
+	return s.hostRepo.ReleaseSlotAtomic(nodeID)
 }
 
 func (s *ProvisioningAppService) AvailableLocations() ([]LocationSummary, error) {
@@ -1110,6 +1112,14 @@ func (s *ProvisioningAppService) GetResourcePool(poolID string) (*domain.Resourc
 	}
 	pool.WithNodes(nodes)
 	return pool, nil
+}
+
+func (s *ProvisioningAppService) AvailableSlotsInResourcePool(poolID string) (int, error) {
+	pool, err := s.GetResourcePool(poolID)
+	if err != nil {
+		return 0, err
+	}
+	return pool.AvailablePhysicalSlots(), nil
 }
 
 func (s *ProvisioningAppService) ListResourcePools() ([]*domain.ResourcePool, error) {

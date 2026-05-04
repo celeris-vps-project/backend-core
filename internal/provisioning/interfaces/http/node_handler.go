@@ -41,6 +41,10 @@ type UpdateNATEntryHostRequest struct {
 	NATEntryHost string `json:"nat_entry_host"`
 }
 
+type UpdateHostSlotsRequest struct {
+	TotalSlots int `json:"total_slots" vd:"$>=0"`
+}
+
 type EnqueueTaskRequest struct {
 	Type contracts.TaskType      `json:"type" vd:"len($)>0"`
 	Spec contracts.ProvisionSpec `json:"spec"`
@@ -258,6 +262,22 @@ func (h *NodeHandler) UpdateNATEntryHost(ctx context.Context, c *hz_app.RequestC
 		return
 	}
 	node, _ := h.svc.GetHost(c.Param("id"))
+	state, _ := h.svc.StateCache().GetNodeState(node.ID())
+	c.JSON(consts.StatusOK, utils.H{"data": toHostResp(node, state)})
+}
+
+// PUT /host-nodes/:id/slots
+func (h *NodeHandler) UpdateHostSlots(ctx context.Context, c *hz_app.RequestContext) {
+	var req UpdateHostSlotsRequest
+	if err := c.BindAndValidate(&req); err != nil {
+		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, err.Error()))
+		return
+	}
+	node, err := h.svc.UpdateHostTotalSlots(c.Param("id"), req.TotalSlots)
+	if err != nil {
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyNodeError(err), err.Error()))
+		return
+	}
 	state, _ := h.svc.StateCache().GetNodeState(node.ID())
 	c.JSON(consts.StatusOK, utils.H{"data": toHostResp(node, state)})
 }
@@ -653,7 +673,7 @@ func classifyNodeError(err error) string {
 		return apperr.CodeIPNotFound
 	case strings.Contains(msg, "task not found"):
 		return apperr.CodeTaskNotFound
-	case strings.Contains(msg, "no available slots"), strings.Contains(msg, "no available nodes"):
+	case strings.Contains(msg, "no available slots"), strings.Contains(msg, "no available nodes"), strings.Contains(msg, "less than used slots"):
 		return apperr.CodeNoAvailableSlots
 	case strings.Contains(msg, "node is disabled"):
 		return apperr.CodeNodeDisabled

@@ -9,7 +9,9 @@ func TestHostNode_Capacity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	n.SetTotalSlots(3)
+	if err := n.SetTotalSlots(3); err != nil {
+		t.Fatalf("unexpected total slots error: %v", err)
+	}
 
 	if n.AvailableSlots() != 3 {
 		t.Fatalf("expected 3 available, got %d", n.AvailableSlots())
@@ -41,7 +43,9 @@ func TestHostNode_Capacity(t *testing.T) {
 
 func TestHostNode_Disabled(t *testing.T) {
 	n, _ := NewHostNode("n-4", "US-slc-01", "US-slc", "Salt Lake City #1", "s3cret")
-	n.SetTotalSlots(10)
+	if err := n.SetTotalSlots(10); err != nil {
+		t.Fatalf("unexpected total slots error: %v", err)
+	}
 	n.Disable()
 
 	if err := n.AllocateSlot(); err == nil {

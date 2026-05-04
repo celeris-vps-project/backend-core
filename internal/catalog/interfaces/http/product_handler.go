@@ -126,8 +126,13 @@ func (h *ProductHandler) Purchase(ctx context.Context, c *hz_app.RequestContext)
 		c.JSON(consts.StatusBadRequest, apperr.Resp(apperr.CodeInvalidParams, "hostname is required"))
 		return
 	}
+	if err := h.svc.ReserveProduct(ctx, req.ProductID); err != nil {
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyProductError(err), err.Error()))
+		return
+	}
 	p, err := h.svc.PurchaseProduct(ctx, req.ProductID, uid.String(), req.OrderID, "", "", req.Hostname, req.OS, "")
 	if err != nil {
+		_ = h.svc.ReleaseProduct(ctx, req.ProductID)
 		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyProductError(err), err.Error()))
 		return
 	}

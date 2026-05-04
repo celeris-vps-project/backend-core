@@ -24,6 +24,18 @@ func (a *CatalogAdapterWithCB) PurchaseProduct(ctx context.Context, productID, c
 	})
 }
 
+func (a *CatalogAdapterWithCB) ReserveProduct(ctx context.Context, productID string) error {
+	return circuitbreaker.ExecuteNoResult(a.cb, func() error {
+		return a.inner.ReserveProduct(ctx, productID)
+	})
+}
+
+func (a *CatalogAdapterWithCB) ReleaseProduct(ctx context.Context, productID string) error {
+	return circuitbreaker.ExecuteNoResult(a.cb, func() error {
+		return a.inner.ReleaseProduct(ctx, productID)
+	})
+}
+
 func (a *CatalogAdapterWithCB) Stats() circuitbreaker.Stats {
 	return a.cb.Stats()
 }

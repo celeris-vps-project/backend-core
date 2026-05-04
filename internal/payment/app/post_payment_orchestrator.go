@@ -50,6 +50,8 @@ type PayableOrder struct {
 // ProductPurchaser is a port for the catalog context.
 type ProductPurchaser interface {
 	PurchaseProduct(ctx context.Context, productID, customerID, orderID, instanceID, initialPassword, hostname, os, networkMode string) (PurchasedProduct, error)
+	ReserveProduct(ctx context.Context, productID string) error
+	ReleaseProduct(ctx context.Context, productID string) error
 }
 
 // PurchasedProduct is the minimal read-model returned after purchase.
@@ -239,8 +241,20 @@ func (s *PostPaymentOrchestrator) CreateInvoiceForPayment(order PayableOrder) (s
 	return invoiceID, nil
 }
 
+func (s *PostPaymentOrchestrator) ReserveProductForPayment(productID string) error {
+	if s.products == nil || productID == "" {
+		return nil
+	}
+	return s.products.ReserveProduct(context.Background(), productID)
+}
+
+func (s *PostPaymentOrchestrator) ReleaseReservedProduct(productID, orderID, reason string) {
+	s.releaseReservedProduct(productID, orderID, reason)
+}
+
 // VoidInvoiceOnFailure only voids the current invoice for an unpaid pending order.
 // This keeps normal first-payment retries clean without breaking renewal invoices.
+// When the first-payment invoice is voided, the reserved product slot is released.
 func (s *PostPaymentOrchestrator) VoidInvoiceOnFailure(order PayableOrder, invoiceID, reason string) {
 	if order.Status != "pending" {
 		log.Printf("[PostPaymentOrchestrator] skipping invoice void for order=%s status=%s invoice=%s",
@@ -254,6 +268,7 @@ func (s *PostPaymentOrchestrator) VoidInvoiceOnFailure(order PayableOrder, invoi
 	}
 	if s.voidInvoiceIfOpen(invoiceID, reason) {
 		log.Printf("[PostPaymentOrchestrator] invoice voided: %s reason=%s", invoiceID, reason)
+		s.releaseReservedProduct(order.ProductID, order.ID, reason)
 	}
 }
 
@@ -261,6 +276,19 @@ func (s *PostPaymentOrchestrator) VoidInvoiceOnFailure(order PayableOrder, invoi
 type InvoiceTimeoutPayload struct {
 	InvoiceID string `json:"invoice_id"`
 	OrderID   string `json:"order_id"`
+}
+
+func (s *PostPaymentOrchestrator) releaseReservedProduct(productID, orderID, reason string) {
+	if s.products == nil || productID == "" {
+		return
+	}
+	if err := s.products.ReleaseProduct(context.Background(), productID); err != nil {
+		log.Printf("[PostPaymentOrchestrator] ERROR: failed to release reserved product: order=%s product=%s reason=%s err=%v",
+			orderID, productID, reason, err)
+		return
+	}
+	log.Printf("[PostPaymentOrchestrator] reserved product released: order=%s product=%s reason=%s",
+		orderID, productID, reason)
 }
 
 // HandleInvoiceTimeout checks whether an invoice has been paid after the
@@ -272,13 +300,17 @@ func (s *PostPaymentOrchestrator) HandleInvoiceTimeout(invoiceID, orderID string
 	}
 
 	log.Printf("[PostPaymentOrchestrator] checking timeout: invoice=%s order=%s", invoiceID, orderID)
+	var order PayableOrder
+	var hasOrder bool
 
 	if orderID != "" {
-		order, err := s.orders.GetOrderForPayment(orderID)
+		loadedOrder, err := s.orders.GetOrderForPayment(orderID)
 		if err != nil {
 			log.Printf("[PostPaymentOrchestrator] WARNING: failed to load order %s for timeout check: %v", orderID, err)
 			return
 		}
+		order = loadedOrder
+		hasOrder = true
 		if order.InvoiceID == "" || order.InvoiceID != invoiceID {
 			if s.voidInvoiceIfOpen(invoiceID, "payment timeout - stale invoice auto-voided") {
 				log.Printf("[PostPaymentOrchestrator] stale invoice voided: invoice=%s order=%s current_invoice=%s",
@@ -299,7 +331,9 @@ func (s *PostPaymentOrchestrator) HandleInvoiceTimeout(invoiceID, orderID string
 		return
 	}
 	log.Printf("[PostPaymentOrchestrator] invoice voided: %s (payment timeout)", invoiceID)
-
+	if hasOrder {
+		s.releaseReservedProduct(order.ProductID, order.ID, "payment timeout")
+	}
 	if orderID != "" {
 		if err := s.orders.CancelOrder(orderID, "payment timeout - invoice auto-voided"); err != nil {
 			// Order might already be activated (race with webhook); that is fine.

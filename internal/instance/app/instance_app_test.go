@@ -42,6 +42,20 @@ func (r *memNodeAllocatorRepo) ListByLocation(loc string) ([]domain.NodeAllocato
 	}
 	return out, nil
 }
+func (r *memNodeAllocatorRepo) AllocateSlotAtomic(nodeID string) error {
+	n, ok := r.items[nodeID]
+	if !ok {
+		return errors.New("not found")
+	}
+	return n.AllocateSlot()
+}
+func (r *memNodeAllocatorRepo) ReleaseSlotAtomic(nodeID string) error {
+	n, ok := r.items[nodeID]
+	if !ok {
+		return errors.New("not found")
+	}
+	return n.ReleaseSlot()
+}
 func (r *memNodeAllocatorRepo) Save(n domain.NodeAllocator) error {
 	hn := n.(*nodeDomain.HostNode)
 	r.items[hn.ID()] = hn
@@ -66,6 +80,13 @@ func (r *memInstRepo) GetByOrderID(orderID string) (*domain.Instance, error) {
 		}
 	}
 	return nil, errors.New("not found")
+}
+func (r *memInstRepo) ListAll() ([]*domain.Instance, error) {
+	var out []*domain.Instance
+	for _, i := range r.items {
+		out = append(out, i)
+	}
+	return out, nil
 }
 func (r *memInstRepo) ListByCustomerID(cid string) ([]*domain.Instance, error) {
 	var out []*domain.Instance
@@ -116,7 +137,9 @@ func (g *seqIDGen) NewID() string {
 // createTestHostNode is a helper to create a HostNode with capacity and save it.
 func createTestHostNode(repo *memNodeAllocatorRepo, id, code, location, name string, totalSlots int) *nodeDomain.HostNode {
 	h, _ := nodeDomain.NewHostNode(id, code, location, name, "test-secret")
-	h.SetTotalSlots(totalSlots)
+	if err := h.SetTotalSlots(totalSlots); err != nil {
+		panic(err)
+	}
 	repo.items[id] = h
 	return h
 }

@@ -29,3 +29,11 @@ func (a *CatalogAdapter) PurchaseProduct(ctx context.Context, productID, custome
 		DiskGB:   product.DiskGB(),
 	}, nil
 }
+
+func (a *CatalogAdapter) ReserveProduct(ctx context.Context, productID string) error {
+	return a.svc.ReserveProduct(ctx, productID)
+}
+
+func (a *CatalogAdapter) ReleaseProduct(ctx context.Context, productID string) error {
+	return a.svc.ReleaseProduct(ctx, productID)
+}

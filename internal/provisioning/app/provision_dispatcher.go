@@ -229,15 +229,12 @@ func (p *VPSProvisioner) Provision(cmd ProvisionCommand) (*ProvisionResult, erro
 		return &ProvisionResult{Success: false}, nil
 	}
 
-	// 3. Allocate a physical slot
-	if err := node.AllocateSlot(); err != nil {
+	// 3. Allocate a physical slot. Selection uses a snapshot for balancing,
+	// but the actual reservation must be a database conditional update.
+	if err := p.hostRepo.AllocateSlotAtomic(node.ID()); err != nil {
 		log.Printf("[vps-provisioner] WARNING: failed to allocate slot on %s: %v", node.Code(), err)
 		p.enqueuePendingTask(cmd, "")
 		return &ProvisionResult{Success: false}, nil
-	}
-	if err := p.hostRepo.Save(node); err != nil {
-		log.Printf("[vps-provisioner] ERROR: failed to save node %s: %v", node.Code(), err)
-		return nil, err
 	}
 
 	// 4. Build the provision spec
@@ -371,7 +368,10 @@ func (p *VPSProvisioner) buildPool(poolID, regionID string) (*domain.ResourcePoo
 }
 
 func (p *VPSProvisioner) enqueuePendingTask(cmd ProvisionCommand, nodeID string) {
-	instanceID := p.ids.NewID()
+	instanceID := cmd.InstanceID
+	if instanceID == "" {
+		instanceID = p.ids.NewID()
+	}
 	task := &contracts.Task{
 		ID:     p.ids.NewID(),
 		NodeID: nodeID,
@@ -388,6 +388,7 @@ func (p *VPSProvisioner) enqueuePendingTask(cmd ProvisionCommand, nodeID string)
 			StoragePool:     cmd.StoragePool,
 			NetworkName:     cmd.NetworkName,
 			InitialPassword: cmd.InitialPassword,
+			NetworkMode:     contracts.NetworkMode(cmd.NetworkMode),
 		},
 		CreatedAt: time.Now().Format(time.RFC3339),
 	}

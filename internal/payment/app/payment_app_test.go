@@ -57,11 +57,24 @@ func (m *mockOrderActivator) CancelOrder(orderID, reason string) error { return 
 
 type mockProductPurchaser struct {
 	networkMode string
+	reserveHits int
+	releaseHits int
+	reserveErr  error
 }
 
 func (m *mockProductPurchaser) PurchaseProduct(ctx context.Context, productID, customerID, orderID, instanceID, initialPassword, hostname, os, networkMode string) (app.PurchasedProduct, error) {
 	m.networkMode = networkMode
 	return app.PurchasedProduct{}, nil
+}
+
+func (m *mockProductPurchaser) ReserveProduct(ctx context.Context, productID string) error {
+	m.reserveHits++
+	return m.reserveErr
+}
+
+func (m *mockProductPurchaser) ReleaseProduct(ctx context.Context, productID string) error {
+	m.releaseHits++
+	return nil
 }
 
 type mockInstanceCreator struct {
@@ -155,6 +168,75 @@ func TestInitiatePayment_ZeroCouponConfirmsImmediately(t *testing.T) {
 	}
 	if resp.ChargeID != "coupon:coupon-1" {
 		t.Fatalf("expected coupon charge id, got %s", resp.ChargeID)
+	}
+}
+
+func TestInitiatePayment_ReservesProductBeforeCharge(t *testing.T) {
+	order := app.PayableOrder{
+		ID:          "order-1",
+		Status:      "pending",
+		CustomerID:  "cust-1",
+		ProductID:   "prod-1",
+		Currency:    "USD",
+		PriceAmount: 7,
+	}
+	products := &mockProductPurchaser{}
+	orch := app.NewPostPaymentOrchestrator(
+		&mockOrderActivator{order: order},
+		products,
+		nil,
+		&mockInvoiceCreator{},
+		nil,
+	)
+	providerSvc := newEPayProviderServiceForTest("provider-1", "merch_1", "secret")
+	attempts := &memoryAttemptRepo{}
+	svc := app.NewPaymentAppService(providerSvc, orch, nil)
+	svc.SetPaymentAttemptStore(attempts, noOpIDGen{})
+
+	_, err := svc.InitiatePayment(context.Background(), &app.InitiatePaymentRequest{
+		OrderID:    "order-1",
+		ProviderID: "provider-1",
+		PayType:    "alipay",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if products.reserveHits != 1 {
+		t.Fatalf("expected one product reservation, got %d", products.reserveHits)
+	}
+	if products.releaseHits != 0 {
+		t.Fatalf("expected no release on successful charge creation, got %d", products.releaseHits)
+	}
+}
+
+func TestInitiatePayment_ReleasesProductWhenChargeCreationFails(t *testing.T) {
+	order := app.PayableOrder{
+		ID:          "order-1",
+		Status:      "pending",
+		CustomerID:  "cust-1",
+		ProductID:   "prod-1",
+		Currency:    "USD",
+		PriceAmount: 7,
+	}
+	products := &mockProductPurchaser{}
+	orch := app.NewPostPaymentOrchestrator(
+		&mockOrderActivator{order: order},
+		products,
+		nil,
+		&mockInvoiceCreator{},
+		nil,
+	)
+	svc := app.NewPaymentAppService(nil, orch, nil)
+
+	_, err := svc.InitiatePayment(context.Background(), &app.InitiatePaymentRequest{OrderID: "order-1"})
+	if err == nil {
+		t.Fatal("expected charge creation error")
+	}
+	if products.reserveHits != 1 {
+		t.Fatalf("expected one product reservation, got %d", products.reserveHits)
+	}
+	if products.releaseHits != 1 {
+		t.Fatalf("expected reserved product to be released once, got %d", products.releaseHits)
 	}
 }
 

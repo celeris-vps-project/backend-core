@@ -192,6 +192,7 @@ func (s *PaymentAppService) InitiatePayment(ctx context.Context, req *InitiatePa
 	invoiceID := ""
 	payableOrder := order
 	couponResult := CouponApplicationResult{FinalAmount: order.PriceAmount}
+	reservedProduct := false
 	switch order.Status {
 	case "pending":
 		couponResult, err = s.applyCoupon(ctx, req.CouponCode, order)
@@ -201,11 +202,16 @@ func (s *PaymentAppService) InitiatePayment(ctx context.Context, req *InitiatePa
 		if couponResult.Applied {
 			payableOrder.PriceAmount = couponResult.FinalAmount
 		}
+		if err := s.orchestrator.ReserveProductForPayment(order.ProductID); err != nil {
+			return nil, apperr.ErrUnprocessable(apperr.CodeNoAvailableSlots, "product is sold out: "+err.Error())
+		}
+		reservedProduct = true
 		// 2. Create invoice
 		invoiceID, err = s.orchestrator.CreateInvoiceForPayment(payableOrder)
 		if err != nil {
 			log.Printf("[PaymentAppService] WARNING: invoice creation failed for order %s: %v", req.OrderID, err)
-			// Non-fatal — continue without invoice
+			s.orchestrator.ReleaseReservedProduct(payableOrder.ProductID, payableOrder.ID, "invoice creation failed")
+			return nil, apperr.ErrUnprocessable(apperr.CodePaymentFailed, "invoice creation failed: "+err.Error())
 		} else {
 			order.InvoiceID = invoiceID
 			payableOrder.InvoiceID = invoiceID
@@ -248,6 +254,9 @@ func (s *PaymentAppService) InitiatePayment(ctx context.Context, req *InitiatePa
 	if err != nil {
 		// Void orphan invoice on charge failure
 		s.orchestrator.VoidInvoiceOnFailure(order, invoiceID, "payment charge creation failed: "+err.Error())
+		if reservedProduct && invoiceID == "" {
+			s.orchestrator.ReleaseReservedProduct(payableOrder.ProductID, payableOrder.ID, "payment charge creation failed without invoice")
+		}
 		return nil, err // already an *AppError from createCharge
 	}
 

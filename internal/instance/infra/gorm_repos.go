@@ -71,6 +71,14 @@ func (a *HostNodeAllocatorAdapter) ListByLocation(location string) ([]domain.Nod
 	return out, nil
 }
 
+func (a *HostNodeAllocatorAdapter) AllocateSlotAtomic(nodeID string) error {
+	return a.hostRepo.AllocateSlotAtomic(nodeID)
+}
+
+func (a *HostNodeAllocatorAdapter) ReleaseSlotAtomic(nodeID string) error {
+	return a.hostRepo.ReleaseSlotAtomic(nodeID)
+}
+
 // Save persists mutations (e.g. AllocateSlot / ReleaseSlot) back to the host repository.
 // It type-asserts to *wrappedNode (an internal infra type) rather than the concrete
 // provisioning domain type, eliminating the cross-context type assertion.
@@ -139,6 +147,18 @@ func (r *GormInstanceRepo) GetByOrderID(orderID string) (*domain.Instance, error
 		return nil, err
 	}
 	return instanceToDomain(po), nil
+}
+
+func (r *GormInstanceRepo) ListAll() ([]*domain.Instance, error) {
+	var pos []InstancePO
+	if err := r.db.Find(&pos).Error; err != nil {
+		return nil, err
+	}
+	insts := make([]*domain.Instance, len(pos))
+	for i, po := range pos {
+		insts[i] = instanceToDomain(po)
+	}
+	return insts, nil
 }
 
 func (r *GormInstanceRepo) ListByCustomerID(customerID string) ([]*domain.Instance, error) {

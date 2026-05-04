@@ -130,11 +130,11 @@ func TestProductApp_PurchasePublishesEvent(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if result.SoldSlots() != 1 {
-		t.Fatalf("expected sold slots 1, got %d", result.SoldSlots())
+	if result.SoldSlots() != 0 {
+		t.Fatalf("expected purchase to leave reserved stock unchanged, got sold slots %d", result.SoldSlots())
 	}
-	if result.AvailableSlots() != 4 {
-		t.Fatalf("expected available slots 4, got %d", result.AvailableSlots())
+	if result.AvailableSlots() != 5 {
+		t.Fatalf("expected purchase to leave available slots unchanged, got %d", result.AvailableSlots())
 	}
 
 	if receivedEvent == nil {
@@ -194,7 +194,7 @@ func TestProductApp_PurchaseUsesProductNetworkModeWhenSnapshotIsEmpty(t *testing
 	}
 }
 
-func TestProductApp_PurchaseFailsWhenOutOfStock(t *testing.T) {
+func TestProductApp_ReserveFailsWhenOutOfStock(t *testing.T) {
 	ctx := context.Background()
 	repo := newMemProductRepo()
 	bus := eventbus.New()
@@ -202,11 +202,11 @@ func TestProductApp_PurchaseFailsWhenOutOfStock(t *testing.T) {
 
 	p, _ := svc.CreateProduct(ctx, "VPS Tiny", "vps-tiny", "US-nyc", "", "", "", 1, 512, 10, 500, 299, "USD", domain.BillingMonthly, 1)
 
-	if _, err := svc.PurchaseProduct(ctx, p.ID(), "cust-1", "ord-1", "", "", "h1", "ubuntu", ""); err != nil {
+	if err := svc.ReserveProduct(ctx, p.ID()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if _, err := svc.PurchaseProduct(ctx, p.ID(), "cust-2", "ord-2", "", "", "h2", "ubuntu", ""); err == nil {
+	if err := svc.ReserveProduct(ctx, p.ID()); err == nil {
 		t.Fatal("expected error when no slots available")
 	}
 }

@@ -26,6 +26,22 @@ type RestockResult struct {
 	RequiresConfirmation bool   // frontend should show a confirmation dialog
 }
 
+type ProductProvisionSnapshot struct {
+	ID             string
+	Slug           string
+	RegionID       string
+	ResourcePoolID string
+	CPU            int
+	MemoryMB       int
+	DiskGB         int
+	NetworkMode    string
+	NATPortCount   int
+	Enabled        bool
+	TotalSlots     int
+	SoldSlots      int
+	AvailableSlots int
+}
+
 type ProductAppService struct {
 	repo            domain.ProductRepository
 	ids             IDGenerator
@@ -78,9 +94,8 @@ func (s *ProductAppService) CreateProductWithNATPortCount(ctx context.Context, n
 	return p, nil
 }
 
-// PurchaseProduct processes a customer purchase: consumes a commercial slot
-// and publishes a ProductPurchasedEvent for the Node domain to handle
-// physical provisioning independently.
+// PurchaseProduct publishes a ProductPurchasedEvent for the Node domain to handle
+// physical provisioning. Stock is expected to be reserved before payment.
 func (s *ProductAppService) PurchaseProduct(
 	ctx context.Context, productID, customerID, orderID, instanceID, initialPassword, hostname, os, networkMode string,
 ) (*domain.Product, error) {
@@ -100,13 +115,6 @@ func (s *ProductAppService) PurchaseProduct(
 		mode = normalized
 	}
 
-	// Use atomic database-level slot consumption to prevent the
-	// read-modify-write race condition under concurrent purchases.
-	if err := s.repo.ConsumeSlotAtomic(ctx, productID); err != nil {
-		return nil, err
-	}
-
-	// Reload the product to get the updated sold_slots count for the response.
 	p, err = s.repo.GetByID(ctx, productID)
 	if err != nil {
 		return nil, err
@@ -138,6 +146,28 @@ func (s *ProductAppService) PurchaseProduct(
 
 func (s *ProductAppService) GetProduct(ctx context.Context, id string) (*domain.Product, error) {
 	return s.repo.GetByID(ctx, id)
+}
+
+func (s *ProductAppService) GetProvisionSnapshot(ctx context.Context, id string) (ProductProvisionSnapshot, error) {
+	p, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return ProductProvisionSnapshot{}, err
+	}
+	return ProductProvisionSnapshot{
+		ID:             p.ID(),
+		Slug:           p.Slug(),
+		RegionID:       p.RegionID(),
+		ResourcePoolID: p.ResourcePoolID(),
+		CPU:            p.CPU(),
+		MemoryMB:       p.MemoryMB(),
+		DiskGB:         p.DiskGB(),
+		NetworkMode:    p.NetworkMode(),
+		NATPortCount:   p.NATPortCount(),
+		Enabled:        p.Enabled(),
+		TotalSlots:     p.TotalSlots(),
+		SoldSlots:      p.SoldSlots(),
+		AvailableSlots: p.AvailableSlots(),
+	}, nil
 }
 
 func (s *ProductAppService) GetNetworkMode(ctx context.Context, productID string) (string, error) {
@@ -262,6 +292,22 @@ func (s *ProductAppService) AdjustStock(ctx context.Context, id string, totalSlo
 		return nil, err
 	}
 	return result, nil
+}
+
+func (s *ProductAppService) ReserveProduct(ctx context.Context, productID string) error {
+	err := s.repo.ConsumeSlotAtomic(ctx, productID)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *ProductAppService) ReleaseProduct(ctx context.Context, productID string) error {
+	err := s.repo.ReleaseSlotAtomic(ctx, productID)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // SetRegion binds a product to a region (resource pool).

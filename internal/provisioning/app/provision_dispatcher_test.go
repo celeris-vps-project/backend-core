@@ -122,7 +122,7 @@ func (r *memProvisionHostRepo) AllocateSlotAtomic(nodeID string) error {
 	if err := node.AllocateSlot(); err != nil {
 		return err
 	}
-	return r.Save(node)
+	return nil
 }
 
 func (r *memProvisionHostRepo) ReleaseSlotAtomic(nodeID string) error {
@@ -133,7 +133,7 @@ func (r *memProvisionHostRepo) ReleaseSlotAtomic(nodeID string) error {
 	if err := node.ReleaseSlot(); err != nil {
 		return err
 	}
-	return r.Save(node)
+	return nil
 }
 
 type memProvisionPoolRepo struct {
@@ -377,6 +377,17 @@ func (r *memProvisionTaskRepo) ListPendingByNodeID(nodeID string) ([]contracts.T
 	return out, nil
 }
 
+func (r *memProvisionTaskRepo) ListActiveByInstanceID(instanceID string) ([]contracts.Task, error) {
+	var out []contracts.Task
+	for _, task := range r.items {
+		if task.Spec.InstanceID == instanceID &&
+			(task.Status == contracts.TaskStatusQueued || task.Status == contracts.TaskStatusRunning) {
+			out = append(out, *task)
+		}
+	}
+	return out, nil
+}
+
 func (r *memProvisionTaskRepo) Save(task *contracts.Task) error {
 	copyTask := *task
 	r.items[task.ID] = &copyTask
@@ -493,7 +504,9 @@ func TestVPSProvisioner_ProvisionAssignsNATPortToTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected host error: %v", err)
 	}
-	host.SetTotalSlots(4)
+	if err := host.SetTotalSlots(4); err != nil {
+		t.Fatalf("unexpected total slots error: %v", err)
+	}
 	host.SetRegionID("region-de")
 	host.SetResourcePoolID("pool-1")
 	if err := host.SetNATPortRange(20000, 20010); err != nil {
@@ -750,7 +763,9 @@ func TestVPSProvisioner_ProvisionAssignsDedicatedIPv4ToTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected host error: %v", err)
 	}
-	host.SetTotalSlots(4)
+	if err := host.SetTotalSlots(4); err != nil {
+		t.Fatalf("unexpected total slots error: %v", err)
+	}
 	host.SetRegionID("region-us")
 	host.SetResourcePoolID("pool-3")
 	hostRepo.items[host.ID()] = host
@@ -821,7 +836,9 @@ func TestVPSProvisioner_ReleaseFreesSlotAndNATAllocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected host error: %v", err)
 	}
-	host.SetTotalSlots(2)
+	if err := host.SetTotalSlots(2); err != nil {
+		t.Fatalf("unexpected total slots error: %v", err)
+	}
 	host.SetRegionID("region-de")
 	host.SetResourcePoolID("pool-2")
 	if err := host.AllocateSlot(); err != nil {

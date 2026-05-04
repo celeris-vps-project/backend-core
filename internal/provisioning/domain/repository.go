@@ -77,5 +77,6 @@ type NATPortAllocationRepository interface {
 type TaskRepository interface {
 	GetByID(id string) (*contracts.Task, error)
 	ListPendingByNodeID(nodeID string) ([]contracts.Task, error)
+	ListActiveByInstanceID(instanceID string) ([]contracts.Task, error)
 	Save(task *contracts.Task) error
 }

@@ -108,7 +108,16 @@ func (n *HostNode) TotalSlots() int { return n.totalSlots }
 func (n *HostNode) UsedSlots() int  { return n.usedSlots }
 func (n *HostNode) Enabled() bool   { return n.enabled }
 
-func (n *HostNode) SetTotalSlots(slots int) { n.totalSlots = slots }
+func (n *HostNode) SetTotalSlots(slots int) error {
+	if slots < 0 {
+		return errors.New("domain_error: total slots must be >= 0")
+	}
+	if slots < n.usedSlots {
+		return errors.New("domain_error: total slots cannot be less than used slots")
+	}
+	n.totalSlots = slots
+	return nil
+}
 
 func (n *HostNode) AvailableSlots() int {
 	avail := n.totalSlots - n.usedSlots

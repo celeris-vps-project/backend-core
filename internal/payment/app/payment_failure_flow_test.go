@@ -144,6 +144,27 @@ func (m *trackingInvoiceManager) IssueInvoice(invoiceID string, issuedAt time.Ti
 	return nil
 }
 
+type trackingProductManager struct {
+	reserveCalls int
+	releaseCalls int
+	released     []string
+}
+
+func (m *trackingProductManager) PurchaseProduct(ctx context.Context, productID, customerID, orderID, instanceID, initialPassword, hostname, os, networkMode string) (app.PurchasedProduct, error) {
+	return app.PurchasedProduct{}, nil
+}
+
+func (m *trackingProductManager) ReserveProduct(ctx context.Context, productID string) error {
+	m.reserveCalls++
+	return nil
+}
+
+func (m *trackingProductManager) ReleaseProduct(ctx context.Context, productID string) error {
+	m.releaseCalls++
+	m.released = append(m.released, productID)
+	return nil
+}
+
 func ptrTime(v time.Time) *time.Time {
 	return &v
 }
@@ -184,17 +205,19 @@ func TestInitiatePayment_DoesNotVoidRenewalInvoiceOnChargeCreationFailure(t *tes
 }
 
 func TestHandleWebhookPayload_FailedPendingPaymentVoidsCurrentInvoice(t *testing.T) {
+	products := &trackingProductManager{}
 	orderMgr := &trackingOrderManager{
 		order: app.PayableOrder{
 			ID:        "order-1",
 			Status:    "pending",
+			ProductID: "prod-1",
 			InvoiceID: "inv-1",
 		},
 	}
 	invoiceMgr := newTrackingInvoiceManager(map[string]string{
 		"inv-1": "issued",
 	})
-	orch := app.NewPostPaymentOrchestrator(orderMgr, &mockProductPurchaser{}, nil, invoiceMgr, nil)
+	orch := app.NewPostPaymentOrchestrator(orderMgr, products, nil, invoiceMgr, nil)
 	svc := app.NewPaymentAppService(nil, orch, nil)
 
 	svc.HandleWebhookPayload(&domain.WebhookPayload{
@@ -207,6 +230,9 @@ func TestHandleWebhookPayload_FailedPendingPaymentVoidsCurrentInvoice(t *testing
 	}
 	if orderMgr.cancelCalls != 0 {
 		t.Fatalf("expected failed webhook to avoid immediate order cancellation, got %d cancels", orderMgr.cancelCalls)
+	}
+	if products.releaseCalls != 1 || products.released[0] != "prod-1" {
+		t.Fatalf("expected reserved product to be released once, got calls=%d released=%v", products.releaseCalls, products.released)
 	}
 }
 
@@ -239,17 +265,19 @@ func TestHandleWebhookPayload_FailedRenewalPaymentKeepsInvoice(t *testing.T) {
 }
 
 func TestHandleInvoiceTimeout_CancelsCurrentPendingInvoice(t *testing.T) {
+	products := &trackingProductManager{}
 	orderMgr := &trackingOrderManager{
 		order: app.PayableOrder{
 			ID:        "order-1",
 			Status:    "pending",
+			ProductID: "prod-1",
 			InvoiceID: "inv-1",
 		},
 	}
 	invoiceMgr := newTrackingInvoiceManager(map[string]string{
 		"inv-1": "issued",
 	})
-	orch := app.NewPostPaymentOrchestrator(orderMgr, &mockProductPurchaser{}, nil, invoiceMgr, nil)
+	orch := app.NewPostPaymentOrchestrator(orderMgr, products, nil, invoiceMgr, nil)
 
 	orch.HandleInvoiceTimeout("inv-1", "order-1")
 
@@ -258,6 +286,9 @@ func TestHandleInvoiceTimeout_CancelsCurrentPendingInvoice(t *testing.T) {
 	}
 	if orderMgr.cancelCalls != 1 {
 		t.Fatalf("expected pending order to be cancelled once, got %d", orderMgr.cancelCalls)
+	}
+	if products.releaseCalls != 1 || products.released[0] != "prod-1" {
+		t.Fatalf("expected reserved product to be released once, got calls=%d released=%v", products.releaseCalls, products.released)
 	}
 }
 

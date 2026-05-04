@@ -6,6 +6,8 @@ type NodeAllocatorRepository interface {
 	GetByID(id string) (NodeAllocator, error)
 	ListAll() ([]NodeAllocator, error)
 	ListByLocation(location string) ([]NodeAllocator, error)
+	AllocateSlotAtomic(nodeID string) error
+	ReleaseSlotAtomic(nodeID string) error
 	Save(node NodeAllocator) error
 }
 
@@ -13,6 +15,7 @@ type NodeAllocatorRepository interface {
 type InstanceRepository interface {
 	GetByID(id string) (*Instance, error)
 	GetByOrderID(orderID string) (*Instance, error)
+	ListAll() ([]*Instance, error)
 	ListByCustomerID(customerID string) ([]*Instance, error)
 	ListByNodeID(nodeID string) ([]*Instance, error)
 	Save(instance *Instance) error
