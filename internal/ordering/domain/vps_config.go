@@ -12,9 +12,10 @@ type VPSConfig struct {
 	cpu         int    // vCPU count
 	memoryMB    int    // memory in MB
 	diskGB      int    // disk in GB
+	bandwidthGB int    // monthly bandwidth quota in GB; 0 means unlimited
 }
 
-func NewVPSConfig(hostname, plan, region, os, networkMode string, cpu, memoryMB, diskGB int) (VPSConfig, error) {
+func NewVPSConfig(hostname, plan, region, os, networkMode string, cpu, memoryMB, diskGB, bandwidthGB int) (VPSConfig, error) {
 	if hostname == "" {
 		return VPSConfig{}, errors.New("domain_error: hostname is required")
 	}
@@ -36,6 +37,9 @@ func NewVPSConfig(hostname, plan, region, os, networkMode string, cpu, memoryMB,
 	if diskGB <= 0 {
 		return VPSConfig{}, errors.New("domain_error: disk must be > 0")
 	}
+	if bandwidthGB < 0 {
+		return VPSConfig{}, errors.New("domain_error: bandwidth must be >= 0")
+	}
 	mode, err := normalizeNetworkMode(networkMode)
 	if err != nil {
 		return VPSConfig{}, err
@@ -49,6 +53,7 @@ func NewVPSConfig(hostname, plan, region, os, networkMode string, cpu, memoryMB,
 		cpu:         cpu,
 		memoryMB:    memoryMB,
 		diskGB:      diskGB,
+		bandwidthGB: bandwidthGB,
 	}, nil
 }
 
@@ -71,3 +76,4 @@ func (v VPSConfig) NetworkMode() string { return v.networkMode }
 func (v VPSConfig) CPU() int            { return v.cpu }
 func (v VPSConfig) MemoryMB() int       { return v.memoryMB }
 func (v VPSConfig) DiskGB() int         { return v.diskGB }
+func (v VPSConfig) BandwidthGB() int    { return v.bandwidthGB }

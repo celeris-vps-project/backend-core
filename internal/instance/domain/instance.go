@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -18,6 +19,8 @@ const (
 	InstanceStatusTerminated = InstanceControlStatusTerminated
 	InstanceStatusRunning    = "running"
 	InstanceStatusStopped    = "stopped"
+
+	InstanceSuspendReasonTrafficRunOut = "traffic_run_out"
 )
 
 type Instance struct {
@@ -31,10 +34,12 @@ type Instance struct {
 	cpu             int
 	memoryMB        int
 	diskGB          int
+	bandwidthGB     int
 	ipv4            string
 	ipv6            string
 	hostIP          string
 	controlStatus   string
+	suspendReason   string
 	initialPassword string
 
 	// NAT mode fields
@@ -48,7 +53,7 @@ type Instance struct {
 	terminatedAt *time.Time
 }
 
-func NewInstance(id, customerID, orderID, nodeID, hostname, plan, os, networkMode string, cpu, memoryMB, diskGB int) (*Instance, error) {
+func NewInstance(id, customerID, orderID, nodeID, hostname, plan, os, networkMode string, cpu, memoryMB, diskGB, bandwidthGB int) (*Instance, error) {
 	if id == "" {
 		return nil, errors.New("domain_error: instance id is required")
 	}
@@ -76,10 +81,13 @@ func NewInstance(id, customerID, orderID, nodeID, hostname, plan, os, networkMod
 	if diskGB <= 0 {
 		return nil, errors.New("domain_error: disk must be > 0")
 	}
+	if bandwidthGB < 0 {
+		return nil, errors.New("domain_error: bandwidth must be >= 0")
+	}
 	return &Instance{
 		id: id, customerID: customerID, orderID: orderID, nodeID: nodeID,
 		hostname: hostname, plan: plan, os: os,
-		cpu: cpu, memoryMB: memoryMB, diskGB: diskGB,
+		cpu: cpu, memoryMB: memoryMB, diskGB: diskGB, bandwidthGB: bandwidthGB,
 		controlStatus: InstanceControlStatusProvisioning, createdAt: time.Now(),
 		networkMode: networkMode,
 	}, nil
@@ -105,8 +113,8 @@ func ReconstituteInstance(
 // ReconstituteInstanceFull reconstructs an Instance with all fields including NAT support.
 func ReconstituteInstanceFull(
 	id, customerID, orderID, nodeID, hostname, plan, os string,
-	cpu, memoryMB, diskGB int,
-	ipv4, ipv6, hostIP, status, initialPassword string,
+	cpu, memoryMB, diskGB, bandwidthGB int,
+	ipv4, ipv6, hostIP, status, suspendReason, initialPassword string,
 	networkMode string, natPort int,
 	createdAt time.Time,
 	startedAt, stoppedAt, suspendedAt, terminatedAt *time.Time,
@@ -114,8 +122,9 @@ func ReconstituteInstanceFull(
 	return &Instance{
 		id: id, customerID: customerID, orderID: orderID, nodeID: nodeID,
 		hostname: hostname, plan: plan, os: os,
-		cpu: cpu, memoryMB: memoryMB, diskGB: diskGB,
+		cpu: cpu, memoryMB: memoryMB, diskGB: diskGB, bandwidthGB: bandwidthGB,
 		ipv4: ipv4, ipv6: ipv6, hostIP: hostIP, controlStatus: normalizeControlStatus(status),
+		suspendReason:   strings.TrimSpace(suspendReason),
 		initialPassword: initialPassword,
 		networkMode:     networkMode, natPort: natPort,
 		createdAt: createdAt, startedAt: startedAt, stoppedAt: stoppedAt,
@@ -133,11 +142,13 @@ func (i *Instance) OS() string               { return i.os }
 func (i *Instance) CPU() int                 { return i.cpu }
 func (i *Instance) MemoryMB() int            { return i.memoryMB }
 func (i *Instance) DiskGB() int              { return i.diskGB }
+func (i *Instance) BandwidthGB() int         { return i.bandwidthGB }
 func (i *Instance) IPv4() string             { return i.ipv4 }
 func (i *Instance) IPv6() string             { return i.ipv6 }
 func (i *Instance) HostIP() string           { return i.hostIP }
 func (i *Instance) Status() string           { return i.ControlStatus() }
 func (i *Instance) ControlStatus() string    { return normalizeControlStatus(i.controlStatus) }
+func (i *Instance) SuspendReason() string    { return i.suspendReason }
 func (i *Instance) InitialPassword() string  { return i.initialPassword }
 func (i *Instance) CreatedAt() time.Time     { return i.createdAt }
 func (i *Instance) StartedAt() *time.Time    { return i.startedAt }
@@ -162,6 +173,7 @@ func (i *Instance) SetNetworkMode(mode string)         { i.networkMode = mode }
 func (i *Instance) SetNATPort(port int)                { i.natPort = port }
 func (i *Instance) SetInitialPassword(password string) { i.initialPassword = password }
 func (i *Instance) SetHostIP(hostIP string)            { i.hostIP = hostIP }
+func (i *Instance) SetSuspendReason(reason string)     { i.suspendReason = strings.TrimSpace(reason) }
 
 // AssignNode records the host node that fulfilled this instance.
 func (i *Instance) AssignNode(nodeID string) error {
@@ -243,6 +255,14 @@ func (i *Instance) Suspend(at time.Time) error {
 	return nil
 }
 
+func (i *Instance) SuspendWithReason(at time.Time, reason string) error {
+	if err := i.Suspend(at); err != nil {
+		return err
+	}
+	i.SetSuspendReason(reason)
+	return nil
+}
+
 func (i *Instance) Unsuspend(at time.Time) error {
 	if i.ControlStatus() != InstanceControlStatusSuspended {
 		return errors.New("domain_error: only suspended instances can be unsuspended")
@@ -250,6 +270,7 @@ func (i *Instance) Unsuspend(at time.Time) error {
 	i.controlStatus = InstanceControlStatusActive
 	i.startedAt = &at
 	i.suspendedAt = nil
+	i.suspendReason = ""
 	return nil
 }
 
@@ -262,6 +283,7 @@ func (i *Instance) RecoverFromBillingSuspension(at time.Time) error {
 	i.controlStatus = InstanceControlStatusActive
 	i.stoppedAt = &at
 	i.suspendedAt = nil
+	i.suspendReason = ""
 	return nil
 }
 

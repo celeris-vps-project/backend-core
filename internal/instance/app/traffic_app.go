@@ -17,16 +17,20 @@ type TrafficService struct {
 	bus          *eventbus.EventBus
 	trafficRepo  *infra.TrafficRepo
 	instanceRepo *infra.GormInstanceRepo
+	instanceSvc  *InstanceAppService
 }
 
-func NewTrafficService(bus *eventbus.EventBus, trafficRepo *infra.TrafficRepo, instanceRepo *infra.GormInstanceRepo) *TrafficService {
+func NewTrafficService(bus *eventbus.EventBus, trafficRepo *infra.TrafficRepo, instanceRepo *infra.GormInstanceRepo, instanceSvc *InstanceAppService) *TrafficService {
 	trafficService := &TrafficService{
 		bus:          bus,
 		trafficRepo:  trafficRepo,
 		instanceRepo: instanceRepo,
+		instanceSvc:  instanceSvc,
 	}
 
-	trafficService.bus.Subscribe(events.InstanceTrafficRecordUpdatedEvent{}.EventName(), trafficService.EventHandler)
+	if trafficService.bus != nil {
+		trafficService.bus.Subscribe(events.InstanceTrafficRecordUpdatedEvent{}.EventName(), trafficService.EventHandler)
+	}
 	return trafficService
 }
 
@@ -53,8 +57,8 @@ func (t *TrafficService) EventHandler(event eventbus.Event) {
 		log.Println(err)
 		return
 	}
-	// 更新过了
-	if time.Now().Before(lastTime) {
+	// 更新过了或者没有流量产生
+	if time.Now().Before(lastTime) || (cursor.LastRX == evt.TotalRX && cursor.LastTX == evt.TotalTX) {
 		return
 	}
 
@@ -180,6 +184,12 @@ func (t *TrafficService) GetInstanceTrafficUsage(instanceID string) (*domain.Tra
 			CreateAt:   time.Now(),
 		})
 	}
+	total := rx + tx
+	periodMax := bandwidthGBToBytes(inst.BandwidthGB())
+	overLimit := periodMax > 0 && total > periodMax
+	if overLimit {
+		t.suspendTrafficRunOut(inst)
+	}
 	return &domain.TrafficUsageSummary{
 		InstanceID:      instanceID,
 		LastEndPeriodAt: start,
@@ -187,9 +197,33 @@ func (t *TrafficService) GetInstanceTrafficUsage(instanceID string) (*domain.Tra
 		PeriodEnd:       end,
 		RX:              rx,
 		TX:              tx,
-		Total:           rx + tx,
+		Total:           total,
+		BandwidthGB:     inst.BandwidthGB(),
+		PeriodMax:       periodMax,
+		OverLimit:       overLimit,
 		Daily:           daily,
 	}, nil
+}
+
+func bandwidthGBToBytes(gb int) uint64 {
+	if gb <= 0 {
+		return 0
+	}
+	return uint64(gb) * 1024 * 1024 * 1024
+}
+
+func (t *TrafficService) suspendTrafficRunOut(inst *domain.Instance) {
+	if t.instanceSvc == nil || inst == nil {
+		return
+	}
+	switch inst.ControlStatus() {
+	case domain.InstanceControlStatusActive:
+	default:
+		return
+	}
+	if err := t.instanceSvc.SuspendInstanceWithReason(inst.ID(), domain.InstanceSuspendReasonTrafficRunOut); err != nil {
+		log.Printf("[instance.traffic] suspend instance %s for traffic run out failed: %v", inst.ID(), err)
+	}
 }
 
 func (t *TrafficService) MarkTrafficPeriodBilled(instanceID string, periodEnd time.Time) error {

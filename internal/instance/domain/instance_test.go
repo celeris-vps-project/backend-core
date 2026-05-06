@@ -6,7 +6,7 @@ import (
 )
 
 func TestInstanceLifecycle(t *testing.T) {
-	inst, err := NewInstance("ins-1", "cust-1", "ord-1", "node-1", "web-01", "vps-starter", "ubuntu-22.04", "", 2, 2048, 40)
+	inst, err := NewInstance("ins-1", "cust-1", "ord-1", "node-1", "web-01", "vps-starter", "ubuntu-22.04", "", 2, 2048, 40, 1000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestInstanceLifecycle(t *testing.T) {
 }
 
 func TestInstanceSuspendUnsuspend(t *testing.T) {
-	inst, _ := NewInstance("ins-2", "cust-1", "ord-1", "node-1", "db-01", "vps-pro", "debian-12", "", 4, 8192, 100)
+	inst, _ := NewInstance("ins-2", "cust-1", "ord-1", "node-1", "db-01", "vps-pro", "debian-12", "", 4, 8192, 100, 2000)
 	now := time.Now()
 	_ = inst.MarkProvisioned(now)
 
@@ -65,7 +65,7 @@ func TestInstanceSuspendUnsuspend(t *testing.T) {
 }
 
 func TestInstanceTerminate(t *testing.T) {
-	inst, _ := NewInstance("ins-3", "cust-1", "ord-1", "node-1", "app-01", "vps-starter", "centos-9", "", 1, 1024, 20)
+	inst, _ := NewInstance("ins-3", "cust-1", "ord-1", "node-1", "app-01", "vps-starter", "centos-9", "", 1, 1024, 20, 500)
 	now := time.Now()
 	_ = inst.MarkProvisioned(now)
 

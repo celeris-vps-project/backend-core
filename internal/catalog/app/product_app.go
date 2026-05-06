@@ -34,6 +34,7 @@ type ProductProvisionSnapshot struct {
 	CPU            int
 	MemoryMB       int
 	DiskGB         int
+	BandwidthGB    int
 	NetworkMode    string
 	NATPortCount   int
 	Enabled        bool
@@ -135,6 +136,7 @@ func (s *ProductAppService) PurchaseProduct(
 		CPU:             p.CPU(),
 		MemoryMB:        p.MemoryMB(),
 		DiskGB:          p.DiskGB(),
+		BandwidthGB:     p.BandwidthGB(),
 		NetworkMode:     mode,
 		NATPortCount:    p.NATPortCount(),
 	})
@@ -161,6 +163,7 @@ func (s *ProductAppService) GetProvisionSnapshot(ctx context.Context, id string)
 		CPU:            p.CPU(),
 		MemoryMB:       p.MemoryMB(),
 		DiskGB:         p.DiskGB(),
+		BandwidthGB:    p.BandwidthGB(),
 		NetworkMode:    p.NetworkMode(),
 		NATPortCount:   p.NATPortCount(),
 		Enabled:        p.Enabled(),
@@ -176,6 +179,14 @@ func (s *ProductAppService) GetNetworkMode(ctx context.Context, productID string
 		return "", err
 	}
 	return p.NetworkMode(), nil
+}
+
+func (s *ProductAppService) GetBandwidthGB(ctx context.Context, productID string) (int, error) {
+	p, err := s.repo.GetByID(ctx, productID)
+	if err != nil {
+		return 0, err
+	}
+	return p.BandwidthGB(), nil
 }
 
 func (s *ProductAppService) GetBySlug(ctx context.Context, slug string) (*domain.Product, error) {

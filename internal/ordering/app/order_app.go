@@ -32,14 +32,14 @@ func NewOrderAppService(repo domain.OrderRepository, ids IDGenerator) *OrderAppS
 func (s *OrderAppService) CreateOrder(
 	customerID, productID, invoiceID, billingCycle string,
 	hostname, plan, region, os, networkMode string,
-	cpu, memoryMB, diskGB int,
+	cpu, memoryMB, diskGB, bandwidthGB int,
 	currency string,
 	priceAmount int64,
 ) (*domain.Order, error) {
 	if s.ids == nil {
 		return nil, errors.New("app_error: id generator is required")
 	}
-	cfg, err := domain.NewVPSConfig(hostname, plan, region, os, networkMode, cpu, memoryMB, diskGB)
+	cfg, err := domain.NewVPSConfig(hostname, plan, region, os, networkMode, cpu, memoryMB, diskGB, bandwidthGB)
 	if err != nil {
 		return nil, err
 	}

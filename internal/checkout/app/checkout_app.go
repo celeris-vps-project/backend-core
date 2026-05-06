@@ -66,6 +66,7 @@ func (s *CheckoutAppService) Execute(ctx context.Context, req domain.CheckoutReq
 		product.CPU(),
 		product.MemoryMB(),
 		product.DiskGB(),
+		product.BandwidthGB(),
 		checkoutOrderCurrency,
 		product.PriceAmount(),
 	)

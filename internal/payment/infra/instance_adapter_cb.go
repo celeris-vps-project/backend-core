@@ -36,7 +36,7 @@ func NewInstanceAdapterWithCB(inner *InstanceAdapter, cb *circuitbreaker.Circuit
 // be created later via reconciliation when the service recovers.
 func (a *InstanceAdapterWithCB) CreatePendingInstance(
 	customerID, orderID, region, hostname, plan, os, networkMode string,
-	cpu, memoryMB, diskGB int,
+	cpu, memoryMB, diskGB, bandwidthGB int,
 ) (paymentApp.PendingInstance, error) {
 	if !a.cb.Allow() {
 		log.Printf("[circuit-breaker] %s: instance creation skipped (circuit open), order=%s will be reconciled",
@@ -44,7 +44,7 @@ func (a *InstanceAdapterWithCB) CreatePendingInstance(
 		return paymentApp.PendingInstance{}, nil // silent degradation — non-fatal
 	}
 
-	pendingInstance, err := a.inner.CreatePendingInstance(customerID, orderID, region, hostname, plan, os, networkMode, cpu, memoryMB, diskGB)
+	pendingInstance, err := a.inner.CreatePendingInstance(customerID, orderID, region, hostname, plan, os, networkMode, cpu, memoryMB, diskGB, bandwidthGB)
 	if err != nil {
 		a.cb.RecordFailure()
 		log.Printf("[circuit-breaker] %s: instance creation failed for order=%s: %v", a.cb.Name(), orderID, err)

@@ -18,14 +18,15 @@ import (
 // ---- Request DTOs ----
 
 type PurchaseInstanceRequest struct {
-	OrderID  string `json:"order_id" vd:"len($)>0"`
-	Region   string `json:"region" vd:"len($)>0"`
-	Hostname string `json:"hostname" vd:"len($)>0"`
-	Plan     string `json:"plan" vd:"len($)>0"`
-	OS       string `json:"os" vd:"len($)>0"`
-	CPU      int    `json:"cpu" vd:"$>0"`
-	MemoryMB int    `json:"memory_mb" vd:"$>0"`
-	DiskGB   int    `json:"disk_gb" vd:"$>0"`
+	OrderID     string `json:"order_id" vd:"len($)>0"`
+	Region      string `json:"region" vd:"len($)>0"`
+	Hostname    string `json:"hostname" vd:"len($)>0"`
+	Plan        string `json:"plan" vd:"len($)>0"`
+	OS          string `json:"os" vd:"len($)>0"`
+	CPU         int    `json:"cpu" vd:"$>0"`
+	MemoryMB    int    `json:"memory_mb" vd:"$>0"`
+	DiskGB      int    `json:"disk_gb" vd:"$>0"`
+	BandwidthGB int    `json:"bandwidth_gb"`
 }
 
 type AssignIPRequest struct {
@@ -46,11 +47,13 @@ type InstanceResponse struct {
 	CPU             int                      `json:"cpu"`
 	MemoryMB        int                      `json:"memory_mb"`
 	DiskGB          int                      `json:"disk_gb"`
+	BandwidthGB     int                      `json:"bandwidth_gb"`
 	IPv4            string                   `json:"ipv4,omitempty"`
 	IPv6            string                   `json:"ipv6,omitempty"`
 	HostIP          string                   `json:"host_ip,omitempty"`
 	Status          string                   `json:"status"`
 	ControlStatus   string                   `json:"control_status,omitempty"`
+	SuspendReason   string                   `json:"suspend_reason,omitempty"`
 	RuntimeState    string                   `json:"runtime_state,omitempty"`
 	NetworkMode     string                   `json:"network_mode,omitempty"` // "dedicated" or "nat"
 	NATPort         int                      `json:"nat_port,omitempty"`     // NAT mode: SSH port on host
@@ -78,6 +81,10 @@ type TrafficUsageResponse struct {
 	RX              uint64                 `json:"rx"`
 	TX              uint64                 `json:"tx"`
 	Usage           uint64                 `json:"usage"`
+	BandwidthGB     int                    `json:"bandwidth_gb"`
+	PeriodMax       uint64                 `json:"period_max"`
+	UsagePercent    float64                `json:"usage_percent"`
+	OverLimit       bool                   `json:"over_limit"`
 	Daily           []TrafficDailyResponse `json:"daily"`
 }
 
@@ -121,7 +128,7 @@ func (h *InstanceHandler) Purchase(ctx context.Context, c *hz_app.RequestContext
 	inst, err := h.svc.PurchaseInstance(
 		uid.String(), req.OrderID, req.Region,
 		req.Hostname, req.Plan, req.OS,
-		req.CPU, req.MemoryMB, req.DiskGB,
+		req.CPU, req.MemoryMB, req.DiskGB, req.BandwidthGB,
 	)
 	if err != nil {
 		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyInstanceError(err), err.Error()))
@@ -282,10 +289,11 @@ func (h *InstanceHandler) toInstResp(i *domain.Instance) InstanceResponse {
 	resp := InstanceResponse{
 		ID: i.ID(), CustomerID: i.CustomerID(), OrderID: i.OrderID(), NodeID: i.NodeID(),
 		Hostname: i.Hostname(), Plan: i.Plan(), OS: i.OS(),
-		CPU: i.CPU(), MemoryMB: i.MemoryMB(), DiskGB: i.DiskGB(),
+		CPU: i.CPU(), MemoryMB: i.MemoryMB(), DiskGB: i.DiskGB(), BandwidthGB: i.BandwidthGB(),
 		IPv4: i.IPv4(), IPv6: i.IPv6(), HostIP: i.HostIP(),
 		Status:        h.svc.InstanceStatus(i),
 		ControlStatus: i.ControlStatus(),
+		SuspendReason: i.SuspendReason(),
 		RuntimeState:  h.svc.InstanceRuntimeState(i),
 		NetworkMode:   i.NetworkMode(), NATPort: i.NATPort(), InitialPassword: i.InitialPassword(),
 		CreatedAt: i.CreatedAt().Format(time.RFC3339),
@@ -334,8 +342,19 @@ func toTrafficUsageResp(usage *domain.TrafficUsageSummary) TrafficUsageResponse 
 		RX:              usage.RX,
 		TX:              usage.TX,
 		Usage:           usage.Total,
+		BandwidthGB:     usage.BandwidthGB,
+		PeriodMax:       usage.PeriodMax,
+		UsagePercent:    trafficUsagePercent(usage.Total, usage.PeriodMax),
+		OverLimit:       usage.OverLimit,
 		Daily:           daily,
 	}
+}
+
+func trafficUsagePercent(used, limit uint64) float64 {
+	if limit == 0 {
+		return 0
+	}
+	return float64(used) / float64(limit) * 100
 }
 
 func (h *InstanceHandler) instanceNATPortMappings(i *domain.Instance) ([]NATPortMappingResponse, error) {

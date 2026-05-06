@@ -24,6 +24,7 @@ type ProductPurchasedEvent struct {
 	CPU             int
 	MemoryMB        int
 	DiskGB          int
+	BandwidthGB     int
 	NetworkMode     string // "dedicated" or "nat"; empty = dedicated
 	NATPortCount    int    // NAT mode: external ports allocated per instance
 }
@@ -140,11 +141,13 @@ type InstanceStateUpdatedEvent struct {
 	CPU             int     `json:"cpu"`
 	MemoryMB        int     `json:"memory_mb"`
 	DiskGB          int     `json:"disk_gb"`
+	BandwidthGB     int     `json:"bandwidth_gb"`
 	IPv4            string  `json:"ipv4,omitempty"`
 	IPv6            string  `json:"ipv6,omitempty"`
 	HostIP          string  `json:"host_ip,omitempty"`
 	Status          string  `json:"status"`
 	ControlStatus   string  `json:"control_status,omitempty"`
+	SuspendReason   string  `json:"suspend_reason,omitempty"`
 	RuntimeState    string  `json:"runtime_state,omitempty"`
 	NetworkMode     string  `json:"network_mode,omitempty"`
 	NATPort         int     `json:"nat_port,omitempty"`
@@ -175,3 +178,9 @@ type InstanceTrafficRecordUpdatedEvent struct {
 }
 
 func (InstanceTrafficRecordUpdatedEvent) EventName() string { return "instance.traffic_updated" }
+
+type InstanceTrafficRunOutEvent struct {
+	InstanceID string `json:"id"`
+}
+
+func (InstanceTrafficRunOutEvent) EventName() string { return "instance.traffic_run_out" }

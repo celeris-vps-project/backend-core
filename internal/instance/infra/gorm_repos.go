@@ -103,10 +103,12 @@ type InstancePO struct {
 	CPU             int        `gorm:"column:cpu"`
 	MemoryMB        int        `gorm:"column:memory_mb"`
 	DiskGB          int        `gorm:"column:disk_gb"`
+	BandwidthGB     int        `gorm:"column:bandwidth_gb"`
 	IPv4            string     `gorm:"column:ipv4"`
 	IPv6            string     `gorm:"column:ipv6"`
 	HostIP          string     `gorm:"column:host_ip"`
 	Status          string     `gorm:"column:status"`
+	SuspendReason   string     `gorm:"column:suspend_reason"`
 	InitialPassword string     `gorm:"column:initial_password"`
 	NetworkMode     string     `gorm:"column:network_mode;default:dedicated"` // "dedicated" or "nat"
 	NATPort         int        `gorm:"column:nat_port;default:0"`             // NAT SSH port
@@ -202,10 +204,12 @@ var instanceUpsertColumns = []string{
 	"cpu",
 	"memory_mb",
 	"disk_gb",
+	"bandwidth_gb",
 	"ipv4",
 	"ipv6",
 	"host_ip",
 	"status",
+	"suspend_reason",
 	"initial_password",
 	"network_mode",
 	"nat_port",
@@ -220,8 +224,8 @@ func instanceToDomain(po InstancePO) *domain.Instance {
 	return domain.ReconstituteInstanceFull(
 		po.ID, po.CustomerID, po.OrderID, po.NodeID,
 		po.Hostname, po.Plan, po.OS,
-		po.CPU, po.MemoryMB, po.DiskGB,
-		po.IPv4, po.IPv6, po.HostIP, po.Status, po.InitialPassword,
+		po.CPU, po.MemoryMB, po.DiskGB, po.BandwidthGB,
+		po.IPv4, po.IPv6, po.HostIP, po.Status, po.SuspendReason, po.InitialPassword,
 		po.NetworkMode, po.NATPort,
 		po.CreatedAt,
 		po.StartedAt, po.StoppedAt, po.SuspendedAt, po.TerminatedAt,
@@ -232,9 +236,9 @@ func instanceFromDomain(i *domain.Instance) InstancePO {
 	return InstancePO{
 		ID: i.ID(), CustomerID: i.CustomerID(), OrderID: i.OrderID(), NodeID: i.NodeID(),
 		Hostname: i.Hostname(), Plan: i.Plan(), OS: i.OS(),
-		CPU: i.CPU(), MemoryMB: i.MemoryMB(), DiskGB: i.DiskGB(),
+		CPU: i.CPU(), MemoryMB: i.MemoryMB(), DiskGB: i.DiskGB(), BandwidthGB: i.BandwidthGB(),
 		IPv4: i.IPv4(), IPv6: i.IPv6(), HostIP: i.HostIP(), Status: i.Status(),
-		InitialPassword: i.InitialPassword(), NetworkMode: i.NetworkMode(), NATPort: i.NATPort(),
+		SuspendReason: i.SuspendReason(), InitialPassword: i.InitialPassword(), NetworkMode: i.NetworkMode(), NATPort: i.NATPort(),
 		CreatedAt: i.CreatedAt(),
 		StartedAt: i.StartedAt(), StoppedAt: i.StoppedAt(),
 		SuspendedAt: i.SuspendedAt(), TerminatedAt: i.TerminatedAt(),

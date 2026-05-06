@@ -28,6 +28,7 @@ type OrderPO struct {
 	CPU          int        `gorm:"column:cpu"`
 	MemoryMB     int        `gorm:"column:memory_mb"`
 	DiskGB       int        `gorm:"column:disk_gb"`
+	BandwidthGB  int        `gorm:"column:bandwidth_gb"`
 	CreatedAt    time.Time  `gorm:"column:created_at"`
 	ActivatedAt  *time.Time `gorm:"column:activated_at"`
 	SuspendedAt  *time.Time `gorm:"column:suspended_at"`
@@ -108,6 +109,7 @@ var orderUpsertColumns = []string{
 	"cpu",
 	"memory_mb",
 	"disk_gb",
+	"bandwidth_gb",
 	"created_at",
 	"activated_at",
 	"suspended_at",
@@ -119,7 +121,7 @@ var orderUpsertColumns = []string{
 func orderToDomain(po OrderPO) *domain.Order {
 	cfg, _ := domain.NewVPSConfig(
 		po.Hostname, po.Plan, po.Region, po.OS, po.NetworkMode,
-		po.CPU, po.MemoryMB, po.DiskGB,
+		po.CPU, po.MemoryMB, po.DiskGB, po.BandwidthGB,
 	)
 	return domain.ReconstituteOrder(
 		po.ID, po.CustomerID, po.ProductID, po.InvoiceID, po.BillingCycle,
@@ -150,6 +152,7 @@ func orderFromDomain(o *domain.Order) OrderPO {
 		CPU:          cfg.CPU(),
 		MemoryMB:     cfg.MemoryMB(),
 		DiskGB:       cfg.DiskGB(),
+		BandwidthGB:  cfg.BandwidthGB(),
 		CreatedAt:    o.CreatedAt(),
 		ActivatedAt:  o.ActivatedAt(),
 		SuspendedAt:  o.SuspendedAt(),

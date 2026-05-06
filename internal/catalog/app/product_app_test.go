@@ -161,7 +161,7 @@ func TestProductApp_PurchasePublishesEvent(t *testing.T) {
 	if receivedEvent.Hostname != "web-01" {
 		t.Fatalf("expected hostname web-01, got %s", receivedEvent.Hostname)
 	}
-	if receivedEvent.CPU != 1 || receivedEvent.MemoryMB != 1024 || receivedEvent.DiskGB != 20 {
+	if receivedEvent.CPU != 1 || receivedEvent.MemoryMB != 1024 || receivedEvent.DiskGB != 20 || receivedEvent.BandwidthGB != 1000 {
 		t.Fatal("event specs don't match product specs")
 	}
 }

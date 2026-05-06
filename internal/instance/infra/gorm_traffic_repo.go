@@ -111,7 +111,7 @@ func (t *TrafficRepo) ListDailyTrafficByRange(instanceID string, start, end time
 }
 
 func (t *TrafficRepo) SaveTrafficUsageRecord(instanceID string, tx, rx uint64) error {
-	return t.db.Model(&TrafficUsageRecordPO{}).Save(TrafficUsageRecordPO{
+	return t.db.Model(&TrafficUsageRecordPO{}).Save(&TrafficUsageRecordPO{
 		InstanceID: instanceID,
 		RX:         rx,
 		TX:         tx,

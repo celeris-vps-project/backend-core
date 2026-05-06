@@ -7,7 +7,7 @@ import (
 
 func newTestVPSConfig(t *testing.T) VPSConfig {
 	t.Helper()
-	cfg, err := NewVPSConfig("web-01", "vps-starter", "us-east-1", "ubuntu-22.04", "", 2, 2048, 40)
+	cfg, err := NewVPSConfig("web-01", "vps-starter", "us-east-1", "ubuntu-22.04", "", 2, 2048, 40, 1000)
 	if err != nil {
 		t.Fatalf("unexpected error creating VPSConfig: %v", err)
 	}
@@ -104,12 +104,12 @@ func TestOrder_CancelRequiresReason(t *testing.T) {
 }
 
 func TestVPSConfig_Validation(t *testing.T) {
-	_, err := NewVPSConfig("", "plan", "region", "os", "", 1, 1024, 20)
+	_, err := NewVPSConfig("", "plan", "region", "os", "", 1, 1024, 20, 1000)
 	if err == nil {
 		t.Fatal("expected error for empty hostname")
 	}
 
-	_, err = NewVPSConfig("host", "plan", "region", "os", "", 0, 1024, 20)
+	_, err = NewVPSConfig("host", "plan", "region", "os", "", 0, 1024, 20, 1000)
 	if err == nil {
 		t.Fatal("expected error for zero cpu")
 	}

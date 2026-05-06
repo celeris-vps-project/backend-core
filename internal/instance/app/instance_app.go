@@ -73,7 +73,7 @@ func (s *InstanceAppService) SetRuntimeStateReader(reader InstanceRuntimeStateRe
 func (s *InstanceAppService) PurchaseInstance(
 	customerID, orderID, region string,
 	hostname, plan, os string,
-	cpu, memoryMB, diskGB int,
+	cpu, memoryMB, diskGB, bandwidthGB int,
 ) (*domain.Instance, error) {
 	// 1. Find an available node in the requested region
 	nodes, err := s.nodeRepo.ListByLocation(region)
@@ -98,7 +98,7 @@ func (s *InstanceAppService) PurchaseInstance(
 
 	// 3. Create the instance
 	id := s.ids.NewID()
-	inst, err := domain.NewInstance(id, customerID, orderID, node.ID(), hostname, plan, os, "", cpu, memoryMB, diskGB)
+	inst, err := domain.NewInstance(id, customerID, orderID, node.ID(), hostname, plan, os, "", cpu, memoryMB, diskGB, bandwidthGB)
 	if err != nil {
 		_ = s.nodeRepo.ReleaseSlotAtomic(node.ID())
 		return nil, err
@@ -128,7 +128,7 @@ func (s *InstanceAppService) PurchaseInstance(
 func (s *InstanceAppService) CreatePendingInstance(
 	customerID, orderID, region string,
 	hostname, plan, os, networkMode string,
-	cpu, memoryMB, diskGB int,
+	cpu, memoryMB, diskGB, bandwidthGB int,
 ) (*domain.Instance, error) {
 	// Region remains part of the request contract even though placement is
 	// deferred to provisioning. Keep it in the signature for compatibility.
@@ -136,7 +136,7 @@ func (s *InstanceAppService) CreatePendingInstance(
 
 	// Create the instance with no node assignment yet.
 	id := s.ids.NewID()
-	inst, err := domain.NewInstance(id, customerID, orderID, "", hostname, plan, os, networkMode, cpu, memoryMB, diskGB)
+	inst, err := domain.NewInstance(id, customerID, orderID, "", hostname, plan, os, networkMode, cpu, memoryMB, diskGB, bandwidthGB)
 	if err != nil {
 		return nil, fmt.Errorf("create_pending: %w", err)
 	}
@@ -264,20 +264,51 @@ func (s *InstanceAppService) StopInstance(instanceID string) error {
 }
 
 func (s *InstanceAppService) SuspendInstance(instanceID string) error {
+	return s.SuspendInstanceWithReason(instanceID, "")
+}
+
+func (s *InstanceAppService) SuspendInstanceWithReason(instanceID, reason string) error {
 	inst, err := s.instanceRepo.GetByID(instanceID)
 	if err != nil {
 		return err
+	}
+	if inst.ControlStatus() == domain.InstanceControlStatusSuspended {
+		if reason == "" || inst.SuspendReason() == reason {
+			return nil
+		}
+		inst.SetSuspendReason(reason)
+		if err := s.instanceRepo.Save(inst); err != nil {
+			return err
+		}
+		s.publishState(inst)
+		return nil
 	}
 	if inst.ControlStatus() != domain.InstanceControlStatusActive {
 		return fmt.Errorf("domain_error: only active instances can be suspended")
 	}
 	if s.lifecycle != nil && inst.NodeID() != "" {
-		if s.InstanceRuntimeState(inst) == domain.InstanceStatusStopped {
-			return s.ConfirmSuspended(inst.ID())
+		if reason != "" && inst.SuspendReason() == reason {
+			return nil
 		}
-		return s.enqueueLifecycleTask(inst, contracts.TaskSuspend)
+		if s.InstanceRuntimeState(inst) == domain.InstanceStatusStopped {
+			inst.SetSuspendReason(reason)
+			if err := s.instanceRepo.Save(inst); err != nil {
+				return err
+			}
+			s.publishState(inst)
+			return s.confirmSuspendedWithReason(inst.ID(), reason)
+		}
+		if err := s.enqueueLifecycleTask(inst, contracts.TaskSuspend); err != nil {
+			return err
+		}
+		inst.SetSuspendReason(reason)
+		if err := s.instanceRepo.Save(inst); err != nil {
+			return err
+		}
+		s.publishState(inst)
+		return nil
 	}
-	if err := inst.Suspend(time.Now()); err != nil {
+	if err := inst.SuspendWithReason(time.Now(), reason); err != nil {
 		return err
 	}
 	if err := s.instanceRepo.Save(inst); err != nil {
@@ -437,12 +468,26 @@ func (s *InstanceAppService) ConfirmStopped(instanceID string) error {
 }
 
 func (s *InstanceAppService) ConfirmSuspended(instanceID string) error {
+	return s.confirmSuspendedWithReason(instanceID, "")
+}
+
+func (s *InstanceAppService) confirmSuspendedWithReason(instanceID, reason string) error {
 	inst, err := s.instanceRepo.GetByID(instanceID)
 	if err != nil {
 		return err
 	}
 	if inst.ControlStatus() == domain.InstanceControlStatusSuspended {
+		if reason != "" && inst.SuspendReason() != reason {
+			inst.SetSuspendReason(reason)
+			if err := s.instanceRepo.Save(inst); err != nil {
+				return err
+			}
+			s.publishState(inst)
+		}
 		return nil
+	}
+	if reason != "" {
+		inst.SetSuspendReason(reason)
 	}
 	if err := inst.Suspend(time.Now()); err != nil {
 		return err
@@ -496,6 +541,9 @@ func (s *InstanceAppService) RecoverFromBillingSuspension(instanceID string) err
 		return err
 	}
 	if inst.ControlStatus() == domain.InstanceControlStatusActive {
+		return nil
+	}
+	if inst.SuspendReason() == domain.InstanceSuspendReasonTrafficRunOut {
 		return nil
 	}
 	if err := inst.RecoverFromBillingSuspension(time.Now()); err != nil {
@@ -560,11 +608,13 @@ func (s *InstanceAppService) toInstanceStateEvent(inst *domain.Instance) events.
 		CPU:             inst.CPU(),
 		MemoryMB:        inst.MemoryMB(),
 		DiskGB:          inst.DiskGB(),
+		BandwidthGB:     inst.BandwidthGB(),
 		IPv4:            inst.IPv4(),
 		IPv6:            inst.IPv6(),
 		HostIP:          inst.HostIP(),
 		Status:          s.InstanceStatus(inst),
 		ControlStatus:   inst.ControlStatus(),
+		SuspendReason:   inst.SuspendReason(),
 		RuntimeState:    runtimeState,
 		NetworkMode:     inst.NetworkMode(),
 		NATPort:         inst.NATPort(),

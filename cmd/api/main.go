@@ -370,7 +370,7 @@ func main() {
 	instApp.SetNATPortMappingReader(natPortRepo)
 	instApp.SetRuntimeStateReader(provSvc)
 	trafficRepo := instanceInfra.NewTrafficRepo(db)
-	instTrafficApp := instanceApp.NewTrafficService(bus, trafficRepo, instRepo)
+	instTrafficApp := instanceApp.NewTrafficService(bus, trafficRepo, instRepo, instApp)
 	instHandler := instanceHttp.NewInstanceHandler(instApp, instTrafficApp)
 	instTrafficApp.StartCalculateDailyTraffic(context.Background())
 	// ── Provisioning → Instance Event Bridge ───────────────────────────────

@@ -22,11 +22,12 @@ func (a *CatalogAdapter) PurchaseProduct(ctx context.Context, productID, custome
 		return paymentApp.PurchasedProduct{}, err
 	}
 	return paymentApp.PurchasedProduct{
-		Location: product.Location(),
-		Slug:     product.Slug(),
-		CPU:      product.CPU(),
-		MemoryMB: product.MemoryMB(),
-		DiskGB:   product.DiskGB(),
+		Location:    product.Location(),
+		Slug:        product.Slug(),
+		CPU:         product.CPU(),
+		MemoryMB:    product.MemoryMB(),
+		DiskGB:      product.DiskGB(),
+		BandwidthGB: product.BandwidthGB(),
 	}, nil
 }
 

@@ -70,6 +70,7 @@ func (a *OrderingAdapter) ListOrders() ([]paymentApp.PayableOrder, error) {
 			CPU:          cfg.CPU(),
 			MemoryMB:     cfg.MemoryMB(),
 			DiskGB:       cfg.DiskGB(),
+			BandwidthGB:  cfg.BandwidthGB(),
 		}
 	}
 	return result, nil
@@ -100,5 +101,6 @@ func (a *OrderingAdapter) GetOrderForPayment(orderID string) (paymentApp.Payable
 		CPU:          cfg.CPU(),
 		MemoryMB:     cfg.MemoryMB(),
 		DiskGB:       cfg.DiskGB(),
+		BandwidthGB:  cfg.BandwidthGB(),
 	}, nil
 }

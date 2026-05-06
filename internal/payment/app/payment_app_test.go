@@ -81,7 +81,7 @@ type mockInstanceCreator struct {
 	networkMode string
 }
 
-func (m *mockInstanceCreator) CreatePendingInstance(customerID, orderID, region, hostname, plan, os, networkMode string, cpu, memoryMB, diskGB int) (app.PendingInstance, error) {
+func (m *mockInstanceCreator) CreatePendingInstance(customerID, orderID, region, hostname, plan, os, networkMode string, cpu, memoryMB, diskGB, bandwidthGB int) (app.PendingInstance, error) {
 	m.networkMode = networkMode
 	return app.PendingInstance{ID: "inst-1", InitialPassword: "pwd-1"}, nil
 }

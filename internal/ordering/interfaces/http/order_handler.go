@@ -31,6 +31,7 @@ type CreateOrderRequest struct {
 	CPU          int    `json:"cpu" vd:"$>0"`
 	MemoryMB     int    `json:"memory_mb" vd:"$>0"`
 	DiskGB       int    `json:"disk_gb" vd:"$>0"`
+	BandwidthGB  int    `json:"bandwidth_gb"`
 }
 
 type CancelOrderRequest struct {
@@ -64,20 +65,22 @@ type VPSConfigResponse struct {
 	CPU         int    `json:"cpu"`
 	MemoryMB    int    `json:"memory_mb"`
 	DiskGB      int    `json:"disk_gb"`
+	BandwidthGB int    `json:"bandwidth_gb"`
 }
 
 // ---- Handler ----
 
-type ProductNetworkModeReader interface {
+type ProductSpecReader interface {
 	GetNetworkMode(ctx context.Context, productID string) (string, error)
+	GetBandwidthGB(ctx context.Context, productID string) (int, error)
 }
 
 type OrderHandler struct {
 	orderApp    *app.OrderAppService
-	productRead ProductNetworkModeReader
+	productRead ProductSpecReader
 }
 
-func NewOrderHandler(orderApp *app.OrderAppService, productRead ProductNetworkModeReader) *OrderHandler {
+func NewOrderHandler(orderApp *app.OrderAppService, productRead ProductSpecReader) *OrderHandler {
 	return &OrderHandler{orderApp: orderApp, productRead: productRead}
 }
 
@@ -112,19 +115,26 @@ func (h *OrderHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
 	}
 
 	networkMode := ""
+	bandwidthGB := req.BandwidthGB
 	if h.productRead != nil {
 		mode, err := h.productRead.GetNetworkMode(ctx, req.ProductID)
 		if err != nil {
 			c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(apperr.CodeProductNotFound, err.Error()))
 			return
 		}
+		bandwidthGBSnapshot, err := h.productRead.GetBandwidthGB(ctx, req.ProductID)
+		if err != nil {
+			c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(apperr.CodeProductNotFound, err.Error()))
+			return
+		}
 		networkMode = mode
+		bandwidthGB = bandwidthGBSnapshot
 	}
 
 	order, err := h.orderApp.CreateOrder(
 		customerID, req.ProductID, invoiceID, billingCycle,
 		req.Hostname, req.Plan, req.Region, req.OS, networkMode,
-		req.CPU, req.MemoryMB, req.DiskGB,
+		req.CPU, req.MemoryMB, req.DiskGB, bandwidthGB,
 		orderCurrencyCNY, req.PriceAmount,
 	)
 	if err != nil {
@@ -283,6 +293,7 @@ func toOrderResponse(o *domain.Order) OrderResponse {
 			CPU:         cfg.CPU(),
 			MemoryMB:    cfg.MemoryMB(),
 			DiskGB:      cfg.DiskGB(),
+			BandwidthGB: cfg.BandwidthGB(),
 		},
 		CreatedAt:    o.CreatedAt().Format(time.RFC3339),
 		CancelReason: o.CancelReason(),

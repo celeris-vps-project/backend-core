@@ -45,6 +45,7 @@ type PayableOrder struct {
 	CPU          int
 	MemoryMB     int
 	DiskGB       int
+	BandwidthGB  int
 }
 
 // ProductPurchaser is a port for the catalog context.
@@ -56,17 +57,18 @@ type ProductPurchaser interface {
 
 // PurchasedProduct is the minimal read-model returned after purchase.
 type PurchasedProduct struct {
-	Location string
-	Slug     string
-	CPU      int
-	MemoryMB int
-	DiskGB   int
+	Location    string
+	Slug        string
+	CPU         int
+	MemoryMB    int
+	DiskGB      int
+	BandwidthGB int
 }
 
 // InstanceCreator is a port for the instance context.
 // Returns the newly created instance delivery details or an error.
 type InstanceCreator interface {
-	CreatePendingInstance(customerID, orderID, region, hostname, plan, os, networkMode string, cpu, memoryMB, diskGB int) (PendingInstance, error)
+	CreatePendingInstance(customerID, orderID, region, hostname, plan, os, networkMode string, cpu, memoryMB, diskGB, bandwidthGB int) (PendingInstance, error)
 }
 
 type PendingInstance struct {
@@ -160,6 +162,7 @@ func (s *PostPaymentOrchestrator) HandlePaymentConfirmed(orderID string) error {
 			order.CPU,
 			order.MemoryMB,
 			order.DiskGB,
+			order.BandwidthGB,
 		)
 		if err != nil {
 			return fmt.Errorf("create pending instance: %w", err)

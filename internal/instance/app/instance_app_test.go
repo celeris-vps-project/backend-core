@@ -156,7 +156,7 @@ func TestPurchaseInstance_AllocatesSlot(t *testing.T) {
 	node := createTestHostNode(nodeRepo, "node-1", "DE-fra-01", "DE-fra", "Frankfurt #1", 2)
 
 	// Purchase first instance (by region, not node ID)
-	inst1, err := svc.PurchaseInstance("cust-1", "ord-1", "DE-fra", "web-01", "vps-starter", "ubuntu-22.04", 2, 2048, 40)
+	inst1, err := svc.PurchaseInstance("cust-1", "ord-1", "DE-fra", "web-01", "vps-starter", "ubuntu-22.04", 2, 2048, 40, 1000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -165,13 +165,13 @@ func TestPurchaseInstance_AllocatesSlot(t *testing.T) {
 	}
 
 	// Purchase second instance
-	_, err = svc.PurchaseInstance("cust-2", "ord-2", "DE-fra", "web-02", "vps-starter", "ubuntu-22.04", 2, 2048, 40)
+	_, err = svc.PurchaseInstance("cust-2", "ord-2", "DE-fra", "web-02", "vps-starter", "ubuntu-22.04", 2, 2048, 40, 1000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Third should fail — no capacity
-	_, err = svc.PurchaseInstance("cust-3", "ord-3", "DE-fra", "web-03", "vps-starter", "ubuntu-22.04", 2, 2048, 40)
+	_, err = svc.PurchaseInstance("cust-3", "ord-3", "DE-fra", "web-03", "vps-starter", "ubuntu-22.04", 2, 2048, 40, 1000)
 	if err == nil {
 		t.Fatal("expected error for no capacity")
 	}
@@ -190,7 +190,7 @@ func TestTerminateInstance_ReleasesSlot(t *testing.T) {
 	svc := NewInstanceAppService(nodeRepo, instRepo, idGen, nil)
 
 	_ = createTestHostNode(nodeRepo, "node-2", "US-slc-01", "US-slc", "Salt Lake City #1", 1)
-	inst, _ := svc.PurchaseInstance("cust-1", "ord-1", "US-slc", "app-01", "vps-pro", "debian-12", 4, 8192, 100)
+	inst, _ := svc.PurchaseInstance("cust-1", "ord-1", "US-slc", "app-01", "vps-pro", "debian-12", 4, 8192, 100, 2000)
 
 	_ = svc.StartInstance(inst.ID())
 	if err := svc.TerminateInstance(inst.ID()); err != nil {
@@ -211,7 +211,7 @@ func TestCreatePendingInstance_DoesNotAllocateNodeOrSlot(t *testing.T) {
 
 	node := createTestHostNode(nodeRepo, "node-3", "JP-tyo-01", "JP-tyo", "Tokyo #1", 2)
 
-	inst, err := svc.CreatePendingInstance("cust-1", "ord-1", "JP-tyo", "web-01", "vps-basic", "ubuntu-24.04", "", 2, 2048, 40)
+	inst, err := svc.CreatePendingInstance("cust-1", "ord-1", "JP-tyo", "web-01", "vps-basic", "ubuntu-24.04", "", 2, 2048, 40, 1000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestConfirmProvisioning_AssignsNodeAndNetworkDetails(t *testing.T) {
 	idGen := &seqIDGen{}
 	svc := NewInstanceAppService(nodeRepo, instRepo, idGen, nil)
 
-	inst, err := svc.CreatePendingInstance("cust-1", "ord-1", "US-lax", "app-01", "vps-pro", "debian-12", "nat", 4, 8192, 100)
+	inst, err := svc.CreatePendingInstance("cust-1", "ord-1", "US-lax", "app-01", "vps-pro", "debian-12", "nat", 4, 8192, 100, 2000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestStartInstance_WithLifecycleSchedulerEnqueuesTask(t *testing.T) {
 	svc.SetLifecycleScheduler(scheduler)
 
 	_ = createTestHostNode(nodeRepo, "node-4", "US-lax-01", "US-lax", "Los Angeles #1", 2)
-	inst, err := svc.PurchaseInstance("cust-1", "ord-1", "US-lax", "web-01", "vps-basic", "ubuntu-24.04", 2, 2048, 40)
+	inst, err := svc.PurchaseInstance("cust-1", "ord-1", "US-lax", "web-01", "vps-basic", "ubuntu-24.04", 2, 2048, 40, 1000)
 	if err != nil {
 		t.Fatalf("unexpected purchase error: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestStopInstance_WithLifecycleSchedulerEnqueuesTask(t *testing.T) {
 	svc := NewInstanceAppService(nodeRepo, instRepo, idGen, nil)
 
 	_ = createTestHostNode(nodeRepo, "node-5", "US-sea-01", "US-sea", "Seattle #1", 2)
-	inst, err := svc.PurchaseInstance("cust-1", "ord-1", "US-sea", "web-01", "vps-basic", "ubuntu-24.04", 2, 2048, 40)
+	inst, err := svc.PurchaseInstance("cust-1", "ord-1", "US-sea", "web-01", "vps-basic", "ubuntu-24.04", 2, 2048, 40, 1000)
 	if err != nil {
 		t.Fatalf("unexpected purchase error: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestTerminateInstance_WithLifecycleSchedulerEnqueuesDeprovision(t *testing.
 	svc := NewInstanceAppService(nodeRepo, instRepo, idGen, nil)
 
 	_ = createTestHostNode(nodeRepo, "node-6", "SG-sin-01", "SG-sin", "Singapore #1", 2)
-	inst, err := svc.PurchaseInstance("cust-1", "ord-1", "SG-sin", "web-01", "vps-basic", "ubuntu-24.04", 2, 2048, 40)
+	inst, err := svc.PurchaseInstance("cust-1", "ord-1", "SG-sin", "web-01", "vps-basic", "ubuntu-24.04", 2, 2048, 40, 1000)
 	if err != nil {
 		t.Fatalf("unexpected purchase error: %v", err)
 	}

@@ -42,5 +42,8 @@ type TrafficUsageSummary struct {
 	RX              uint64
 	TX              uint64
 	Total           uint64
+	BandwidthGB     int
+	PeriodMax       uint64
+	OverLimit       bool
 	Daily           []TrafficDaily
 }
