@@ -59,12 +59,19 @@ message NATForwardRule {
   string protocol    = 5;
 }
 
+message VMTransferred {
+  uint64 total = 1;
+  uint64 RX = 2;
+  uint64 TX = 3;
+}
+
 message VMState {
   string instance_id = 1;
   string state       = 2;
   string ipv4        = 3;
   string ipv6        = 4;
   string reported_at = 5;
+  VMTransferred vm_transferred = 6;
 }
 
 // ---- Task ----
