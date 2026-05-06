@@ -6,6 +6,8 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"github.com/shirou/gopsutil/v3/net"
 )
 
 // PVEDriver manages QEMU/KVM virtual machines through the Proxmox VE REST API.
@@ -315,13 +317,19 @@ func (d *PVEDriver) Info(instanceID string) (*VMInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pve info %s (vmid=%d): %w", name, vmid, err)
 	}
+	networkStats, err := d.getNetworkStat(vmid)
+	if err != nil {
+		log.Printf("[pve-driver] failed to get network stats for %s, err=%s", name, err)
+		// graceful ignore
+	}
 
 	info := &VMInfo{
-		InstanceID: instanceID,
-		State:      normalizePVEState(status.Status),
-		CPU:        status.CPUs,
-		MemoryMB:   int(status.MaxMem / (1024 * 1024)),
-		DiskGB:     int(status.MaxDisk / (1024 * 1024 * 1024)),
+		InstanceID:   instanceID,
+		State:        normalizePVEState(status.Status),
+		CPU:          status.CPUs,
+		MemoryMB:     int(status.MaxMem / (1024 * 1024)),
+		DiskGB:       int(status.MaxDisk / (1024 * 1024 * 1024)),
+		NetworkStats: networkStats,
 	}
 
 	// Try to get IP from QEMU guest agent (best effort)
@@ -465,6 +473,34 @@ func (d *PVEDriver) resolveTemplate(os string) int {
 		}
 	}
 	return d.templateID
+}
+
+func (d *PVEDriver) getNetworkStat(vmid int) (NetworkStats, error) {
+	var zero NetworkStats
+	var stats NetworkStats
+	counters, err := net.IOCounters(true)
+	if err != nil {
+		return zero, err
+	}
+	target := fmt.Sprintf("tap%di0", vmid)
+	find := false
+	for _, c := range counters {
+		if target != c.Name {
+			continue
+		}
+
+		stats = NetworkStats{
+			Total: c.BytesSent + c.BytesRecv,
+			RX:    c.BytesRecv,
+			TX:    c.BytesSent,
+		}
+		find = true
+		break
+	}
+	if !find {
+		return zero, fmt.Errorf("pve: network stats not found for vmid %d", vmid)
+	}
+	return stats, nil
 }
 
 // getVMIPs attempts to retrieve IP addresses from the QEMU guest agent.

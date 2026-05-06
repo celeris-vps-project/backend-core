@@ -3,6 +3,7 @@ package handler
 import (
 	"backend-core/internal/agent/vm"
 	"backend-core/pkg/contracts"
+	"fmt"
 	"log"
 	"time"
 )
@@ -21,87 +22,171 @@ type NATForwarder interface {
 // then reports results back. For provision/start tasks, if the driver supports
 // BootWaiter, it polls the hypervisor until the VM reaches the driver's ready
 // state. If the controller already assigned a static IP, that IP is reported.
+//func ProcessTasks(tasks []contracts.Task, driver vm.Hypervisor, natForwarder NATForwarder, reportFn func(contracts.TaskResult)) {
+//	for _, task := range tasks {
+//		log.Printf("[agent] executing task %s type=%s instance=%s", task.ID, task.Type, task.Spec.InstanceID)
+//
+//		err := vm.Execute(driver, task)
+//
+//		result := contracts.TaskResult{
+//			TaskID:     task.ID,
+//			Status:     contracts.TaskStatusCompleted,
+//			FinishedAt: time.Now().Format(time.RFC3339),
+//		}
+//		if err != nil {
+//			result.Status = contracts.TaskStatusFailed
+//			result.Error = err.Error()
+//			log.Printf("[agent] task %s FAILED: %v", task.ID, err)
+//			reportFn(result)
+//			continue
+//		}
+//
+//		log.Printf("[agent] task %s COMPLETED (execution phase)", task.ID)
+//
+//		// For provision/start tasks, confirm the VM reached the driver's
+//		// ready state. Controller-assigned static IPs do not depend on a
+//		// guest agent reporting network interfaces.
+//		if needsBootWait(task.Type) {
+//			if task.Spec.IPv4 != "" {
+//				result.IPv4 = task.Spec.IPv4
+//				result.IPv6 = task.Spec.IPv6
+//				result.VMState = "running"
+//				log.Printf("[agent] task %s: using provisioned static IPv4=%s (skipping guest-agent IP wait)",
+//					task.ID, task.Spec.IPv4)
+//			} else if bw, ok := driver.(vm.BootWaiter); ok {
+//				log.Printf("[agent] task %s: waiting for boot (polling guest agent)...", task.ID)
+//				info, waitErr := bw.WaitForBoot(task.Spec.InstanceID, DefaultBootTimeout)
+//				if waitErr != nil {
+//					// Boot wait timed out — task itself succeeded (VM is created/started),
+//					// but we couldn't get the IP. Report as completed with a warning.
+//					log.Printf("[agent] task %s: boot wait failed: %v (reporting completed without IP)", task.ID, waitErr)
+//					result.VMState = "boot_timeout"
+//				} else {
+//					result.IPv4 = info.IPv4
+//					result.IPv6 = info.IPv6
+//					result.VMState = info.State
+//					log.Printf("[agent] task %s: boot confirmed ipv4=%s ipv6=%s state=%s",
+//						task.ID, info.IPv4, info.IPv6, info.State)
+//				}
+//			} else {
+//				// Driver doesn't support BootWaiter — fall back to single Info() call
+//				if info, infoErr := driver.Info(task.Spec.InstanceID); infoErr == nil {
+//					result.IPv4 = info.IPv4
+//					result.IPv6 = info.IPv6
+//					result.VMState = info.State
+//					if info.IPv4 != "" || info.IPv6 != "" {
+//						log.Printf("[agent] task %s instance IP (single query): v4=%s v6=%s",
+//							task.ID, info.IPv4, info.IPv6)
+//					}
+//				}
+//			}
+//		}
+//
+//		if result.Status == contracts.TaskStatusCompleted && !needsBootWait(task.Type) && task.Type != contracts.TaskDeprovision {
+//			if info, infoErr := driver.Info(task.Spec.InstanceID); infoErr == nil {
+//				result.IPv4 = info.IPv4
+//				result.IPv6 = info.IPv6
+//				result.VMState = info.State
+//				log.Printf("[agent] task %s: runtime state after %s is %s",
+//					task.ID, task.Type, info.State)
+//			}
+//		}
+//
+//		if natErr := ensureNATForward(task, result, natForwarder); natErr != nil {
+//			result.Status = contracts.TaskStatusFailed
+//			result.Error = natErr.Error()
+//			log.Printf("[agent] task %s NAT setup FAILED: %v", task.ID, natErr)
+//		}
+//		if natErr := releaseNATForward(task, result, natForwarder); natErr != nil {
+//			result.Status = contracts.TaskStatusFailed
+//			result.Error = natErr.Error()
+//			log.Printf("[agent] task %s NAT cleanup FAILED: %v", task.ID, natErr)
+//		}
+//
+//		reportFn(result)
+//	}
+//}
+
+func runTask(task contracts.Task, driver vm.Hypervisor) error {
+	err := vm.Execute(driver, task)
+	if err != nil {
+		return err
+	}
+	if needsBootWait(task.Type) {
+		attempt := 0
+		deadline := time.Now().Add(DefaultBootTimeout)
+		maxAttempt := 3
+		const pollInterval = time.Second * 30
+		for time.Now().Before(deadline) {
+			info, err := driver.Info(task.Spec.InstanceID)
+			if err == nil && info.State == "running" {
+				break
+			}
+			time.Sleep(pollInterval)
+			attempt++
+			if attempt > maxAttempt {
+				return fmt.Errorf("task %s timed out after %d attempts", task.ID, attempt)
+			}
+		}
+	}
+
+	return nil
+}
+
+func failResult(result *contracts.TaskResult, err error) {
+	result.Status = contracts.TaskStatusFailed
+	result.Error = err.Error()
+}
+
+func finishTask(task contracts.Task, driver vm.Hypervisor, natForwarder NATForwarder, result *contracts.TaskResult) {
+	if info, infoErr := driver.Info(task.Spec.InstanceID); infoErr == nil {
+		result.IPv4 = info.IPv4
+		result.IPv6 = info.IPv6
+		result.VMState = info.State
+		result.VMInfo = func() contracts.VMInfo {
+			var vmTransferred contracts.VMTransferred
+			vmTransferred.TX = info.NetworkStats.TX
+			vmTransferred.RX = info.NetworkStats.RX
+			vmTransferred.TX = info.NetworkStats.Total
+			return contracts.VMInfo{
+				VMTransferred: vmTransferred,
+			}
+		}()
+		log.Printf("[agent] task %s: runtime state after %s is %s",
+			task.ID, task.Type, info.State)
+	}
+
+	if natErr := ensureNATForward(task, *result, natForwarder); natErr != nil {
+		result.Status = contracts.TaskStatusFailed
+		result.Error = natErr.Error()
+		log.Printf("[agent] task %s NAT setup FAILED: %v", task.ID, natErr)
+	}
+	if natErr := releaseNATForward(task, *result, natForwarder); natErr != nil {
+		result.Status = contracts.TaskStatusFailed
+		result.Error = natErr.Error()
+		log.Printf("[agent] task %s NAT cleanup FAILED: %v", task.ID, natErr)
+	}
+}
+
+// ProcessTasks executes any tasks received from the controller heartbeat ack,
+// then reports results back. For provision/start tasks, if the driver supports
+// BootWaiter, it polls the hypervisor until the VM reaches the driver's ready
+// state. If the controller already assigned a static IP, that IP is reported.
 func ProcessTasks(tasks []contracts.Task, driver vm.Hypervisor, natForwarder NATForwarder, reportFn func(contracts.TaskResult)) {
 	for _, task := range tasks {
-		log.Printf("[agent] executing task %s type=%s instance=%s", task.ID, task.Type, task.Spec.InstanceID)
-
-		err := vm.Execute(driver, task)
-
 		result := contracts.TaskResult{
 			TaskID:     task.ID,
 			Status:     contracts.TaskStatusCompleted,
 			FinishedAt: time.Now().Format(time.RFC3339),
 		}
-		if err != nil {
-			result.Status = contracts.TaskStatusFailed
-			result.Error = err.Error()
-			log.Printf("[agent] task %s FAILED: %v", task.ID, err)
+
+		if err := runTask(task, driver); err != nil {
+			failResult(&result, err)
 			reportFn(result)
 			continue
 		}
 
-		log.Printf("[agent] task %s COMPLETED (execution phase)", task.ID)
-
-		// For provision/start tasks, confirm the VM reached the driver's
-		// ready state. Controller-assigned static IPs do not depend on a
-		// guest agent reporting network interfaces.
-		if needsBootWait(task.Type) {
-			if task.Spec.IPv4 != "" {
-				result.IPv4 = task.Spec.IPv4
-				result.IPv6 = task.Spec.IPv6
-				result.VMState = "running"
-				log.Printf("[agent] task %s: using provisioned static IPv4=%s (skipping guest-agent IP wait)",
-					task.ID, task.Spec.IPv4)
-			} else if bw, ok := driver.(vm.BootWaiter); ok {
-				log.Printf("[agent] task %s: waiting for boot (polling guest agent)...", task.ID)
-				info, waitErr := bw.WaitForBoot(task.Spec.InstanceID, DefaultBootTimeout)
-				if waitErr != nil {
-					// Boot wait timed out — task itself succeeded (VM is created/started),
-					// but we couldn't get the IP. Report as completed with a warning.
-					log.Printf("[agent] task %s: boot wait failed: %v (reporting completed without IP)", task.ID, waitErr)
-					result.VMState = "boot_timeout"
-				} else {
-					result.IPv4 = info.IPv4
-					result.IPv6 = info.IPv6
-					result.VMState = info.State
-					log.Printf("[agent] task %s: boot confirmed ipv4=%s ipv6=%s state=%s",
-						task.ID, info.IPv4, info.IPv6, info.State)
-				}
-			} else {
-				// Driver doesn't support BootWaiter — fall back to single Info() call
-				if info, infoErr := driver.Info(task.Spec.InstanceID); infoErr == nil {
-					result.IPv4 = info.IPv4
-					result.IPv6 = info.IPv6
-					result.VMState = info.State
-					if info.IPv4 != "" || info.IPv6 != "" {
-						log.Printf("[agent] task %s instance IP (single query): v4=%s v6=%s",
-							task.ID, info.IPv4, info.IPv6)
-					}
-				}
-			}
-		}
-
-		if result.Status == contracts.TaskStatusCompleted && !needsBootWait(task.Type) && task.Type != contracts.TaskDeprovision {
-			if info, infoErr := driver.Info(task.Spec.InstanceID); infoErr == nil {
-				result.IPv4 = info.IPv4
-				result.IPv6 = info.IPv6
-				result.VMState = info.State
-				log.Printf("[agent] task %s: runtime state after %s is %s",
-					task.ID, task.Type, info.State)
-			}
-		}
-
-		if natErr := ensureNATForward(task, result, natForwarder); natErr != nil {
-			result.Status = contracts.TaskStatusFailed
-			result.Error = natErr.Error()
-			log.Printf("[agent] task %s NAT setup FAILED: %v", task.ID, natErr)
-		}
-		if natErr := releaseNATForward(task, result, natForwarder); natErr != nil {
-			result.Status = contracts.TaskStatusFailed
-			result.Error = natErr.Error()
-			log.Printf("[agent] task %s NAT cleanup FAILED: %v", task.ID, natErr)
-		}
-
+		finishTask(task, driver, natForwarder, &result)
 		reportFn(result)
 	}
 }

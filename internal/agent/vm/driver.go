@@ -6,15 +6,23 @@ import (
 	"time"
 )
 
+// NetworkStats is used to calculate network in period "Like in a month". Would fetch from interface Usually reset on server reboot
+type NetworkStats struct {
+	Total uint64 `json:"period_stats_bytes"` // current total
+	RX    uint64 `json:"rx_bytes"`
+	TX    uint64 `json:"tx_bytes"`
+}
+
 // VMInfo is the runtime state returned after querying a guest.
 type VMInfo struct {
-	InstanceID string `json:"instance_id"`
-	State      string `json:"state"` // "running", "stopped", "paused", etc.
-	CPU        int    `json:"cpu"`
-	MemoryMB   int    `json:"memory_mb"`
-	DiskGB     int    `json:"disk_gb"`
-	IPv4       string `json:"ipv4,omitempty"`
-	IPv6       string `json:"ipv6,omitempty"`
+	InstanceID   string       `json:"instance_id"`
+	State        string       `json:"state"` // "running", "stopped", "paused", etc.
+	CPU          int          `json:"cpu"`
+	MemoryMB     int          `json:"memory_mb"`
+	DiskGB       int          `json:"disk_gb"`
+	IPv4         string       `json:"ipv4,omitempty"`
+	IPv6         string       `json:"ipv6,omitempty"`
+	NetworkStats NetworkStats `json:"network_stats"`
 }
 
 // Hypervisor is the abstracted interface for managing virtual machines or

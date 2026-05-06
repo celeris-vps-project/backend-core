@@ -144,10 +144,21 @@ func main() {
 
 	collector := monitor.NewCollector(nodeID, driver)
 
-	// ── Heartbeat loop ─────────────────────────────────────────────────
+	// sync natForwards Once
 	ticker := time.NewTicker(time.Duration(cfg.PollInterval) * time.Second)
 	defer ticker.Stop()
+	ack, err := grpcClient.Heartbeat(ctx, collector.Collect())
+	if err != nil {
+		log.Printf("[agent] heartbeat failed: %v", err)
+	}
 
+	if len(ack.NATForwards) > 0 {
+		if err := handler.SyncNATForwards(ack.NATForwards, natForwarder); err != nil {
+			log.Printf("[agent] failed to sync NAT forwards: %v", err)
+		}
+	}
+
+	// ── Heartbeat loop ─────────────────────────────────────────────────
 	for range ticker.C {
 		hb := collector.Collect()
 
@@ -155,12 +166,6 @@ func main() {
 		if err != nil {
 			log.Printf("[agent] heartbeat failed: %v", err)
 			continue
-		}
-
-		if len(ack.NATForwards) > 0 {
-			if err := handler.SyncNATForwards(ack.NATForwards, natForwarder); err != nil {
-				log.Printf("[agent] failed to sync NAT forwards: %v", err)
-			}
 		}
 
 		if len(ack.Tasks) > 0 {

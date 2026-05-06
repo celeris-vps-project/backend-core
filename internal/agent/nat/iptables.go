@@ -155,7 +155,7 @@ func (f *IPTablesForwarder) ensureRule(table, chain string, args ...string) erro
 }
 
 func iptablesRuleArgs(table, action, chain string, args ...string) []string {
-	commandArgs := []string{}
+	var commandArgs []string
 	if table != "" {
 		commandArgs = append(commandArgs, "-t", table)
 	}
@@ -165,7 +165,7 @@ func iptablesRuleArgs(table, action, chain string, args ...string) []string {
 }
 
 func (f *IPTablesForwarder) deleteRulesByComment(table, chain, comment string) error {
-	listArgs := []string{}
+	var listArgs []string
 	if table != "" {
 		listArgs = append(listArgs, "-t", table)
 	}
@@ -183,7 +183,7 @@ func (f *IPTablesForwarder) deleteRulesByComment(table, chain, comment string) e
 		if len(fields) < 3 || fields[0] != "-A" || fields[1] != chain {
 			continue
 		}
-		deleteArgs := []string{}
+		var deleteArgs []string
 		if table != "" {
 			deleteArgs = append(deleteArgs, "-t", table)
 		}

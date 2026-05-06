@@ -11,6 +11,7 @@ const (
 	TaskReboot      TaskType = "reboot"
 	TaskSuspend     TaskType = "suspend"
 	TaskUnsuspend   TaskType = "unsuspend"
+	TaskCollectInfo TaskType = "collect_info"
 )
 
 // TaskStatus tracks a task through its lifecycle.
@@ -62,6 +63,24 @@ type ProvisionSpec struct {
 	NATForwards []NATForwardRule `json:"nat_forwards,omitempty"` // complete desired port mappings for this instance
 }
 
+// VMTransferred describe traffic consuming stats
+type VMTransferred struct {
+	Total uint64 `json:"total"`
+	RX    uint64 `json:"rx"`
+	TX    uint64 `json:"tx"`
+}
+
+type VMInfo struct {
+	InstanceID    string        `json:"instance_id"`
+	State         string        `json:"state"` // "running", "stopped", "paused", etc.
+	CPU           int           `json:"cpu"`
+	MemoryMB      int           `json:"memory_mb"`
+	DiskGB        int           `json:"disk_gb"`
+	IPv4          string        `json:"ipv4,omitempty"`
+	IPv6          string        `json:"ipv6,omitempty"`
+	VMTransferred VMTransferred `json:"vm_transferred,omitempty"`
+}
+
 // NATForwardRule is the controller-owned desired NAT state for an instance.
 // Agents replay these rules on every heartbeat so host reboots do not lose
 // iptables state.
@@ -100,4 +119,5 @@ type TaskResult struct {
 	IPv6       string     `json:"ipv6,omitempty"`
 	VMState    string     `json:"vm_state,omitempty"` // current VM state: "running", "stopped", "boot_timeout"
 	FinishedAt string     `json:"finished_at"`
+	VMInfo     VMInfo     `json:"vm_info"`
 }

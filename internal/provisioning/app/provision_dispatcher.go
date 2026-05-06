@@ -13,6 +13,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -124,6 +125,7 @@ type VPSProvisioner struct {
 	delayPublisher delayed.Publisher // async boot confirmation queue (nil = skip)
 	bootCheckDelay time.Duration     // how long to wait before checking boot status
 	mockMode       bool              // when true, auto-complete tasks (dev/test without real agents)
+	nodeLockMap    sync.Map
 }
 
 // NewVPSProvisioner creates a provisioner for VPS-type products.
@@ -397,7 +399,20 @@ func (p *VPSProvisioner) enqueuePendingTask(cmd ProvisionCommand, nodeID string)
 	}
 }
 
+func (p *VPSProvisioner) getNodeLock(nodeId string) *sync.Mutex {
+	lock, _ := p.nodeLockMap.LoadOrStore(nodeId, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
+// allocateNetworkResource is not a thread safe method.
+// there are two ways to avoid none thread safe
+// 1. directly add a mu lock here
+// 2. sql transaction
 func (p *VPSProvisioner) allocateNetworkResource(node *domain.HostNode, instanceID, networkMode string, natPortCount int, spec *contracts.ProvisionSpec) error {
+	lock := p.getNodeLock(node.ID())
+	lock.Lock()
+	defer lock.Unlock()
+
 	if networkMode == "nat" {
 		allocation, forwards, err := p.allocateNATPorts(node, instanceID, normalizeNATPortCount(natPortCount))
 		if err != nil {
@@ -420,6 +435,7 @@ func (p *VPSProvisioner) allocateNetworkResource(node *domain.HostNode, instance
 		log.Printf("[vps-provisioner] WARNING: ipRepo not configured; provisioning %s without static IPv4", instanceID)
 		return nil
 	}
+	// should be lock here
 	ip, err := p.ipRepo.FindAvailable(node.ID(), 4)
 	if err != nil {
 		return fmt.Errorf("provisioning: no available IPv4 on node %s: %w", node.Code(), err)
@@ -430,6 +446,7 @@ func (p *VPSProvisioner) allocateNetworkResource(node *domain.HostNode, instance
 	if err := p.ipRepo.Save(ip); err != nil {
 		return err
 	}
+
 	spec.IPv4 = ip.Address()
 	log.Printf("[vps-provisioner] dedicated IPv4 %s allocated on node %s for instance %s",
 		ip.Address(), node.Code(), instanceID)
