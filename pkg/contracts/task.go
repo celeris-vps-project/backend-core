@@ -63,13 +63,6 @@ type ProvisionSpec struct {
 	NATForwards []NATForwardRule `json:"nat_forwards,omitempty"` // complete desired port mappings for this instance
 }
 
-// VMTransferred describe traffic consuming stats
-type VMTransferred struct {
-	Total uint64 `json:"total"`
-	RX    uint64 `json:"rx"`
-	TX    uint64 `json:"tx"`
-}
-
 type VMInfo struct {
 	InstanceID    string        `json:"instance_id"`
 	State         string        `json:"state"` // "running", "stopped", "paused", etc.

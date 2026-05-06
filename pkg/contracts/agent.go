@@ -29,14 +29,22 @@ type Heartbeat struct {
 	VMStates   []InstanceRuntimeState `json:"vm_states,omitempty"`
 }
 
+// VMTransferred describe traffic consuming stats
+type VMTransferred struct {
+	Total uint64 `json:"total"`
+	RX    uint64 `json:"rx"`
+	TX    uint64 `json:"tx"`
+}
+
 // InstanceRuntimeState is agent-reported hypervisor state for a single guest.
 // It is runtime telemetry and should live in caches, not in the instances table.
 type InstanceRuntimeState struct {
-	InstanceID string `json:"instance_id"`
-	State      string `json:"state"` // "running", "stopped", "paused", "unknown"
-	IPv4       string `json:"ipv4,omitempty"`
-	IPv6       string `json:"ipv6,omitempty"`
-	ReportedAt string `json:"reported_at,omitempty"`
+	InstanceID    string        `json:"instance_id"`
+	State         string        `json:"state"` // "running", "stopped", "paused", "unknown"
+	IPv4          string        `json:"ipv4,omitempty"`
+	IPv6          string        `json:"ipv6,omitempty"`
+	ReportedAt    string        `json:"reported_at,omitempty"`
+	VMTransferred VMTransferred `json:"vm_transferred,omitempty"`
 }
 
 // HeartbeatAck is the controller's response, optionally including queued tasks.

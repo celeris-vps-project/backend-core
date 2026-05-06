@@ -61,6 +61,11 @@ func (c *Collector) Collect() contracts.Heartbeat {
 			IPv4:       info.IPv4,
 			IPv6:       info.IPv6,
 			ReportedAt: reportedAt,
+			VMTransferred: contracts.VMTransferred{
+				Total: info.NetworkStats.Total,
+				RX:    info.NetworkStats.RX,
+				TX:    info.NetworkStats.TX,
+			},
 		})
 	}
 
