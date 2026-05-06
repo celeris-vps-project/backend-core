@@ -165,3 +165,13 @@ type NATForwardRule struct {
 	GuestPort int    `json:"guest_port"`
 	Protocol  string `json:"protocol,omitempty"`
 }
+
+type InstanceTrafficRecordUpdatedEvent struct {
+	InstanceID   string `json:"id"`
+	TotalTraffic uint64 `json:"total_traffic"`
+	TotalRX      uint64 `json:"total_rx"`
+	TotalTX      uint64 `json:"total_tx"`
+	Date         string `json:"date"`
+}
+
+func (InstanceTrafficRecordUpdatedEvent) EventName() string { return "instance.traffic_updated" }

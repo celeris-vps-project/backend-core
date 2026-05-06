@@ -70,14 +70,33 @@ type NATPortMappingResponse struct {
 	Protocol  string `json:"protocol,omitempty"`
 }
 
+type TrafficUsageResponse struct {
+	InstanceID      string                 `json:"instance_id"`
+	LastEndPeriodAt string                 `json:"last_end_period_at"`
+	PeriodStart     string                 `json:"period_start"`
+	PeriodEnd       string                 `json:"period_end"`
+	RX              uint64                 `json:"rx"`
+	TX              uint64                 `json:"tx"`
+	Usage           uint64                 `json:"usage"`
+	Daily           []TrafficDailyResponse `json:"daily"`
+}
+
+type TrafficDailyResponse struct {
+	Date  string `json:"date"`
+	RX    uint64 `json:"rx"`
+	TX    uint64 `json:"tx"`
+	Usage uint64 `json:"usage"`
+}
+
 // ---- Handler ----
 
 type InstanceHandler struct {
-	svc *app.InstanceAppService
+	svc        *app.InstanceAppService
+	trafficSvc *app.TrafficService
 }
 
-func NewInstanceHandler(svc *app.InstanceAppService) *InstanceHandler {
-	return &InstanceHandler{svc: svc}
+func NewInstanceHandler(svc *app.InstanceAppService, trafficSvc *app.TrafficService) *InstanceHandler {
+	return &InstanceHandler{svc: svc, trafficSvc: trafficSvc}
 }
 
 // ==================== Instance endpoints ====================
@@ -142,6 +161,24 @@ func (h *InstanceHandler) GetByID(ctx context.Context, c *hz_app.RequestContext)
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"data": h.toInstResp(inst)})
+}
+
+// GET /instances/:id/traffic
+func (h *InstanceHandler) TrafficUsage(ctx context.Context, c *hz_app.RequestContext) {
+	id := c.Param("id")
+	if !h.ensureInstanceAccess(c, id) {
+		return
+	}
+	if h.trafficSvc == nil {
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, "traffic service unavailable"))
+		return
+	}
+	usage, err := h.trafficSvc.GetInstanceTrafficUsage(id)
+	if err != nil {
+		c.JSON(consts.StatusInternalServerError, apperr.Resp(apperr.CodeInternalError, err.Error()))
+		return
+	}
+	c.JSON(consts.StatusOK, utils.H{"data": toTrafficUsageResp(usage)})
 }
 
 // POST /instances/:id/start
@@ -274,6 +311,31 @@ func (h *InstanceHandler) toInstResp(i *domain.Instance) InstanceResponse {
 		resp.TerminatedAt = &s
 	}
 	return resp
+}
+
+func toTrafficUsageResp(usage *domain.TrafficUsageSummary) TrafficUsageResponse {
+	if usage == nil {
+		return TrafficUsageResponse{}
+	}
+	daily := make([]TrafficDailyResponse, 0, len(usage.Daily))
+	for _, row := range usage.Daily {
+		daily = append(daily, TrafficDailyResponse{
+			Date:  row.Date.Format("2006-01-02"),
+			RX:    row.RX,
+			TX:    row.TX,
+			Usage: row.RX + row.TX,
+		})
+	}
+	return TrafficUsageResponse{
+		InstanceID:      usage.InstanceID,
+		LastEndPeriodAt: usage.LastEndPeriodAt.Format(time.RFC3339),
+		PeriodStart:     usage.PeriodStart.Format(time.RFC3339),
+		PeriodEnd:       usage.PeriodEnd.Format(time.RFC3339),
+		RX:              usage.RX,
+		TX:              usage.TX,
+		Usage:           usage.Total,
+		Daily:           daily,
+	}
 }
 
 func (h *InstanceHandler) instanceNATPortMappings(i *domain.Instance) ([]NATPortMappingResponse, error) {

@@ -363,6 +363,11 @@ func (d *PVEDriver) List() ([]*VMInfo, error) {
 			CPU:        vm.CPUs,
 			MemoryMB:   int(vm.MaxMem / (1024 * 1024)),
 			DiskGB:     int(vm.MaxDisk / (1024 * 1024 * 1024)),
+			NetworkStats: NetworkStats{
+				Total: uint64(vm.NetOut + vm.NetIn),
+				TX:    uint64(vm.NetOut),
+				RX:    uint64(vm.NetIn),
+			},
 		})
 	}
 	return list, nil

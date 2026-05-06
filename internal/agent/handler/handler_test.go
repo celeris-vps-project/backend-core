@@ -197,6 +197,47 @@ func TestProcessTasks_UsesSpecIPv4ForNATWithoutGuestAgentWait(t *testing.T) {
 	}
 }
 
+func TestProcessTasks_PreservesVMTransferredStats(t *testing.T) {
+	driver := &fakeDriver{
+		waitInfo: &vm.VMInfo{
+			InstanceID: "inst-stats",
+			State:      "running",
+			NetworkStats: vm.NetworkStats{
+				Total: 321,
+				RX:    111,
+				TX:    222,
+			},
+		},
+	}
+	task := contracts.Task{
+		ID:   "task-stats",
+		Type: contracts.TaskProvision,
+		Spec: contracts.ProvisionSpec{
+			InstanceID: "inst-stats",
+			Hostname:   "web-stats",
+			OS:         "ubuntu-24.04",
+			CPU:        2,
+			MemoryMB:   2048,
+			DiskGB:     40,
+		},
+	}
+
+	var result contracts.TaskResult
+	ProcessTasks([]contracts.Task{task}, driver, nil, func(r contracts.TaskResult) {
+		result = r
+	})
+
+	if result.VMInfo.VMTransferred.Total != 321 {
+		t.Fatalf("expected total traffic 321, got %d", result.VMInfo.VMTransferred.Total)
+	}
+	if result.VMInfo.VMTransferred.RX != 111 {
+		t.Fatalf("expected rx traffic 111, got %d", result.VMInfo.VMTransferred.RX)
+	}
+	if result.VMInfo.VMTransferred.TX != 222 {
+		t.Fatalf("expected tx traffic 222, got %d", result.VMInfo.VMTransferred.TX)
+	}
+}
+
 func TestSyncNATForwards_ReplaysDesiredRules(t *testing.T) {
 	forwarder := &fakeForwarder{}
 

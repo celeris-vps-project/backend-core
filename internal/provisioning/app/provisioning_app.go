@@ -358,6 +358,16 @@ func (s *ProvisioningAppService) Heartbeat(hb contracts.Heartbeat) (*contracts.H
 			VMCount:   state.VMCount,
 			LastSeen:  now.Format(time.RFC3339),
 		})
+
+		for _, vm := range state.VMStates {
+			s.bus.Publish(events.InstanceTrafficRecordUpdatedEvent{
+				InstanceID: vm.InstanceID,
+				TotalTX:    vm.VMTransferred.TX,
+				TotalRX:    vm.VMTransferred.RX,
+				Date:       time.Now().Format(time.RFC3339),
+			})
+		}
+
 		s.publishRuntimeStateChanges(hb.NodeID, existing, vmStates, now)
 	}
 
@@ -972,11 +982,12 @@ func runtimeStateFromTaskResult(task *contracts.Task, result contracts.TaskResul
 		reportedAt = time.Now().Format(time.RFC3339)
 	}
 	return contracts.InstanceRuntimeState{
-		InstanceID: task.Spec.InstanceID,
-		State:      state,
-		IPv4:       firstNonEmpty(result.IPv4, task.Spec.IPv4),
-		IPv6:       firstNonEmpty(result.IPv6, task.Spec.IPv6),
-		ReportedAt: reportedAt,
+		InstanceID:    task.Spec.InstanceID,
+		State:         state,
+		IPv4:          firstNonEmpty(result.IPv4, task.Spec.IPv4),
+		IPv6:          firstNonEmpty(result.IPv6, task.Spec.IPv6),
+		VMTransferred: result.VMInfo.VMTransferred,
+		ReportedAt:    reportedAt,
 	}, true
 }
 

@@ -155,8 +155,8 @@ func runtimeStatesToProto(states []contracts.InstanceRuntimeState) []*agentpb.VM
 			Ipv6:       state.IPv6,
 			ReportedAt: state.ReportedAt,
 			VmTransferred: &agentpb.VMTransferred{
-				RX:    state.VMTransferred.RX,
-				TX:    state.VMTransferred.TX,
+				Tx:    state.VMTransferred.TX,
+				Rx:    state.VMTransferred.RX,
 				Total: state.VMTransferred.Total,
 			},
 		})

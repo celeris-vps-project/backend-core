@@ -129,6 +129,10 @@ func main() {
 		&billingInfra.InvoicePO{}, &billingInfra.LineItemPO{},
 		&orderingInfra.OrderPO{},
 		&instanceInfra.InstancePO{},
+		&instanceInfra.TrafficUsageRecordPO{},
+		&instanceInfra.TrafficDailyPO{},
+		&instanceInfra.TrafficCursorPO{},
+		&instanceInfra.TrafficBillingStatePO{},
 		&catalogInfra.ProductPO{},
 		&promotionInfra.CouponPO{}, &promotionInfra.CouponAllowedProductPO{}, &promotionInfra.CouponRedemptionPO{},
 		&provisioningInfra.RegionPO{}, &provisioningInfra.ResourcePoolPO{}, &provisioningInfra.HostNodePO{},
@@ -365,8 +369,10 @@ func main() {
 	instApp.SetEventPublisher(bus)
 	instApp.SetNATPortMappingReader(natPortRepo)
 	instApp.SetRuntimeStateReader(provSvc)
-	instHandler := instanceHttp.NewInstanceHandler(instApp)
-
+	trafficRepo := instanceInfra.NewTrafficRepo(db)
+	instTrafficApp := instanceApp.NewTrafficService(bus, trafficRepo, instRepo)
+	instHandler := instanceHttp.NewInstanceHandler(instApp, instTrafficApp)
+	instTrafficApp.StartCalculateDailyTraffic(context.Background())
 	// ── Provisioning → Instance Event Bridge ───────────────────────────────
 	// Subscribe to provisioning domain events and update instance state.
 	// When a VM is successfully provisioned (agent reports back with IP),
@@ -771,6 +777,7 @@ func main() {
 
 		// Instance - Customer routes
 		privateAPI.GET("/instances", standardRL, instHandler.ListByCustomer)
+		privateAPI.GET("/instances/:id/traffic", standardRL, instHandler.TrafficUsage)
 		privateAPI.GET("/instances/:id", standardRL, instHandler.GetByID)
 		privateAPI.POST("/instances/:id/start", standardRL, instHandler.Start)
 		privateAPI.POST("/instances/:id/stop", standardRL, instHandler.Stop)

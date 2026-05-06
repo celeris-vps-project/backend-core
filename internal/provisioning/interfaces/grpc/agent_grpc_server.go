@@ -111,14 +111,26 @@ func protoToRuntimeStates(states []*agentpb.VMState) []contracts.InstanceRuntime
 			continue
 		}
 		out = append(out, contracts.InstanceRuntimeState{
-			InstanceID: state.GetInstanceId(),
-			State:      state.GetState(),
-			IPv4:       state.GetIpv4(),
-			IPv6:       state.GetIpv6(),
-			ReportedAt: state.GetReportedAt(),
+			InstanceID:    state.GetInstanceId(),
+			State:         state.GetState(),
+			IPv4:          state.GetIpv4(),
+			IPv6:          state.GetIpv6(),
+			ReportedAt:    state.GetReportedAt(),
+			VMTransferred: protoToVMTransferred(state.GetVmTransferred()),
 		})
 	}
 	return out
+}
+
+func protoToVMTransferred(src *agentpb.VMTransferred) contracts.VMTransferred {
+	if src == nil {
+		return contracts.VMTransferred{}
+	}
+	return contracts.VMTransferred{
+		Total: src.GetTotal(),
+		RX:    src.GetRx(),
+		TX:    src.GetTx(),
+	}
 }
 
 func specToProto(s contracts.ProvisionSpec) *agentpb.ProvisionSpec {

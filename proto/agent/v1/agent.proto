@@ -61,8 +61,8 @@ message NATForwardRule {
 
 message VMTransferred {
   uint64 total = 1;
-  uint64 RX = 2;
-  uint64 TX = 3;
+  uint64 tx = 2;
+  uint64 rx = 3;
 }
 
 message VMState {

@@ -388,8 +388,8 @@ func (x *NATForwardRule) GetProtocol() string {
 type VMTransferred struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Total         uint64                 `protobuf:"varint,1,opt,name=total,proto3" json:"total,omitempty"`
-	RX            uint64                 `protobuf:"varint,2,opt,name=RX,proto3" json:"RX,omitempty"`
-	TX            uint64                 `protobuf:"varint,3,opt,name=TX,proto3" json:"TX,omitempty"`
+	Tx            uint64                 `protobuf:"varint,2,opt,name=tx,proto3" json:"tx,omitempty"`
+	Rx            uint64                 `protobuf:"varint,3,opt,name=rx,proto3" json:"rx,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -431,16 +431,16 @@ func (x *VMTransferred) GetTotal() uint64 {
 	return 0
 }
 
-func (x *VMTransferred) GetRX() uint64 {
+func (x *VMTransferred) GetTx() uint64 {
 	if x != nil {
-		return x.RX
+		return x.Tx
 	}
 	return 0
 }
 
-func (x *VMTransferred) GetTX() uint64 {
+func (x *VMTransferred) GetRx() uint64 {
 	if x != nil {
-		return x.TX
+		return x.Rx
 	}
 	return 0
 }
@@ -969,8 +969,8 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\bprotocol\x18\x05 \x01(\tR\bprotocol\"E\n" +
 	"\rVMTransferred\x12\x14\n" +
 	"\x05total\x18\x01 \x01(\x04R\x05total\x12\x0e\n" +
-	"\x02RX\x18\x02 \x01(\x04R\x02RX\x12\x0e\n" +
-	"\x02TX\x18\x03 \x01(\x04R\x02TX\"\xc9\x01\n" +
+	"\x02tx\x18\x02 \x01(\x04R\x02tx\x12\x0e\n" +
+	"\x02rx\x18\x03 \x01(\x04R\x02rx\"\xc9\x01\n" +
 	"\aVMState\x12\x1f\n" +
 	"\vinstance_id\x18\x01 \x01(\tR\n" +
 	"instanceId\x12\x14\n" +

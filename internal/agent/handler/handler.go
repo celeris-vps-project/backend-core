@@ -141,13 +141,19 @@ func failResult(result *contracts.TaskResult, err error) {
 func finishTask(task contracts.Task, driver vm.Hypervisor, natForwarder NATForwarder, result *contracts.TaskResult) {
 	if info, infoErr := driver.Info(task.Spec.InstanceID); infoErr == nil {
 		result.IPv4 = info.IPv4
+		if result.IPv4 == "" {
+			result.IPv4 = task.Spec.IPv4
+		}
 		result.IPv6 = info.IPv6
+		if result.IPv6 == "" {
+			result.IPv6 = task.Spec.IPv6
+		}
 		result.VMState = info.State
 		result.VMInfo = func() contracts.VMInfo {
 			var vmTransferred contracts.VMTransferred
 			vmTransferred.TX = info.NetworkStats.TX
 			vmTransferred.RX = info.NetworkStats.RX
-			vmTransferred.TX = info.NetworkStats.Total
+			vmTransferred.Total = info.NetworkStats.Total
 			return contracts.VMInfo{
 				VMTransferred: vmTransferred,
 			}
