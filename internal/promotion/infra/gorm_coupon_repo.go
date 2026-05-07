@@ -47,13 +47,17 @@ type CouponRedemptionPO struct {
 	DiscountAmount int64     `gorm:"column:discount_amount"`
 	FinalAmount    int64     `gorm:"column:final_amount"`
 	RedeemedAt     time.Time `gorm:"column:redeemed_at"`
-	Status         string    `gorm:"column:status;default:pending;check:status IN ('pending','paid','cancelled');"` // enum: paid, cancelled, pending， pending -> paid/cancelled
+	Status         string    `gorm:"column:status;default:pending;check:status IN ('pending','redeemed','cancelled');"` // enum: redeemed, cancelled, pending， pending -> redeemed/cancelled
 }
 
 func (CouponRedemptionPO) TableName() string { return "coupon_redemptions" }
 
 type GormCouponRepo struct {
 	db *gorm.DB
+}
+
+func (r *GormCouponRepo) ActivateCodeAfterPayment(ctx context.Context, orderID string) error {
+	return r.db.WithContext(ctx).Model(&CouponRedemptionPO{}).Where("order_id = ? and status = 'pending'", orderID).Update("status", "paid").Error
 }
 
 func (r *GormCouponRepo) ReleaseCouponForOrder(ctx context.Context, orderID string) error {

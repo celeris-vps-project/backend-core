@@ -81,7 +81,7 @@ func (r *GormOrderRepo) FindRecent(customerID string, productID string) (*domain
 	err := r.db.
 		Model(&OrderPO{}).
 		Where(
-			"customer_id = ? AND product_id = ? AND created_at > ? AND created_at < ?",
+			"status = 'pending' and customer_id = ? AND product_id = ? AND created_at > ? AND created_at < ?",
 			customerID,
 			productID,
 			preMin,

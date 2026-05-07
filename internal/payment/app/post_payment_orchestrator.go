@@ -34,7 +34,7 @@ type PayableOrder struct {
 	ProductID    string
 	InvoiceID    string
 	BillingCycle string // one_time | monthly | yearly
-	Status       string
+	Status       string //
 	Currency     string
 	PriceAmount  int64
 	Hostname     string
@@ -86,6 +86,7 @@ type InvoiceCreator interface {
 }
 
 type CouponReleaser interface {
+	ActivateCodeAfterPayment(orderID string) error
 	ReleaseCoupon(orderID string) error
 }
 
@@ -177,6 +178,10 @@ func (s *PostPaymentOrchestrator) HandlePaymentConfirmed(orderID string) error {
 		instanceID = pendingInstance.ID
 		initialPassword = pendingInstance.InitialPassword
 		log.Printf("[PostPaymentOrchestrator] pending instance created: %s (order=%s)", instanceID, orderID)
+	}
+
+	if err := s.coupon.ActivateCodeAfterPayment(orderID); err != nil {
+		log.Printf("[PostPaymentOrchestrator] activate code failed after payment confirmed: %s", instanceID)
 	}
 
 	// 4. Consume a commercial slot and trigger asynchronous provisioning using

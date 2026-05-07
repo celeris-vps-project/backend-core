@@ -37,6 +37,7 @@ type CouponRepository interface {
 	GetByCodeWithProductID(ctx context.Context, code, productID string) (*domain.Coupon, error)
 	CountUserCouponRedemptions(ctx context.Context, userID string, couponID string) (int64, error)
 	ReleaseCouponForOrder(ctx context.Context, orderID string) error
+	ActivateCodeAfterPayment(ctx context.Context, orderID string) error
 }
 
 type CouponAppService struct {
@@ -164,8 +165,8 @@ func (s *CouponAppService) PreApplied(ctx context.Context, couponCode, userID, p
 	if err != nil {
 		return nil, err
 	}
-	if int(cnt) >= coupon.MaxRedemptions {
-		return nil, apperr.ErrBadRequest(apperr.CodeCouponExhausted, "max_redemptions reached")
+	if int(cnt) >= coupon.PerUserLimit {
+		return nil, apperr.ErrBadRequest(apperr.CodeCouponExhausted, "per user limit reached")
 	}
 	discountAmount, finalAmount, err := coupon.CalculateDiscount(originalAmount)
 	if err != nil {
@@ -193,6 +194,10 @@ func (s *CouponAppService) ApplyCoupon(ctx context.Context, req ApplyCouponReque
 	} else if existing != nil {
 		code := domain.NormalizeCode(req.Code)
 		if code != "" && code != existing.Code {
+			err := s.repo.ReleaseCouponForOrder(ctx, req.OrderID)
+			if err != nil {
+				return nil, err
+			}
 			return nil, apperr.ErrUnprocessable(apperr.CodeCouponInvalid, "order already redeemed another coupon")
 		}
 		return &ApplyCouponResult{
@@ -226,6 +231,10 @@ func (s *CouponAppService) ApplyCoupon(ctx context.Context, req ApplyCouponReque
 		DiscountAmount: redemption.DiscountAmount,
 		FinalAmount:    redemption.FinalAmount,
 	}, nil
+}
+
+func (s *CouponAppService) ActivateCodeAfterPayment(ctx context.Context, orderID string) error {
+	return s.repo.ActivateCodeAfterPayment(ctx, orderID)
 }
 
 func (s *CouponAppService) ReleaseCouponForOrder(ctx context.Context, orderID string) error {

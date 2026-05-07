@@ -3,9 +3,8 @@ package app
 import (
 	"backend-core/internal/ordering/domain"
 	"errors"
+	"sync"
 	"time"
-
-	"gorm.io/gorm"
 )
 
 // IDGenerator abstracts order id creation.
@@ -20,8 +19,15 @@ type IDGenerator interface {
 // provisioning is driven by domain events through the ProvisionDispatcher in
 // the provisioning bounded context (event-driven, see provisioning/app).
 type OrderAppService struct {
-	repo domain.OrderRepository
-	ids  IDGenerator
+	repo     domain.OrderRepository
+	ids      IDGenerator
+	deDupMap map[OrderShed]struct{}
+	mu       sync.RWMutex
+}
+
+type OrderShed struct {
+	mu sync.Mutex
+	id string
 }
 
 func NewOrderAppService(repo domain.OrderRepository, ids IDGenerator) *OrderAppService {
@@ -46,10 +52,10 @@ func (s *OrderAppService) CreateOrder(
 		return nil, err
 	}
 	id := s.ids.NewID()
-	// 已经下过单了，十五分钟内直接返回这个订单
-	if recent, err := s.repo.FindRecent(customerID, productID); recent != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return recent, nil
-	}
+	// （这里其实是不对的，应该用前端幂等键+后端, 可以暂时先不上幂等键
+	//if recent, err := s.repo.FindRecent(customerID, productID); recent != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	//	return recent, nil
+	//}
 	order, err := domain.NewOrder(id, customerID, productID, invoiceID, billingCycle, cfg, currency, priceAmount)
 	if err != nil {
 		return nil, err

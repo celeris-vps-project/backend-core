@@ -21,6 +21,10 @@ type BloomCouponRepo struct {
 	blocked    int64 // atomic counter of requests blocked by bloom
 }
 
+func (r *BloomCouponRepo) ActivateCodeAfterPayment(ctx context.Context, orderID string) error {
+	return r.inner.ActivateCodeAfterPayment(ctx, orderID)
+}
+
 func (r *BloomCouponRepo) ReleaseCouponForOrder(ctx context.Context, orderID string) error {
 	return r.inner.ReleaseCouponForOrder(ctx, orderID)
 }

@@ -513,7 +513,7 @@ func main() {
 	billingAdapterRaw := paymentInfra.NewBillingAdapter(invoiceApp)
 	billingAdapter := paymentInfra.NewBillingAdapterWithCB(billingAdapterRaw,
 		circuitbreaker.New("pay-billing", 3, 2, 20*time.Second))
-	promotionAdaptor := promotionInfra.NewPromotionCouponAdapter(couponApp)
+	promotionAdaptor := promotionInfra.NewPaymentCouponAdapter(couponApp)
 	postPayOrch := paymentApp.NewPostPaymentOrchestrator(orderAdapter, catalogAdapter, instanceAdapter, billingAdapter, promotionAdaptor, delayedPublisher)
 	renewalSvc := paymentApp.NewRenewalService(orderAdapter, billingAdapter, instanceAdapter)
 

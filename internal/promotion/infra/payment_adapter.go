@@ -4,6 +4,8 @@ import (
 	paymentApp "backend-core/internal/payment/app"
 	promotionApp "backend-core/internal/promotion/app"
 	"context"
+	"fmt"
+	"log"
 )
 
 type PaymentCouponAdapter struct {
@@ -34,4 +36,45 @@ func (a *PaymentCouponAdapter) ApplyCoupon(ctx context.Context, req paymentApp.C
 	}, nil
 }
 
+func (a *PaymentCouponAdapter) ReleaseCoupon(orderID string) error {
+	if a == nil || a.svc == nil {
+		return nil
+	}
+
+	if orderID == "" {
+		return nil
+	}
+
+	err := a.svc.ReleaseCouponForOrder(context.Background(), orderID)
+	if err != nil {
+		log.Printf("[PromotionCouponAdapter] failed to release coupon: order=%s err=%v",
+			orderID, err)
+
+		return fmt.Errorf("release coupon via promotion failed: %w", err)
+	}
+
+	return nil
+}
+
+func (a *PaymentCouponAdapter) ActivateCodeAfterPayment(orderID string) error {
+	if a == nil || a.svc == nil {
+		return nil
+	}
+
+	if orderID == "" {
+		return nil
+	}
+
+	err := a.svc.ActivateCodeAfterPayment(context.Background(), orderID)
+	if err != nil {
+		log.Printf("[PromotionCouponAdapter] failed to activate coupon: order=%s err=%v",
+			orderID, err)
+
+		return fmt.Errorf("activate coupon via promotion failed: %w", err)
+	}
+
+	return nil
+}
+
 var _ paymentApp.CouponApplier = (*PaymentCouponAdapter)(nil)
+var _ paymentApp.CouponReleaser = (*PaymentCouponAdapter)(nil)

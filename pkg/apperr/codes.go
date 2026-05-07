@@ -60,6 +60,7 @@ const (
 	CodeMailSendFailed         = "MAIL_SEND_FAILED"
 	CodeCouponInvalid          = "COUPON_INVALID"
 	CodeCouponExhausted        = "COUPON_EXHAUSTED"
+	CodeCouponUserLimited      = "COUPON_USER_LIMITED"
 )
 
 // ── Generic ──
