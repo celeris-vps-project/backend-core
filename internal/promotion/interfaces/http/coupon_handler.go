@@ -3,7 +3,9 @@ package http
 import (
 	"backend-core/internal/promotion/app"
 	"backend-core/pkg/apperr"
+	"backend-core/pkg/authn"
 	"context"
+	"net/http"
 	"time"
 
 	hz_app "github.com/cloudwego/hertz/pkg/app"
@@ -17,6 +19,11 @@ type CouponHandler struct {
 
 func NewCouponHandler(svc *app.CouponAppService) *CouponHandler {
 	return &CouponHandler{svc: svc}
+}
+
+type PreAppliedCouponRequest struct {
+	ProductID      string `json:"product_id" vd:"len($)>0"`
+	OriginalAmount int64  `json:"original_amount" vd:"len($)>0"`
 }
 
 type CreateCouponRequest struct {
@@ -46,6 +53,13 @@ type CouponResponse struct {
 	AllowedProductIDs []string  `json:"allowed_product_ids"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+type PreAppliedCouponResponse struct {
+	Applied     bool   `json:"applied"`
+	FinalAmount int64  `json:"final_amount"`
+	CouponID    string `json:"coupon_id"`
+	Code        string `json:"code"`
 }
 
 func (h *CouponHandler) Create(ctx context.Context, c *hz_app.RequestContext) {
@@ -119,6 +133,32 @@ func (h *CouponHandler) Disable(ctx context.Context, c *hz_app.RequestContext) {
 		return
 	}
 	c.JSON(consts.StatusOK, utils.H{"message": "coupon disabled"})
+}
+
+func (h *CouponHandler) PreApplied(ctx context.Context, c *hz_app.RequestContext) {
+	userID, ok := authn.UserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, apperr.RespMap(apperr.CodeUnauthorized, "unauthorized — login required"))
+		return
+	}
+	var req PreAppliedCouponRequest
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(consts.StatusBadRequest, apperr.RespMap(apperr.CodeInvalidParams, err.Error()))
+		return
+	}
+
+	preAppliedCouponResp, err := h.svc.PreApplied(ctx, c.Param("id"), userID.String(), req.ProductID, req.OriginalAmount)
+	if err != nil {
+		c.JSON(consts.StatusBadRequest, apperr.RespMap(apperr.CodeCouponInvalid, err.Error()))
+		return
+	}
+	resp := PreAppliedCouponResponse{
+		Applied:     preAppliedCouponResp.Applied,
+		FinalAmount: preAppliedCouponResp.FinalAmount,
+		Code:        preAppliedCouponResp.Coupon.Code,
+		CouponID:    preAppliedCouponResp.Coupon.ID,
+	}
+	c.JSON(consts.StatusOK, utils.H{"data": resp})
 }
 
 func toCouponResponse(item app.CouponWithProducts) CouponResponse {

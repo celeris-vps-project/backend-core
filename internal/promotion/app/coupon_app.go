@@ -34,6 +34,7 @@ type CouponRepository interface {
 	SetEnabled(ctx context.Context, id string, enabled bool) error
 	FindRedemptionByOrder(ctx context.Context, orderID string) (*domain.Redemption, error)
 	Redeem(ctx context.Context, req RedeemCouponRequest, now time.Time) (*domain.Redemption, error)
+	GetByCodeWithProductID(ctx context.Context, code, productID string) (*domain.Coupon, error)
 }
 
 type CouponAppService struct {
@@ -74,6 +75,13 @@ type ApplyCouponResult struct {
 	Applied        bool
 	CouponID       string
 	Code           string
+	DiscountAmount int64
+	FinalAmount    int64
+}
+
+type PreApplyCouponResult struct {
+	Applied        bool
+	Coupon         domain.Coupon
 	DiscountAmount int64
 	FinalAmount    int64
 }
@@ -131,6 +139,36 @@ func (s *CouponAppService) SetEnabled(ctx context.Context, id string, enabled bo
 		return mapCouponError(err)
 	}
 	return nil
+}
+
+func (s *CouponAppService) PreApplied(ctx context.Context, couponCode, userID, productID string, originalAmount int64) (*PreApplyCouponResult, error) {
+	if userID == "" || productID == "" {
+		return nil, apperr.ErrBadRequest(apperr.CodeInvalidParams, "order_id, user_id and product_id are required")
+	}
+
+	if originalAmount < 0 {
+		return nil, apperr.ErrBadRequest(apperr.CodeInvalidParams, "original amount must be >= 0")
+	}
+
+	code := domain.NormalizeCode(couponCode)
+	if code == "" {
+		return &PreApplyCouponResult{Applied: false, FinalAmount: originalAmount}, nil
+	}
+	coupon, err := s.repo.GetByCodeWithProductID(ctx, couponCode, productID)
+	if err != nil {
+		return nil, err
+	}
+	discountAmount, finalAmount, err := coupon.CalculateDiscount(originalAmount)
+	if err != nil {
+		return nil, err
+	}
+
+	return &PreApplyCouponResult{
+		Applied:        true,
+		Coupon:         *coupon,
+		DiscountAmount: discountAmount,
+		FinalAmount:    finalAmount,
+	}, nil
 }
 
 func (s *CouponAppService) ApplyCoupon(ctx context.Context, req ApplyCouponRequest) (*ApplyCouponResult, error) {

@@ -94,6 +94,21 @@ func (r *GormCouponRepo) GetByID(ctx context.Context, id string) (*app.CouponWit
 	return &app.CouponWithProducts{Coupon: couponToDomain(po), AllowedProductIDs: products}, nil
 }
 
+func (r *GormCouponRepo) GetByCodeWithProductID(ctx context.Context, code, productID string) (*domain.Coupon, error) {
+	var po CouponPO
+	if err := r.db.WithContext(ctx).
+		Joins("coupon_allowed_products on coupon_allowed_products.coupon_id = id").
+		Where("code = ?", code).
+		Where("coupon_allowed_products.product_id = ?", productID).
+		First(&po).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrCouponNotFound
+		}
+		return nil, err
+	}
+	return couponToDomain(po), nil
+}
+
 func (r *GormCouponRepo) List(ctx context.Context) ([]app.CouponWithProducts, error) {
 	var pos []CouponPO
 	if err := r.db.WithContext(ctx).Order("created_at DESC").Find(&pos).Error; err != nil {

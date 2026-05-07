@@ -774,7 +774,7 @@ func main() {
 		// Payment — USDT crypto payment flow
 		privateAPI.POST("/orders/:id/pay", checkoutRL, payHandler.Pay)
 		privateAPI.GET("/orders/:id/payments/status/stream", payHandler.PaymentStatusStream)
-
+		privateAPI.POST("/coupons/:id/pre/applied", couponHandler.PreApplied)
 		// Instance - Customer routes
 		privateAPI.GET("/instances", standardRL, instHandler.ListByCustomer)
 		privateAPI.GET("/instances/:id/traffic", standardRL, instHandler.TrafficUsage)
