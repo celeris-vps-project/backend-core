@@ -216,6 +216,7 @@ func (s *PaymentAppService) InitiatePayment(ctx context.Context, req *InitiatePa
 			order.InvoiceID = invoiceID
 			payableOrder.InvoiceID = invoiceID
 		}
+		// 直接返回
 		if payableOrder.PriceAmount == 0 {
 			if err := s.orchestrator.HandlePaymentConfirmed(req.OrderID); err != nil {
 				return nil, apperr.ErrUnprocessable(apperr.CodePaymentFailed, "free order confirmation failed: "+err.Error())
