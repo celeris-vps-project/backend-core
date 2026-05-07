@@ -38,7 +38,7 @@ AGENT_VERSION="${AGENT_VERSION:-v0.0.64}"
 AGENT_URL="${AGENT_URL:-https://github.com/celeris-vps-project/backend-core/releases/download/${AGENT_VERSION}/celeris-agent-linux-amd64}"
 AGENT_DIR="${AGENT_DIR:-/opt/celeris-agent}"
 
-GRPC_ADDRESS="${GRPC_ADDRESS:-1.0rtt.de:50051}"
+GRPC_ADDRESS="${GRPC_ADDRESS:-:50051}"
 CONTROLLER_URL="${CONTROLLER_URL:-http://127.0.0.1:8888}"
 POLL_INTERVAL="${POLL_INTERVAL:-15}"
 
