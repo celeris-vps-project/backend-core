@@ -276,7 +276,8 @@ func main() {
 	orderHandler := orderingHttp.NewOrderHandler(orderApp, prodApp)
 
 	couponRepo := promotionInfra.NewGormCouponRepo(db)
-	couponApp := promotionApp.NewCouponAppService(couponRepo, idGen)
+	bloomCouponRepo := promotionInfra.NewBloomCouponRepo(couponRepo, 10000, 0.01)
+	couponApp := promotionApp.NewCouponAppService(bloomCouponRepo, idGen)
 	couponHandler := promotionHttp.NewCouponHandler(couponApp)
 
 	// Product Line (customer-facing product browsing by resource pool)
