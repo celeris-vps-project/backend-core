@@ -60,6 +60,10 @@ func (r *BloomCouponRepo) GetByCodeWithProductID(ctx context.Context, code, prod
 	return r.inner.GetByCodeWithProductID(ctx, code, productID)
 }
 
+func (r *BloomCouponRepo) CountUserCouponRedemptions(ctx context.Context, userID string, couponID string) (int64, error) {
+	return r.inner.CountUserCouponRedemptions(ctx, userID, couponID)
+}
+
 func NewBloomCouponRepo(inner *GormCouponRepo, expectedN int, fpRate float64) *BloomCouponRepo {
 	r := &BloomCouponRepo{
 		inner:      inner,

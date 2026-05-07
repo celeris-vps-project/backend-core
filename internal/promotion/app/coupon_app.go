@@ -35,6 +35,7 @@ type CouponRepository interface {
 	FindRedemptionByOrder(ctx context.Context, orderID string) (*domain.Redemption, error)
 	Redeem(ctx context.Context, req RedeemCouponRequest, now time.Time) (*domain.Redemption, error)
 	GetByCodeWithProductID(ctx context.Context, code, productID string) (*domain.Coupon, error)
+	CountUserCouponRedemptions(ctx context.Context, userID string, couponID string) (int64, error)
 }
 
 type CouponAppService struct {
@@ -157,6 +158,13 @@ func (s *CouponAppService) PreApplied(ctx context.Context, couponCode, userID, p
 	coupon, err := s.repo.GetByCodeWithProductID(ctx, couponCode, productID)
 	if err != nil {
 		return nil, err
+	}
+	cnt, err := s.repo.CountUserCouponRedemptions(ctx, userID, coupon.ID)
+	if err != nil {
+		return nil, err
+	}
+	if int(cnt) >= coupon.MaxRedemptions {
+		return nil, apperr.ErrBadRequest(apperr.CodeCouponExhausted, "max_redemptions reached")
 	}
 	discountAmount, finalAmount, err := coupon.CalculateDiscount(originalAmount)
 	if err != nil {

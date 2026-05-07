@@ -100,6 +100,8 @@ func (r *GormCouponRepo) GetByCodeWithProductID(ctx context.Context, code, produ
 		Joins("join coupon_allowed_products on coupon_allowed_products.coupon_id = id").
 		Where("code = ?", code).
 		Where("coupon_allowed_products.product_id = ?", productID).
+		Where("enabled = true").
+		Where("used_count > 0").
 		First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, domain.ErrCouponNotFound
@@ -157,6 +159,18 @@ func (r *GormCouponRepo) FindRedemptionByOrder(ctx context.Context, orderID stri
 	}
 	redemption := redemptionToDomain(po)
 	return &redemption, nil
+}
+
+func (r *GormCouponRepo) CountUserCouponRedemptions(ctx context.Context, userID string, couponID string) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&CouponRedemptionPO{}).
+		Where("user_id = ? AND coupon_id = ?", userID, couponID).
+		Count(&count).Error
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func (r *GormCouponRepo) Redeem(ctx context.Context, req app.RedeemCouponRequest, now time.Time) (*domain.Redemption, error) {
