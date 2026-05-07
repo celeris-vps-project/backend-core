@@ -5,6 +5,7 @@ type OrderRepository interface {
 	GetByID(id string) (*Order, error)
 	ListAll() ([]*Order, error)
 	ListByCustomerID(customerID string) ([]*Order, error)
+	FindRecent(customerID string, planID string) (*Order, error)
 	Save(order *Order) error
 }
 

@@ -4,6 +4,8 @@ import (
 	"backend-core/internal/ordering/domain"
 	"errors"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 // IDGenerator abstracts order id creation.
@@ -44,6 +46,10 @@ func (s *OrderAppService) CreateOrder(
 		return nil, err
 	}
 	id := s.ids.NewID()
+	// 已经下过单了，十五分钟内直接返回这个订单
+	if recent, err := s.repo.FindRecent(customerID, productID); recent != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return recent, nil
+	}
 	order, err := domain.NewOrder(id, customerID, productID, invoiceID, billingCycle, cfg, currency, priceAmount)
 	if err != nil {
 		return nil, err
@@ -156,4 +162,8 @@ func (s *OrderAppService) TerminateOrder(orderID string) error {
 		return err
 	}
 	return s.repo.Save(order)
+}
+
+func (s *OrderAppService) ListRecent(customerID string, planID string) (*domain.Order, error) {
+	return s.repo.FindRecent(customerID, planID)
 }

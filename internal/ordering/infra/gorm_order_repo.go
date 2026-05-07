@@ -73,6 +73,13 @@ func (r *GormOrderRepo) ListAll() ([]*domain.Order, error) {
 	}
 	return orders, nil
 }
+func (r *GormOrderRepo) FindRecent(customerID string, productID string) (*domain.Order, error) {
+	var orderPO OrderPO
+	now := time.Now()
+	preMin := time.Now().Sub(time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute()-15, 0, 0, time.Local))
+	r.db.Model(&OrderPO{}).Where("customer_id = ? AND product_id = ? and created_at > ? and created_at < ?", customerID, productID, preMin, now).Find(&orderPO)
+	return orderToDomain(orderPO), nil
+}
 
 func (r *GormOrderRepo) ListByCustomerID(customerID string) ([]*domain.Order, error) {
 	var pos []OrderPO
