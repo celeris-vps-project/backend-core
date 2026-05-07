@@ -88,6 +88,10 @@ func (r *BloomCouponRepo) warmUp() error {
 	}
 
 	for _, c := range coupons {
+		if !c.Coupon.Enabled {
+			continue
+		}
+
 		r.idFilter.Add(c.Coupon.ID)
 		if code := c.Coupon.Code; code != "" {
 			r.codeFilter.Add(code)

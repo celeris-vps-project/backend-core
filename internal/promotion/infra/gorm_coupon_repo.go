@@ -101,7 +101,7 @@ func (r *GormCouponRepo) GetByCodeWithProductID(ctx context.Context, code, produ
 		Where("code = ?", code).
 		Where("coupon_allowed_products.product_id = ?", productID).
 		Where("enabled = true").
-		Where("used_count > 0").
+		Where("used_count < max_redemptions").
 		First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, domain.ErrCouponNotFound
