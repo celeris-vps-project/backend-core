@@ -24,6 +24,7 @@ func NewCouponHandler(svc *app.CouponAppService) *CouponHandler {
 type PreAppliedCouponRequest struct {
 	ProductID      string `json:"product_id" vd:"len($)>0"`
 	OriginalAmount int64  `json:"original_amount" vd:"len($)>0"`
+	Code           string `json:"code" vd:"len($)>0"`
 }
 
 type CreateCouponRequest struct {
@@ -147,7 +148,7 @@ func (h *CouponHandler) PreApplied(ctx context.Context, c *hz_app.RequestContext
 		return
 	}
 
-	preAppliedCouponResp, err := h.svc.PreApplied(ctx, c.Param("id"), userID.String(), req.ProductID, req.OriginalAmount)
+	preAppliedCouponResp, err := h.svc.PreApplied(ctx, req.Code, userID.String(), req.ProductID, req.OriginalAmount)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, apperr.RespMap(apperr.CodeCouponInvalid, err.Error()))
 		return
