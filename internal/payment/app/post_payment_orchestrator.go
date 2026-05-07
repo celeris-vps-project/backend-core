@@ -85,6 +85,10 @@ type InvoiceCreator interface {
 	GetInvoiceForPayment(invoiceID string) (PayableInvoice, error)
 }
 
+type CouponReleaser interface {
+	ReleaseCoupon(orderID string) error
+}
+
 type PayableInvoice struct {
 	ID       string
 	Status   string
@@ -97,8 +101,9 @@ type PayableInvoice struct {
 type PostPaymentOrchestrator struct {
 	orders    OrderActivator
 	products  ProductPurchaser
-	instances InstanceCreator   // nil = skip instance creation
-	invoices  InvoiceCreator    // nil = skip invoice creation
+	instances InstanceCreator // nil = skip instance creation
+	invoices  InvoiceCreator  // nil = skip invoice creation
+	coupon    CouponReleaser
 	delayed   delayed.Publisher // nil = skip delayed events
 }
 
@@ -108,6 +113,7 @@ func NewPostPaymentOrchestrator(
 	p ProductPurchaser,
 	i InstanceCreator,
 	inv InvoiceCreator,
+	cp CouponReleaser,
 	dp delayed.Publisher,
 ) *PostPaymentOrchestrator {
 	return &PostPaymentOrchestrator{
@@ -115,6 +121,7 @@ func NewPostPaymentOrchestrator(
 		products:  p,
 		instances: i,
 		invoices:  inv,
+		coupon:    cp,
 		delayed:   dp,
 	}
 }
@@ -281,6 +288,15 @@ type InvoiceTimeoutPayload struct {
 	OrderID   string `json:"order_id"`
 }
 
+type invoiceTimeoutPlan struct {
+	order          PayableOrder
+	hasOrder       bool
+	staleInvoice   bool
+	voidReason     string
+	releaseProduct bool
+	cancelOrder    bool
+}
+
 func (s *PostPaymentOrchestrator) releaseReservedProduct(productID, orderID, reason string) {
 	if s.products == nil || productID == "" {
 		return
@@ -298,53 +314,108 @@ func (s *PostPaymentOrchestrator) releaseReservedProduct(productID, orderID, rea
 // timeout period. If still unpaid ("issued"), it voids the invoice and
 // cancels the associated order.
 func (s *PostPaymentOrchestrator) HandleInvoiceTimeout(invoiceID, orderID string) {
-	if s.invoices == nil || invoiceID == "" {
+	plan, ok := s.planInvoiceTimeout(invoiceID, orderID)
+	if !ok {
 		return
+	}
+	s.applyInvoiceTimeoutPlan(invoiceID, orderID, plan)
+}
+
+func (s *PostPaymentOrchestrator) planInvoiceTimeout(invoiceID, orderID string) (invoiceTimeoutPlan, bool) {
+	if s.invoices == nil || invoiceID == "" {
+		return invoiceTimeoutPlan{}, false
 	}
 
 	log.Printf("[PostPaymentOrchestrator] checking timeout: invoice=%s order=%s", invoiceID, orderID)
-	var order PayableOrder
-	var hasOrder bool
 
-	if orderID != "" {
-		loadedOrder, err := s.orders.GetOrderForPayment(orderID)
-		if err != nil {
-			log.Printf("[PostPaymentOrchestrator] WARNING: failed to load order %s for timeout check: %v", orderID, err)
-			return
-		}
-		order = loadedOrder
-		hasOrder = true
-		if order.InvoiceID == "" || order.InvoiceID != invoiceID {
-			if s.voidInvoiceIfOpen(invoiceID, "payment timeout - stale invoice auto-voided") {
-				log.Printf("[PostPaymentOrchestrator] stale invoice voided: invoice=%s order=%s current_invoice=%s",
-					invoiceID, orderID, order.InvoiceID)
-			}
-			log.Printf("[PostPaymentOrchestrator] skipping timeout cancellation for stale invoice=%s order=%s current_invoice=%s",
-				invoiceID, orderID, order.InvoiceID)
-			return
-		}
-		if order.Status != "pending" {
-			log.Printf("[PostPaymentOrchestrator] skipping timeout for order=%s status=%s invoice=%s",
-				orderID, order.Status, invoiceID)
-			return
-		}
+	if orderID == "" {
+		return invoiceTimeoutPlan{
+			voidReason: "payment timeout - auto-voided after deadline",
+		}, true
 	}
 
-	if !s.voidInvoiceIfOpen(invoiceID, "payment timeout - auto-voided after deadline") {
+	order, err := s.orders.GetOrderForPayment(orderID)
+	if err != nil {
+		log.Printf("[PostPaymentOrchestrator] WARNING: failed to load order %s for timeout check: %v", orderID, err)
+		return invoiceTimeoutPlan{}, false
+	}
+
+	if order.InvoiceID == "" || order.InvoiceID != invoiceID {
+		return invoiceTimeoutPlan{
+			order:        order,
+			hasOrder:     true,
+			staleInvoice: true,
+			voidReason:   "payment timeout - stale invoice auto-voided",
+		}, true
+	}
+
+	if order.Status != "pending" {
+		log.Printf("[PostPaymentOrchestrator] skipping timeout for order=%s status=%s invoice=%s",
+			orderID, order.Status, invoiceID)
+		return invoiceTimeoutPlan{}, false
+	}
+
+	return invoiceTimeoutPlan{
+		order:          order,
+		hasOrder:       true,
+		voidReason:     "payment timeout - auto-voided after deadline",
+		releaseProduct: true,
+		cancelOrder:    true,
+	}, true
+}
+
+func (s *PostPaymentOrchestrator) applyInvoiceTimeoutPlan(invoiceID, orderID string, plan invoiceTimeoutPlan) {
+	if !s.voidInvoiceIfOpen(invoiceID, plan.voidReason) {
+		if plan.staleInvoice {
+			s.logStaleInvoiceTimeoutSkipped(invoiceID, orderID, plan.order.InvoiceID)
+		}
 		return
 	}
+
+	if plan.staleInvoice {
+		log.Printf("[PostPaymentOrchestrator] stale invoice voided: invoice=%s order=%s current_invoice=%s",
+			invoiceID, orderID, plan.order.InvoiceID)
+		s.logStaleInvoiceTimeoutSkipped(invoiceID, orderID, plan.order.InvoiceID)
+		return
+	}
+
 	log.Printf("[PostPaymentOrchestrator] invoice voided: %s (payment timeout)", invoiceID)
-	if hasOrder {
-		s.releaseReservedProduct(order.ProductID, order.ID, "payment timeout")
+	if plan.releaseProduct && plan.hasOrder {
+		s.releaseReservedProduct(plan.order.ProductID, plan.order.ID, "payment timeout")
+		s.releaseCouponForOrder(plan.order.ID, "payment timeout")
 	}
-	if orderID != "" {
-		if err := s.orders.CancelOrder(orderID, "payment timeout - invoice auto-voided"); err != nil {
-			// Order might already be activated (race with webhook); that is fine.
-			log.Printf("[PostPaymentOrchestrator] WARNING: failed to cancel order %s (may already be active): %v", orderID, err)
-		} else {
-			log.Printf("[PostPaymentOrchestrator] order cancelled: %s (payment timeout)", orderID)
-		}
+	if plan.cancelOrder {
+		s.cancelOrderForTimeout(orderID)
 	}
+}
+
+func (s *PostPaymentOrchestrator) logStaleInvoiceTimeoutSkipped(invoiceID, orderID, currentInvoiceID string) {
+	log.Printf("[PostPaymentOrchestrator] skipping timeout cancellation for stale invoice=%s order=%s current_invoice=%s",
+		invoiceID, orderID, currentInvoiceID)
+}
+
+func (s *PostPaymentOrchestrator) releaseCouponForOrder(orderID, reason string) {
+	if s.coupon == nil || orderID == "" {
+		return
+	}
+	if err := s.coupon.ReleaseCoupon(orderID); err != nil {
+		log.Printf("[PostPaymentOrchestrator] WARNING: failed to release coupon redemption: order=%s reason=%s err=%v",
+			orderID, reason, err)
+		return
+	}
+	log.Printf("[PostPaymentOrchestrator] coupon redemption released: order=%s reason=%s", orderID, reason)
+}
+
+func (s *PostPaymentOrchestrator) cancelOrderForTimeout(orderID string) {
+	if orderID == "" {
+		return
+	}
+	if err := s.orders.CancelOrder(orderID, "payment timeout - invoice auto-voided"); err != nil {
+		// Order might already be activated (race with webhook); that is fine.
+		log.Printf("[PostPaymentOrchestrator] WARNING: failed to cancel order %s (may already be active): %v", orderID, err)
+		return
+	}
+	log.Printf("[PostPaymentOrchestrator] order cancelled: %s (payment timeout)", orderID)
 }
 
 func (s *PostPaymentOrchestrator) voidInvoiceIfOpen(invoiceID, reason string) bool {

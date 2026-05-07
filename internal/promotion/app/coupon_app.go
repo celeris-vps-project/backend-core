@@ -36,6 +36,7 @@ type CouponRepository interface {
 	Redeem(ctx context.Context, req RedeemCouponRequest, now time.Time) (*domain.Redemption, error)
 	GetByCodeWithProductID(ctx context.Context, code, productID string) (*domain.Coupon, error)
 	CountUserCouponRedemptions(ctx context.Context, userID string, couponID string) (int64, error)
+	ReleaseCouponForOrder(ctx context.Context, orderID string) error
 }
 
 type CouponAppService struct {
@@ -225,6 +226,10 @@ func (s *CouponAppService) ApplyCoupon(ctx context.Context, req ApplyCouponReque
 		DiscountAmount: redemption.DiscountAmount,
 		FinalAmount:    redemption.FinalAmount,
 	}, nil
+}
+
+func (s *CouponAppService) ReleaseCouponForOrder(ctx context.Context, orderID string) error {
+	return s.repo.ReleaseCouponForOrder(ctx, orderID)
 }
 
 func mapCouponError(err error) error {

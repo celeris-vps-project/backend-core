@@ -47,12 +47,23 @@ type CouponRedemptionPO struct {
 	DiscountAmount int64     `gorm:"column:discount_amount"`
 	FinalAmount    int64     `gorm:"column:final_amount"`
 	RedeemedAt     time.Time `gorm:"column:redeemed_at"`
+	Status         string    `gorm:"column:status;default:pending;check:status IN ('pending','paid','cancelled');"` // enum: paid, cancelled, pending， pending -> paid/cancelled
 }
 
 func (CouponRedemptionPO) TableName() string { return "coupon_redemptions" }
 
 type GormCouponRepo struct {
 	db *gorm.DB
+}
+
+func (r *GormCouponRepo) ReleaseCouponForOrder(ctx context.Context, orderID string) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		err := tx.Model(&CouponRedemptionPO{}).Where("order_id = ? AND status = 'pending'", orderID).Update("status", "cancelled").Error
+		if err != nil {
+			return err
+		}
+		return tx.Model(&CouponPO{}).Where("used_count > 0").Update("used_count", gorm.Expr("used_count - 1")).Error
+	})
 }
 
 func NewGormCouponRepo(db *gorm.DB) *GormCouponRepo {
@@ -151,7 +162,7 @@ func (r *GormCouponRepo) FindRedemptionByOrder(ctx context.Context, orderID stri
 		return nil, nil
 	}
 	var po CouponRedemptionPO
-	if err := r.db.WithContext(ctx).Where("order_id = ?", orderID).First(&po).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("order_id = ? AND status = 'pending'", orderID).First(&po).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -165,7 +176,7 @@ func (r *GormCouponRepo) CountUserCouponRedemptions(ctx context.Context, userID 
 	var count int64
 	err := r.db.WithContext(ctx).
 		Model(&CouponRedemptionPO{}).
-		Where("user_id = ? AND coupon_id = ?", userID, couponID).
+		Where("user_id = ? AND coupon_id = ? AND status != 'cancelled'", userID, couponID).
 		Count(&count).Error
 	if err != nil {
 		return 0, err
@@ -177,7 +188,7 @@ func (r *GormCouponRepo) Redeem(ctx context.Context, req app.RedeemCouponRequest
 	var redemption domain.Redemption
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing CouponRedemptionPO
-		if err := tx.Where("order_id = ?", req.OrderID).First(&existing).Error; err == nil {
+		if err := tx.Where("order_id = ? and status = 'pending'", req.OrderID).First(&existing).Error; err == nil {
 			redemption = redemptionToDomain(existing)
 			return nil
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -209,7 +220,7 @@ func (r *GormCouponRepo) Redeem(ctx context.Context, req app.RedeemCouponRequest
 		if coupon.PerUserLimit > 0 {
 			var userCount int64
 			if err := tx.Model(&CouponRedemptionPO{}).
-				Where("coupon_id = ? AND user_id = ?", coupon.ID, req.UserID).
+				Where("coupon_id = ? AND user_id = ? and status = 'redeemed'", coupon.ID, req.UserID).
 				Count(&userCount).Error; err != nil {
 				return err
 			}
@@ -245,6 +256,7 @@ func (r *GormCouponRepo) Redeem(ctx context.Context, req app.RedeemCouponRequest
 			DiscountAmount: discountAmount,
 			FinalAmount:    finalAmount,
 			RedeemedAt:     now,
+			Status:         "pending",
 		}
 		if err := tx.Create(&redemptionPO).Error; err != nil {
 			return err

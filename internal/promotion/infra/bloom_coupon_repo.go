@@ -21,6 +21,10 @@ type BloomCouponRepo struct {
 	blocked    int64 // atomic counter of requests blocked by bloom
 }
 
+func (r *BloomCouponRepo) ReleaseCouponForOrder(ctx context.Context, orderID string) error {
+	return r.inner.ReleaseCouponForOrder(ctx, orderID)
+}
+
 func (r *BloomCouponRepo) Create(ctx context.Context, coupon *domain.Coupon, allowedProductIDs []string) error {
 	if err := r.inner.Create(ctx, coupon, allowedProductIDs); err != nil {
 		return err

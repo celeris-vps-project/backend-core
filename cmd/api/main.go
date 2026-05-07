@@ -513,8 +513,8 @@ func main() {
 	billingAdapterRaw := paymentInfra.NewBillingAdapter(invoiceApp)
 	billingAdapter := paymentInfra.NewBillingAdapterWithCB(billingAdapterRaw,
 		circuitbreaker.New("pay-billing", 3, 2, 20*time.Second))
-
-	postPayOrch := paymentApp.NewPostPaymentOrchestrator(orderAdapter, catalogAdapter, instanceAdapter, billingAdapter, delayedPublisher)
+	promotionAdaptor := promotionInfra.NewPromotionCouponAdapter(couponApp)
+	postPayOrch := paymentApp.NewPostPaymentOrchestrator(orderAdapter, catalogAdapter, instanceAdapter, billingAdapter, promotionAdaptor, delayedPublisher)
 	renewalSvc := paymentApp.NewRenewalService(orderAdapter, billingAdapter, instanceAdapter)
 
 	// Invoice timeout worker — handles delayed "invoice.check_timeout" events.
