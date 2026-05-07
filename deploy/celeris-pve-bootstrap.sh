@@ -30,7 +30,7 @@ CLOUD_USER="${CLOUD_USER:-ubuntu}"
 
 IMAGE_URL="${IMAGE_URL:-https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img}"
 IMAGE_PATH="${IMAGE_PATH:-/var/lib/vz/template/iso/noble-server-cloudimg-amd64.img}"
-DISK_SIZE="${DISK_SIZE:-20G}"
+DISK_SIZE="${DISK_SIZE:-4G}"
 
 SSH_KEY="${SSH_KEY:-/root/.ssh/celeris-cloudinit_ed25519}"
 
