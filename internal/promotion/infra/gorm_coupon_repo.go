@@ -57,7 +57,7 @@ type GormCouponRepo struct {
 }
 
 func (r *GormCouponRepo) ActivateCodeAfterPayment(ctx context.Context, orderID string) error {
-	return r.db.WithContext(ctx).Model(&CouponRedemptionPO{}).Where("order_id = ? and status = 'pending'", orderID).Update("status", "paid").Error
+	return r.db.WithContext(ctx).Model(&CouponRedemptionPO{}).Where("order_id = ? and status = 'pending'", orderID).Update("status", "redeemed").Error
 }
 
 func (r *GormCouponRepo) ReleaseCouponForOrder(ctx context.Context, orderID string) error {

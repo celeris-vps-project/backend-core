@@ -1,10 +1,16 @@
 package infra
 
 import (
+	"context"
+	"fmt"
+	"log"
 	"time"
 
+	"github.com/robfig/cron/v3"
 	"gorm.io/gorm"
 )
+
+const trafficPartitionLockKey int64 = 202605090001
 
 // TrafficUsageRecordPO is a detail traffic table which used to calculate traffic and save to TrafficDailyPO
 type TrafficUsageRecordPO struct {
@@ -174,4 +180,169 @@ func (t *TrafficRepo) SaveDailyTraffic(instanceID string, tx, rx uint64) error {
 		TX:         tx,
 	}
 	return t.db.Model(&TrafficDailyPO{}).Create(&dailyPO).Error
+}
+
+func (t *TrafficRepo) CleanUPTrafficUsage(instanceID string) (*TrafficDailyPO, error) {
+	var traffic TrafficDailyPO
+	now := time.Now().In(time.Local)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local) // 今天 0 点
+	lastDayBefore := today.AddDate(0, 0, -2)
+	if err := t.db.Model(&TrafficDailyPO{}).Where("instance_id = ? and created_at < ?", instanceID, lastDayBefore).First(&traffic).Error; err != nil {
+		return nil, err
+	}
+	return &traffic, nil
+}
+
+func (t *TrafficRepo) EnsureTrafficUsageRecordPosPartitions() error {
+	return t.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(`SELECT pg_advisory_xact_lock(2026050901)`).Error; err != nil {
+			return err
+		}
+		sql := `
+DO $$
+DECLARE
+    d date;
+BEGIN
+    d := current_date;
+    WHILE d <= current_date + 30 LOOP
+        EXECUTE format(
+            'CREATE TABLE IF NOT EXISTS %I PARTITION OF public.traffic_usage_record_pos
+             FOR VALUES FROM (%L) TO (%L)',
+            'traffic_usage_record_pos_' || to_char(d, 'YYYYMMDD'),
+            d,
+            d + 1
+        );
+        d := d + 1;
+    END LOOP;
+END $$;
+`
+		return tx.Exec(sql).Error
+	})
+}
+
+func maintainTrafficUsageRecordPosPartitions(db *gorm.DB, futureDays int, retentionDays int) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+
+		// 多实例部署时，保证同一时间只有一个实例在做分区维护
+		var ok bool
+		if err := tx.Raw(
+			`WITH _ AS (SELECT pg_advisory_xact_lock(?)) SELECT true`,
+			trafficPartitionLockKey,
+		).Scan(&ok).Error; err != nil {
+			return err
+		}
+		// 你的 created_at 是 timestamptz，建议固定用 UTC 建分区边界
+		if err := tx.Exec(`SET LOCAL TIME ZONE 'UTC'`).Error; err != nil {
+			return err
+		}
+		// 创建今天到未来 30 天分区
+		if err := ensureTrafficUsageRecordPosPartitionsTx(tx, futureDays); err != nil {
+			return err
+		}
+		// 删除 30 天以前的旧分区
+		if err := dropOldTrafficUsageRecordPosPartitionsTx(tx, retentionDays); err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+func ensureTrafficUsageRecordPosPartitionsTx(tx *gorm.DB, daysAhead int) error {
+	if daysAhead < 0 || daysAhead > 3660 {
+		return fmt.Errorf("invalid daysAhead: %d", daysAhead)
+	}
+	sql := fmt.Sprintf(`
+DO $$
+DECLARE
+    d date;
+BEGIN
+    d := current_date;
+    WHILE d <= current_date + %d LOOP
+        EXECUTE format(
+            'CREATE TABLE IF NOT EXISTS %%I.%%I PARTITION OF %%I.%%I
+             FOR VALUES FROM (%%L) TO (%%L)',
+            'public',
+            'traffic_usage_record_pos_' || to_char(d, 'YYYYMMDD'),
+            'public',
+            'traffic_usage_record_pos',
+            d,
+            d + 1
+        );
+        d := d + 1;
+    END LOOP;
+END $$;
+`, daysAhead)
+	return tx.Exec(sql).Error
+}
+
+func dropOldTrafficUsageRecordPosPartitionsTx(tx *gorm.DB, retentionDays int) error {
+	if retentionDays <= 0 || retentionDays > 3660 {
+		return fmt.Errorf("invalid retentionDays: %d", retentionDays)
+	}
+
+	sql := fmt.Sprintf(`
+DO $$
+DECLARE
+    r record;
+    cutoff date;
+BEGIN
+    cutoff := current_date - %d;
+
+    FOR r IN
+        SELECT
+            n.nspname AS schemaname,
+            c.relname AS relname,
+            to_date(substring(c.relname from '([0-9]{8})$'), 'YYYYMMDD') AS pdate
+        FROM pg_inherits i
+        JOIN pg_class c ON c.oid = i.inhrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_class p ON p.oid = i.inhparent
+        JOIN pg_namespace pn ON pn.oid = p.relnamespace
+        WHERE pn.nspname = 'public'
+          AND p.relname = 'traffic_usage_record_pos'
+          AND n.nspname = 'public'
+          AND c.relname ~ '^traffic_usage_record_pos_[0-9]{8}$'
+          AND to_date(substring(c.relname from '([0-9]{8})$'), 'YYYYMMDD') < cutoff
+        ORDER BY pdate
+    LOOP
+        RAISE NOTICE 'drop old partition %.%', r.schemaname, r.relname;
+        EXECUTE format('DROP TABLE IF EXISTS %%I.%%I', r.schemaname, r.relname);
+    END LOOP;
+END $$;
+`, retentionDays)
+
+	return tx.Exec(sql).Error
+}
+
+func (t *TrafficRepo) StartTrafficPartitionCron(ctx context.Context) (*cron.Cron, error) {
+
+	// 程序启动时先跑一次，避免刚启动就没有未来分区
+	db := t.db
+	if err := maintainTrafficUsageRecordPosPartitions(db, 30, 30); err != nil {
+		return nil, err
+	}
+	c := cron.New(
+		cron.WithLocation(time.Local),
+		cron.WithChain(
+			cron.Recover(cron.DefaultLogger),
+			cron.SkipIfStillRunning(cron.DefaultLogger),
+		),
+	)
+	// 每天 UTC 00:10 跑一次
+	// robfig/cron v3 默认是 5 段表达式：分 时 日 月 周
+	_, err := c.AddFunc("10 0 * * *", func() {
+		if err := maintainTrafficUsageRecordPosPartitions(db, 30, 30); err != nil {
+			log.Printf("[traffic partition] maintenance failed: %v", err)
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	c.Start()
+	go func() {
+		<-ctx.Done()
+		stopCtx := c.Stop()
+		<-stopCtx.Done()
+	}()
+	return c, nil
 }

@@ -29,6 +29,10 @@ func ErrBadRequest(code, msg string) *AppError {
 	return &AppError{Code: code, Message: msg, HTTPStatus: consts.StatusBadRequest}
 }
 
+func ErrConflict(code, msg string) *AppError {
+	return &AppError{Code: code, Message: msg, HTTPStatus: consts.StatusConflict}
+}
+
 // ErrNotFound creates a 404 error.
 func ErrNotFound(code, msg string) *AppError {
 	return &AppError{Code: code, Message: msg, HTTPStatus: consts.StatusNotFound}

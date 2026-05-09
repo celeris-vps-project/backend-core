@@ -166,7 +166,7 @@ func (s *CouponAppService) PreApplied(ctx context.Context, couponCode, userID, p
 		return nil, err
 	}
 	if int(cnt) >= coupon.PerUserLimit {
-		return nil, apperr.ErrBadRequest(apperr.CodeCouponExhausted, "per user limit reached")
+		return nil, apperr.ErrConflict(apperr.CodeCouponUserLimited, "per user limit reached")
 	}
 	discountAmount, finalAmount, err := coupon.CalculateDiscount(originalAmount)
 	if err != nil {

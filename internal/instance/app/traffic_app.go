@@ -155,12 +155,12 @@ func (t *TrafficService) GetInstanceTrafficUsage(instanceID string) (*domain.Tra
 	if rawStart.Before(start) {
 		rawStart = start
 	}
-	rawTX, rawRX, err := t.trafficRepo.SumUsageTraffic(instanceID, rawStart, end)
-	if err != nil {
-		return nil, err
-	}
-	tx += rawTX
-	rx += rawRX
+	//rawTX, rawRX, err := t.trafficRepo.SumUsageTraffic(instanceID, rawStart, end)
+	//if err != nil {
+	//	return nil, err
+	//}
+	//tx += rawTX
+	//rx += rawRX
 	daily := make([]domain.TrafficDaily, 0, len(dailyRows))
 	for _, row := range dailyRows {
 		if row == nil {
@@ -175,15 +175,15 @@ func (t *TrafficService) GetInstanceTrafficUsage(instanceID string) (*domain.Tra
 			CreateAt:   row.CreatedAt,
 		})
 	}
-	if rawTX > 0 || rawRX > 0 {
-		daily = append(daily, domain.TrafficDaily{
-			InstanceID: instanceID,
-			Date:       rawStart,
-			RX:         rawRX,
-			TX:         rawTX,
-			CreateAt:   time.Now(),
-		})
-	}
+	//if rawTX > 0 || rawRX > 0 {
+	//	daily = append(daily, domain.TrafficDaily{
+	//		InstanceID: instanceID,
+	//		Date:       rawStart,
+	//		RX:         rawRX,
+	//		TX:         rawTX,
+	//		CreateAt:   time.Now(),
+	//	})
+	//}
 	total := rx + tx
 	periodMax := bandwidthGBToBytes(inst.BandwidthGB())
 	overLimit := periodMax > 0 && total > periodMax
@@ -259,4 +259,8 @@ func (t *TrafficService) CalculateDailyTraffic() error {
 	}
 
 	return nil
+}
+
+func (t *TrafficService) GCTrafficUsageRecordDaily() {
+
 }

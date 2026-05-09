@@ -143,6 +143,7 @@ func main() {
 	); err != nil {
 		log.Fatalf("failed to migrate database schema: %v", err)
 	}
+	// Create a deadline for the entire shutdown sequence
 
 	// 2. Wire up infrastructure
 	pwdHasher := infra.NewBcryptPasswordService(bcrypt.DefaultCost)
@@ -371,6 +372,14 @@ func main() {
 	instApp.SetNATPortMappingReader(natPortRepo)
 	instApp.SetRuntimeStateReader(provSvc)
 	trafficRepo := instanceInfra.NewTrafficRepo(db)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if db.Dialector.Name() == "mysql" || db.Dialector.Name() == "postgres" {
+		if _, err := trafficRepo.StartTrafficPartitionCron(ctx); err != nil {
+			log.Fatal(err)
+		}
+	}
+
 	instTrafficApp := instanceApp.NewTrafficService(bus, trafficRepo, instRepo, instApp)
 	instHandler := instanceHttp.NewInstanceHandler(instApp, instTrafficApp)
 	instTrafficApp.StartCalculateDailyTraffic(context.Background())
