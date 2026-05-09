@@ -30,7 +30,7 @@ CLOUD_USER="${CLOUD_USER:-ubuntu}"
 
 IMAGE_URL="${IMAGE_URL:-https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img}"
 IMAGE_PATH="${IMAGE_PATH:-/var/lib/vz/template/iso/noble-server-cloudimg-amd64.img}"
-DISK_SIZE="${DISK_SIZE:-20G}"
+DISK_SIZE="${DISK_SIZE:-4G}"
 
 SSH_KEY="${SSH_KEY:-/root/.ssh/celeris-cloudinit_ed25519}"
 
@@ -38,7 +38,7 @@ AGENT_VERSION="${AGENT_VERSION:-v0.0.64}"
 AGENT_URL="${AGENT_URL:-https://github.com/celeris-vps-project/backend-core/releases/download/${AGENT_VERSION}/celeris-agent-linux-amd64}"
 AGENT_DIR="${AGENT_DIR:-/opt/celeris-agent}"
 
-GRPC_ADDRESS="${GRPC_ADDRESS:-1.0rtt.de:50051}"
+GRPC_ADDRESS="${GRPC_ADDRESS:-:50051}"
 CONTROLLER_URL="${CONTROLLER_URL:-http://127.0.0.1:8888}"
 POLL_INTERVAL="${POLL_INTERVAL:-15}"
 
@@ -672,6 +672,58 @@ ensure_cloud_image() {
     fi
 }
 
+
+ensure_cloudinit_drive() {
+    local cfg ide2_line vol f ts
+
+    cfg="$(qm config "$VMID" 2>/dev/null || true)"
+    ide2_line="$(awk '/^ide2:/ {print; exit}' <<<"$cfg" || true)"
+
+    # 已经挂了 cloud-init drive，直接跳过
+    if grep -qE '^ide2: .*cloudinit' <<<"$cfg"; then
+        log "cloud-init drive 已存在，跳过创建：$ide2_line"
+        return 0
+    fi
+
+    # ide2 被别的东西占用，当前 VM 是模板候选机，直接删除旧 ide2
+    if [[ -n "$ide2_line" ]]; then
+        log "ide2 已存在但不是 cloud-init，删除旧 ide2：$ide2_line"
+        qm set "$VMID" --delete ide2 || true
+        cfg="$(qm config "$VMID" 2>/dev/null || true)"
+    fi
+
+    # 删除 PVE storage 里未挂载的 cloud-init 残留卷
+    while IFS= read -r vol; do
+        [[ -n "$vol" ]] || continue
+
+        if grep -Fq "$vol" <<<"$cfg"; then
+            log "cloud-init 卷已被 VM 配置引用，保留：$vol"
+            continue
+        fi
+
+        log "删除未挂载的 cloud-init 残留卷：$vol"
+        pvesm free "$vol" || true
+    done < <(
+        pvesm list "$STORAGE" --vmid "$VMID" 2>/dev/null | \
+        awk -v vmid="$VMID" 'NR > 1 && ($1 ~ ("vm-" vmid "-cloudinit") || $1 ~ "cloudinit") {print $1}' || true
+    )
+
+    # local 目录型 storage 的兜底处理
+    for f in \
+        "/var/lib/vz/images/$VMID/vm-${VMID}-cloudinit.qcow2" \
+        "/var/lib/vz/images/$VMID/vm-${VMID}-cloudinit.raw"
+    do
+        if [[ -e "$f" ]]; then
+            ts="$(date +%Y%m%d-%H%M%S)"
+            log "发现未登记的 cloud-init 残留文件，移动备份：$f -> ${f}.bak.$ts"
+            mv -f "$f" "${f}.bak.$ts"
+        fi
+    done
+
+    log "创建 cloud-init drive：${STORAGE}:cloudinit"
+    qm set "$VMID" --ide2 "${STORAGE}:cloudinit"
+}
+
 create_or_update_template_vm() {
     ensure_storage
     ensure_ssh_key
@@ -707,7 +759,7 @@ create_or_update_template_vm() {
         [[ -n "$unused_disk" ]] || die "未找到 importdisk 生成的 unused disk。"
 
         qm set "$VMID" --scsihw virtio-scsi-pci --scsi0 "${unused_disk},discard=on"
-        qm set "$VMID" --ide2 "${STORAGE}:cloudinit"
+        ensure_cloudinit_drive
         qm set "$VMID" --boot order=scsi0
         qm set "$VMID" --serial0 socket --vga serial0
         qm set "$VMID" --agent enabled=1
@@ -719,7 +771,7 @@ create_or_update_template_vm() {
 
     qm set "$VMID" --name "$TEMPLATE_NAME" || true
     qm set "$VMID" --net0 "virtio,bridge=${NAT_BRIDGE}"
-    qm set "$VMID" --ide2 "${STORAGE}:cloudinit"
+    ensure_cloudinit_drive
     qm set "$VMID" --boot order=scsi0
     qm set "$VMID" --serial0 socket --vga serial0
     qm set "$VMID" --agent enabled=1
