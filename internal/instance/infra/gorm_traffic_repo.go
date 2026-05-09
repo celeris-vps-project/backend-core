@@ -305,7 +305,6 @@ BEGIN
           AND to_date(substring(c.relname from '([0-9]{8})$'), 'YYYYMMDD') < cutoff
         ORDER BY pdate
     LOOP
-        RAISE NOTICE 'drop old partition %.%', r.schemaname, r.relname;
         EXECUTE format('DROP TABLE IF EXISTS %%I.%%I', r.schemaname, r.relname);
     END LOOP;
 END $$;
