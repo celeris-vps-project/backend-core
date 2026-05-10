@@ -5,8 +5,11 @@ import (
 	"backend-core/internal/agent/vm"
 	"backend-core/pkg/contracts"
 	"context"
+	"errors"
 	"io"
 	"log"
+	"net"
+	"strings"
 	"sync"
 )
 
@@ -46,7 +49,7 @@ func handleConsoleSession(ctx context.Context, session contracts.ConsoleSession,
 		return
 	}
 
-	vnc, err := connector.OpenConsole(session.InstanceID)
+	vnc, vncTicket, err := connector.OpenConsole(session.InstanceID)
 	if err != nil {
 		_ = stream.Send(contracts.ConsoleFrame{
 			SessionID:  session.SessionID,
@@ -57,6 +60,24 @@ func handleConsoleSession(ctx context.Context, session contracts.ConsoleSession,
 		return
 	}
 	defer vnc.Close()
+
+	if vncTicket == "" {
+		_ = stream.Send(contracts.ConsoleFrame{
+			SessionID:  session.SessionID,
+			InstanceID: session.InstanceID,
+			Error:      "console vnc ticket unavailable",
+			Control:    "close",
+		})
+		return
+	}
+	if err := stream.Send(contracts.ConsoleFrame{
+		SessionID:  session.SessionID,
+		InstanceID: session.InstanceID,
+		Data:       []byte(vncTicket),
+		Control:    "vnc_ticket",
+	}); err != nil {
+		return
+	}
 
 	if err := stream.Send(contracts.ConsoleFrame{
 		SessionID:  session.SessionID,
@@ -86,7 +107,7 @@ func handleConsoleSession(ctx context.Context, session contracts.ConsoleSession,
 				}
 			}
 			if err != nil {
-				if err != io.EOF {
+				if !isNormalConsoleReadClose(err) {
 					log.Printf("[agent] console %s vnc read failed: %v", session.SessionID, err)
 				}
 				return
@@ -142,4 +163,14 @@ func reportConsoleError(ctx context.Context, grpcClient *client.AgentClient, ses
 		Error:      message,
 		Control:    "close",
 	})
+}
+
+func isNormalConsoleReadClose(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	return strings.Contains(err.Error(), "use of closed network connection")
 }

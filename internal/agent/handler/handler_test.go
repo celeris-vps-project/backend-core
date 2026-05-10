@@ -4,6 +4,9 @@ import (
 	"backend-core/internal/agent/vm"
 	"backend-core/pkg/contracts"
 	"errors"
+	"fmt"
+	"io"
+	"net"
 	"testing"
 	"time"
 )
@@ -235,6 +238,28 @@ func TestProcessTasks_PreservesVMTransferredStats(t *testing.T) {
 	}
 	if result.VMInfo.VMTransferred.TX != 222 {
 		t.Fatalf("expected tx traffic 222, got %d", result.VMInfo.VMTransferred.TX)
+	}
+}
+
+func TestIsNormalConsoleReadClose(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "eof", err: io.EOF, want: true},
+		{name: "net closed", err: net.ErrClosed, want: true},
+		{name: "wrapped net closed", err: fmt.Errorf("read tcp: %w", net.ErrClosed), want: true},
+		{name: "legacy closed text", err: errors.New("read tcp 127.0.0.1:42316->127.0.0.1:8006: use of closed network connection"), want: true},
+		{name: "real read failure", err: errors.New("connection reset by peer"), want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isNormalConsoleReadClose(tt.err); got != tt.want {
+				t.Fatalf("expected %v, got %v", tt.want, got)
+			}
+		})
 	}
 }
 

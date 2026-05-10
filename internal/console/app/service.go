@@ -35,6 +35,7 @@ type RuntimeStateReader interface {
 type Session struct {
 	ID         string
 	Ticket     string
+	VncTicket  string
 	InstanceID string
 	NodeID     string
 	UserID     string
@@ -107,6 +108,11 @@ func (s *Service) CreateSession(instanceID, userID string, admin bool) (*Session
 		InstanceID: session.InstanceID,
 	}
 	s.mu.Unlock()
+
+	if _, err := s.waitForVncTicket(session.ID, streamWait); err != nil {
+		s.CloseSession(session.ID)
+		return nil, err
+	}
 	return session, nil
 }
 
@@ -182,6 +188,33 @@ func (s *Service) WaitAgent(sessionID string) (*Session, *AgentStream, error) {
 	}
 }
 
+func (s *Service) waitForVncTicket(sessionID string, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		s.mu.Lock()
+		session, ok := s.sessions[sessionID]
+		if !ok {
+			s.mu.Unlock()
+			return "", ErrSessionNotFound
+		}
+		if time.Now().After(session.ExpiresAt) {
+			delete(s.sessions, sessionID)
+			s.mu.Unlock()
+			return "", ErrSessionExpired
+		}
+		if session.VncTicket != "" {
+			ticket := session.VncTicket
+			s.mu.Unlock()
+			return ticket, nil
+		}
+		s.mu.Unlock()
+		if time.Now().After(deadline) {
+			return "", ErrAgentUnavailable
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func (s *Service) AttachAgent(nodeID string, stream contracts.ConsoleStream) error {
 	first, err := stream.Recv()
 	if err != nil {
@@ -214,11 +247,31 @@ func (s *Service) AttachAgent(nodeID string, stream contracts.ConsoleStream) err
 		return fmt.Errorf("console agent already connected")
 	}
 	agent := newAgentStream(stream)
+	agent.onRecv = func(frame contracts.ConsoleFrame) bool {
+		if frame.Control == "vnc_ticket" && len(frame.Data) > 0 {
+			s.setVncTicket(session.ID, string(frame.Data))
+			return false
+		}
+		return true
+	}
 	session.agent = agent
 	s.mu.Unlock()
 
 	defer s.CloseSession(session.ID)
 	return agent.run()
+}
+
+func (s *Service) setVncTicket(sessionID, ticket string) {
+	if ticket == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.sessions[sessionID]
+	if !ok || session.VncTicket != "" {
+		return
+	}
+	session.VncTicket = ticket
 }
 
 func (s *Service) CloseSession(sessionID string) {
@@ -276,6 +329,7 @@ type AgentStream struct {
 	from   chan contracts.ConsoleFrame
 	done   chan struct{}
 	once   sync.Once
+	onRecv func(frame contracts.ConsoleFrame) bool
 }
 
 func newAgentStream(stream contracts.ConsoleStream) *AgentStream {
@@ -294,6 +348,9 @@ func (s *AgentStream) run() error {
 			if err != nil {
 				s.Close()
 				return
+			}
+			if s.onRecv != nil && !s.onRecv(frame) {
+				continue
 			}
 			select {
 			case s.from <- frame:

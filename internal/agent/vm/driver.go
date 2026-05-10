@@ -73,7 +73,7 @@ type BootWaiter interface {
 }
 
 type ConsoleConnector interface {
-	OpenConsole(instanceID string) (io.ReadWriteCloser, error)
+	OpenConsole(instanceID string) (io.ReadWriteCloser, string, error)
 }
 
 // Execute dispatches a task to the appropriate Hypervisor method.

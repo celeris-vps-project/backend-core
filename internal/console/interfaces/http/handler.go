@@ -42,6 +42,7 @@ func (h *Handler) CreateSession(_ context.Context, c *hzApp.RequestContext) {
 		"data": utils.H{
 			"session_id": session.ID,
 			"ticket":     session.Ticket,
+			"vnc_ticket": session.VncTicket,
 			"ws_url":     "/api/v1/instances/console",
 			"expires_at": session.ExpiresAt.Format(time.RFC3339),
 		},
@@ -69,7 +70,7 @@ func (h *Handler) ServeWS(_ context.Context, c *hzApp.RequestContext) {
 		defer h.svc.CloseSession(session.ID)
 		_, agent, err := h.svc.WaitAgent(session.ID)
 		if err != nil {
-			_ = conn.WriteMessage(websocket.TextMessage, []byte(err.Error()))
+			log.Printf("[console-ws] wait agent failed for session %s: %v", session.ID, err)
 			return
 		}
 
@@ -130,10 +131,10 @@ func (h *Handler) ServeWS(_ context.Context, c *hzApp.RequestContext) {
 
 func writeConsoleFrame(conn *websocket.Conn, frame contracts.ConsoleFrame) bool {
 	if frame.Error != "" {
-		_ = conn.WriteMessage(websocket.TextMessage, []byte(frame.Error))
+		log.Printf("[console-ws] console frame error for session %s: %s", frame.SessionID, frame.Error)
 		return false
 	}
-	if frame.Control == "ready" || frame.Control == "open" {
+	if frame.Control == "ready" || frame.Control == "open" || frame.Control == "vnc_ticket" {
 		return true
 	}
 	if frame.Control == "close" {
