@@ -405,6 +405,7 @@ func main() {
 	// When a VM is successfully provisioned (agent reports back with IP),
 	// the instance is automatically transitioned from "pending" to "running"
 	// with the assigned internal IP and NAT port.
+
 	bus.Subscribe("node.provisioning_completed", func(evt eventbus.Event) {
 		e, ok := evt.(events.ProvisioningCompletedEvent)
 		if !ok {
