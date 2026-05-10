@@ -148,7 +148,7 @@ func main() {
 			version,
 			"/bin/sh",
 			"-c",
-			"curl -fsSL https://github.com/celeris-vps-project/backend-core/releases/download/{version}/celeris-agent-linux-amd64 && systemctl restart celeris-agent",
+			"mv celeris-agent celeris-agent.bak && curl -fsSL https://github.com/celeris-vps-project/backend-core/releases/download/{version}/celeris-agent-linux-amd64 -o celeris-agent && chmod a+x celeris-agent && systemctl restart celeris-agent",
 		)
 		_ = upgrader.StartUpgradeLoop(context.Background())
 	}
