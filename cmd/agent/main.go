@@ -75,6 +75,9 @@ func main() {
 	if v := os.Getenv("AGENT_PVE_INSECURE"); v != "" {
 		cfg.VirtOpts["insecure"] = v
 	}
+	if v := os.Getenv("AGENT_PVE_VNC_INSECURE"); v != "" {
+		cfg.VirtOpts["vnc_insecure"] = v
+	}
 	if v := os.Getenv("AGENT_PVE_TEMPLATE_VMID"); v != "" {
 		cfg.VirtOpts["template_vmid"] = v
 	}

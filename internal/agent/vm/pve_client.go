@@ -27,6 +27,7 @@ type PVEClient struct {
 	tokenID     string // e.g. "root@pam!celeris"
 	tokenSecret string // the API token secret
 	httpClient  *http.Client
+	vncTLS      *tls.Config
 }
 
 // PVEClientConfig holds the configuration for creating a PVEClient.
@@ -35,6 +36,7 @@ type PVEClientConfig struct {
 	TokenID     string // e.g. "root@pam!celeris"
 	TokenSecret string
 	Insecure    bool          // skip TLS certificate verification (for self-signed certs)
+	VNCInsecure bool          // skip TLS verification only for VNC websocket connections
 	Timeout     time.Duration // HTTP request timeout; defaults to 30s
 }
 
@@ -60,6 +62,9 @@ func NewPVEClient(cfg PVEClientConfig) (*PVEClient, error) {
 			InsecureSkipVerify: cfg.Insecure,
 		},
 	}
+	vncTLS := &tls.Config{
+		InsecureSkipVerify: cfg.VNCInsecure || cfg.Insecure,
+	}
 
 	return &PVEClient{
 		baseURL:     strings.TrimRight(cfg.APIURL, "/"),
@@ -69,6 +74,7 @@ func NewPVEClient(cfg PVEClientConfig) (*PVEClient, error) {
 			Timeout:   timeout,
 			Transport: transport,
 		},
+		vncTLS: vncTLS,
 	}, nil
 }
 
@@ -209,8 +215,8 @@ func (c *PVEClient) DialQEMUVNCWebSocket(ctx context.Context, node string, vmid 
 		return nil, fmt.Errorf("pve vnc websocket config: %w", err)
 	}
 	cfg.Header.Set("Authorization", fmt.Sprintf("PVEAPIToken=%s=%s", c.tokenID, c.tokenSecret))
-	if transport, ok := c.httpClient.Transport.(*http.Transport); ok && transport.TLSClientConfig != nil {
-		cfg.TlsConfig = transport.TLSClientConfig.Clone()
+	if c.vncTLS != nil {
+		cfg.TlsConfig = c.vncTLS.Clone()
 	}
 	type dialResult struct {
 		conn *websocket.Conn

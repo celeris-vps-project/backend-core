@@ -34,6 +34,7 @@ virt_opts: {}                 # Backend-specific options, e.g.:
   # api_token_secret: "xxxxxxxx-xxxx-xxxx"   # API token secret
   # node: "pve1"                             # PVE node name
   # insecure: "true"                         # skip TLS verify (self-signed certs)
+  # vnc_insecure: "true"                     # skip TLS verify for VNC websocket only; defaults to insecure
   # template_vmid: "9000"                    # default template VMID for cloning
   # storage: "local-lvm"                     # target storage for cloned disks
 

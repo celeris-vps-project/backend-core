@@ -40,6 +40,7 @@ type PVEDriverConfig struct {
 	TokenSecret  string
 	Node         string // PVE node name
 	Insecure     bool   // skip TLS verification
+	VNCInsecure  bool   // skip TLS verification for VNC websocket only
 	TemplateVMID int    // default template VMID for cloning
 	StoragePool  string // target storage, e.g. "local-lvm"
 	TaskTimeout  time.Duration
@@ -53,6 +54,7 @@ type PVEDriverConfig struct {
 //   - api_token_secret:   API token secret (required)
 //   - node:               PVE node name (required), e.g. "pve1"
 //   - insecure:           "true" to skip TLS verification (default: false)
+//   - vnc_insecure:       "true" to skip TLS verification only for VNC websocket
 //   - template_vmid:      default template VMID for clone-based provisioning
 //   - storage:            target storage pool, e.g. "local-lvm"
 func NewPVEDriver(opts map[string]string) (*PVEDriver, error) {
@@ -66,12 +68,17 @@ func NewPVEDriver(opts map[string]string) (*PVEDriver, error) {
 	}
 
 	insecure := strings.EqualFold(opts["insecure"], "true")
+	vncInsecure := insecure
+	if raw, ok := opts["vnc_insecure"]; ok {
+		vncInsecure = strings.EqualFold(raw, "true")
+	}
 
 	client, err := NewPVEClient(PVEClientConfig{
 		APIURL:      apiURL,
 		TokenID:     tokenID,
 		TokenSecret: tokenSecret,
 		Insecure:    insecure,
+		VNCInsecure: vncInsecure,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("pve driver: %w", err)
@@ -89,8 +96,8 @@ func NewPVEDriver(opts map[string]string) (*PVEDriver, error) {
 		storagePool = "local-lvm"
 	}
 
-	log.Printf("[pve-driver] connected to %s node=%s template=%d storage=%s insecure=%v",
-		apiURL, node, templateID, storagePool, insecure)
+	log.Printf("[pve-driver] connected to %s node=%s template=%d storage=%s insecure=%v vnc_insecure=%v",
+		apiURL, node, templateID, storagePool, insecure, vncInsecure)
 
 	return &PVEDriver{
 		client:      client,

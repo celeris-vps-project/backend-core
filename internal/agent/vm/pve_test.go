@@ -2,6 +2,7 @@ package vm
 
 import (
 	"backend-core/pkg/contracts"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/net/websocket"
 )
 
 // ── Factory integration tests ──────────────────────────────────────────
@@ -73,6 +76,44 @@ func TestFactory_PVE_Success(t *testing.T) {
 	}
 	if _, ok := h.(*PVEDriver); !ok {
 		t.Fatalf("expected *PVEDriver, got %T", h)
+	}
+}
+
+func TestNewPVEDriver_VNCInsecureOnly(t *testing.T) {
+	h, err := NewHypervisor(BackendPVE, map[string]string{
+		"api_url":          "https://127.0.0.1:8006",
+		"api_token_id":     "root@pam!test",
+		"api_token_secret": "secret",
+		"node":             "pve1",
+		"vnc_insecure":     "true",
+	})
+	if err != nil {
+		t.Fatalf("NewHypervisor: %v", err)
+	}
+	driver := h.(*PVEDriver)
+	transport := driver.client.httpClient.Transport.(*http.Transport)
+	if transport.TLSClientConfig.InsecureSkipVerify {
+		t.Fatal("expected REST API TLS verification to remain enabled")
+	}
+	if driver.client.vncTLS == nil || !driver.client.vncTLS.InsecureSkipVerify {
+		t.Fatal("expected VNC websocket TLS verification to be skipped")
+	}
+}
+
+func TestNewPVEDriver_VNCInsecureDefaultsToAPIInsecure(t *testing.T) {
+	h, err := NewHypervisor(BackendPVE, map[string]string{
+		"api_url":          "https://127.0.0.1:8006",
+		"api_token_id":     "root@pam!test",
+		"api_token_secret": "secret",
+		"node":             "pve1",
+		"insecure":         "true",
+	})
+	if err != nil {
+		t.Fatalf("NewHypervisor: %v", err)
+	}
+	driver := h.(*PVEDriver)
+	if driver.client.vncTLS == nil || !driver.client.vncTLS.InsecureSkipVerify {
+		t.Fatal("expected VNC websocket TLS verification to inherit API insecure mode")
 	}
 }
 
@@ -263,6 +304,34 @@ func TestPVEDriver_ReinstallKeepsExistingVMID(t *testing.T) {
 	if !strings.Contains(cloneForm, "name=celeris-inst-reinstall") {
 		t.Fatalf("expected clone to keep Celeris VM name, got form %s", cloneForm)
 	}
+}
+
+func TestPVEClient_DialQEMUVNCWebSocketAllowsVNCInsecure(t *testing.T) {
+	srv := httptest.NewTLSServer(websocket.Handler(func(ws *websocket.Conn) {
+		_, _ = ws.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	client, err := NewPVEClient(PVEClientConfig{
+		APIURL:      srv.URL,
+		TokenID:     "test@pam!t",
+		TokenSecret: "s",
+		VNCInsecure: true,
+	})
+	if err != nil {
+		t.Fatalf("NewPVEClient: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := client.DialQEMUVNCWebSocket(ctx, "pve1", 113, &pveVNCProxy{
+		Port:   "5900",
+		Ticket: "ticket",
+	})
+	if err != nil {
+		t.Fatalf("DialQEMUVNCWebSocket: %v", err)
+	}
+	defer conn.Close()
 }
 
 // ── PVE Client HTTP tests ─────────────────────────────────────────────
