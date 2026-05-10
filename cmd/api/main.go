@@ -815,6 +815,7 @@ func main() {
 		privateAPI.POST("/instances/:id/stop", standardRL, instHandler.Stop)
 		privateAPI.POST("/instances/:id/reinstall", standardRL, instHandler.Reinstall)
 		privateAPI.POST("/instances/:id/console-session", standardRL, consoleHandler.CreateSession)
+		privateAPI.GET("/instances/:id/console-session/:session_id", standardRL, consoleHandler.GetSession)
 		privateAPI.POST("/ws/instances/ticket", standardRL, instanceWSHub.IssueTicket)
 
 		// ── Checkout tier: Product purchase & unified checkout ──────────

@@ -109,11 +109,38 @@ func (s *Service) CreateSession(instanceID, userID string, admin bool) (*Session
 	}
 	s.mu.Unlock()
 
-	if _, err := s.waitForVncTicket(session.ID, streamWait); err != nil {
-		s.CloseSession(session.ID)
-		return nil, err
-	}
 	return session, nil
+}
+
+func (s *Service) GetSession(sessionID, instanceID, userID string, admin bool) (*Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, ok := s.sessions[sessionID]
+	if !ok {
+		return nil, ErrSessionNotFound
+	}
+	if time.Now().After(session.ExpiresAt) {
+		delete(s.sessions, session.ID)
+		if s.pending[session.NodeID] != nil {
+			delete(s.pending[session.NodeID], session.ID)
+			if len(s.pending[session.NodeID]) == 0 {
+				delete(s.pending, session.NodeID)
+			}
+		}
+		if session.agent != nil {
+			session.agent.Close()
+		}
+		return nil, ErrSessionExpired
+	}
+	if session.InstanceID != instanceID {
+		return nil, ErrSessionNotFound
+	}
+	if !admin && session.UserID != userID {
+		return nil, fmt.Errorf("console access denied")
+	}
+	snapshot := *session
+	return &snapshot, nil
 }
 
 func (s *Service) ClaimPendingSessions(nodeID string) []contracts.ConsoleSession {
@@ -183,33 +210,6 @@ func (s *Service) WaitAgent(sessionID string) (*Session, *AgentStream, error) {
 		}
 		if time.Now().After(deadline) {
 			return nil, nil, ErrAgentUnavailable
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
-func (s *Service) waitForVncTicket(sessionID string, timeout time.Duration) (string, error) {
-	deadline := time.Now().Add(timeout)
-	for {
-		s.mu.Lock()
-		session, ok := s.sessions[sessionID]
-		if !ok {
-			s.mu.Unlock()
-			return "", ErrSessionNotFound
-		}
-		if time.Now().After(session.ExpiresAt) {
-			delete(s.sessions, sessionID)
-			s.mu.Unlock()
-			return "", ErrSessionExpired
-		}
-		if session.VncTicket != "" {
-			ticket := session.VncTicket
-			s.mu.Unlock()
-			return ticket, nil
-		}
-		s.mu.Unlock()
-		if time.Now().After(deadline) {
-			return "", ErrAgentUnavailable
 		}
 		time.Sleep(100 * time.Millisecond)
 	}

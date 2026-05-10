@@ -49,6 +49,29 @@ func (h *Handler) CreateSession(_ context.Context, c *hzApp.RequestContext) {
 	})
 }
 
+func (h *Handler) GetSession(_ context.Context, c *hzApp.RequestContext) {
+	uid, ok := authn.UserID(c)
+	if !ok {
+		c.JSON(consts.StatusUnauthorized, apperr.Resp(apperr.CodeUnauthorized, "unauthorized"))
+		return
+	}
+	role, _ := authn.UserRole(c)
+	session, err := h.svc.GetSession(c.Param("session_id"), c.Param("id"), uid.String(), role == "admin")
+	if err != nil {
+		status, code := classifyConsoleError(err)
+		c.JSON(status, apperr.Resp(code, err.Error()))
+		return
+	}
+	c.JSON(consts.StatusOK, utils.H{
+		"data": utils.H{
+			"session_id": session.ID,
+			"ready":      session.VncTicket != "",
+			"vnc_ticket": session.VncTicket,
+			"expires_at": session.ExpiresAt.Format(time.RFC3339),
+		},
+	})
+}
+
 var upgrader = websocket.HertzUpgrader{
 	CheckOrigin: func(ctx *hzApp.RequestContext) bool { return true },
 }
