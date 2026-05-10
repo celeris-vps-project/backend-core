@@ -16,6 +16,7 @@ import (
 
 // Verify PVEDriver satisfies the Hypervisor interface at compile time.
 var _ Hypervisor = (*PVEDriver)(nil)
+var _ Reinstaller = (*PVEDriver)(nil)
 
 func TestFactory_PVE_MissingNode(t *testing.T) {
 	// Should fail because "node" is required
@@ -195,6 +196,72 @@ func TestPVEDriver_CreateSendsCloudInitIPAndPassword(t *testing.T) {
 	}
 	if !strings.Contains(configForm, "ciuser=root") || !strings.Contains(configForm, "cipassword=pwd-1") {
 		t.Fatalf("expected cloud-init password fields in config form, got %s", configForm)
+	}
+}
+
+func TestPVEDriver_ReinstallKeepsExistingVMID(t *testing.T) {
+	var cloneForm string
+	deleteCalled := false
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu" && r.Method == "GET":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": []map[string]interface{}{
+					{"vmid": 113, "name": "celeris-inst-reinstall", "status": "running"},
+				},
+			})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu/113/status/stop" && r.Method == "POST":
+			json.NewEncoder(w).Encode(map[string]interface{}{"data": "UPID:pve1:stop"})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu/113" && r.Method == "DELETE":
+			deleteCalled = true
+			json.NewEncoder(w).Encode(map[string]interface{}{"data": "UPID:pve1:delete"})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu/9000/clone" && r.Method == "POST":
+			data, _ := io.ReadAll(r.Body)
+			cloneForm = string(data)
+			json.NewEncoder(w).Encode(map[string]interface{}{"data": "UPID:pve1:clone"})
+		case strings.Contains(r.URL.Path, "/tasks/") && strings.Contains(r.URL.Path, "/status"):
+			json.NewEncoder(w).Encode(map[string]interface{}{"data": map[string]interface{}{"status": "stopped", "exitstatus": "OK"}})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu/113/config" && r.Method == "PUT":
+			json.NewEncoder(w).Encode(map[string]interface{}{"data": nil})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu/113/resize" && r.Method == "PUT":
+			json.NewEncoder(w).Encode(map[string]interface{}{"data": nil})
+		case r.URL.Path == "/api2/json/nodes/pve1/qemu/113/status/start" && r.Method == "POST":
+			json.NewEncoder(w).Encode(map[string]interface{}{"data": "UPID:pve1:start"})
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client, _ := NewPVEClient(PVEClientConfig{
+		APIURL:      srv.URL,
+		TokenID:     "test@pam!t",
+		TokenSecret: "s",
+		Insecure:    true,
+	})
+	driver := &PVEDriver{client: client, node: "pve1", templateID: 9000, storagePool: "local-lvm"}
+
+	err := driver.Reinstall(contracts.ProvisionSpec{
+		InstanceID:      "inst-reinstall",
+		Hostname:        "web-01",
+		OS:              "9000",
+		CPU:             2,
+		MemoryMB:        2048,
+		DiskGB:          40,
+		InitialPassword: "pwd-1",
+	})
+	if err != nil {
+		t.Fatalf("Reinstall: %v", err)
+	}
+	if !deleteCalled {
+		t.Fatal("expected old VM to be deleted before clone")
+	}
+	if !strings.Contains(cloneForm, "newid=113") {
+		t.Fatalf("expected clone to reuse VMID 113, got form %s", cloneForm)
+	}
+	if !strings.Contains(cloneForm, "name=celeris-inst-reinstall") {
+		t.Fatalf("expected clone to keep Celeris VM name, got form %s", cloneForm)
 	}
 }
 

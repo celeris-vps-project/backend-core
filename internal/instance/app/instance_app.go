@@ -263,6 +263,23 @@ func (s *InstanceAppService) StopInstance(instanceID string) error {
 	return nil
 }
 
+func (s *InstanceAppService) ReinstallInstance(instanceID string) error {
+	inst, err := s.instanceRepo.GetByID(instanceID)
+	if err != nil {
+		return err
+	}
+	if inst.ControlStatus() != domain.InstanceControlStatusActive {
+		return fmt.Errorf("domain_error: only active instances can be reinstalled")
+	}
+	if s.lifecycle == nil {
+		return fmt.Errorf("domain_error: reinstall requires a lifecycle scheduler")
+	}
+	if inst.NodeID() == "" {
+		return fmt.Errorf("domain_error: only provisioned instances can be reinstalled")
+	}
+	return s.enqueueLifecycleTask(inst, contracts.TaskReinstall)
+}
+
 func (s *InstanceAppService) SuspendInstance(instanceID string) error {
 	return s.SuspendInstanceWithReason(instanceID, "")
 }
@@ -458,6 +475,26 @@ func (s *InstanceAppService) ConfirmStopped(instanceID string) error {
 		return err
 	}
 	if err := inst.Stop(time.Now()); err != nil {
+		return err
+	}
+	if err := s.instanceRepo.Save(inst); err != nil {
+		return err
+	}
+	s.publishState(inst)
+	return nil
+}
+
+func (s *InstanceAppService) ConfirmReinstalled(instanceID, ipv4, ipv6 string) error {
+	inst, err := s.instanceRepo.GetByID(instanceID)
+	if err != nil {
+		return err
+	}
+	if ipv4 != "" || ipv6 != "" {
+		if assignErr := inst.AssignIP(firstNonEmpty(ipv4, inst.IPv4()), firstNonEmpty(ipv6, inst.IPv6())); assignErr != nil {
+			fmt.Printf("[InstanceAppService] WARNING: failed to refresh IP for reinstalled instance %s: %v\n", instanceID, assignErr)
+		}
+	}
+	if err := inst.Start(time.Now()); err != nil {
 		return err
 	}
 	if err := s.instanceRepo.Save(inst); err != nil {
@@ -665,4 +702,13 @@ func normalizeRuntimeState(state string) string {
 	default:
 		return ""
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

@@ -56,6 +56,12 @@ type Hypervisor interface {
 	List() ([]*VMInfo, error)
 }
 
+// Reinstaller is implemented by drivers that can reinstall a guest while
+// preserving provider-specific identity such as a Proxmox VMID.
+type Reinstaller interface {
+	Reinstall(spec contracts.ProvisionSpec) error
+}
+
 // BootWaiter is an optional interface that a Hypervisor can implement to
 // provide polling-based boot confirmation. After a VM is created or started,
 // the caller can use WaitForBoot to poll the hypervisor until the guest reaches
@@ -81,6 +87,14 @@ func Execute(h Hypervisor, task contracts.Task) error {
 		return h.Stop(task.Spec.InstanceID)
 	case contracts.TaskReboot:
 		return h.Reboot(task.Spec.InstanceID)
+	case contracts.TaskReinstall:
+		if r, ok := h.(Reinstaller); ok {
+			return r.Reinstall(task.Spec)
+		}
+		if err := h.Destroy(task.Spec.InstanceID); err != nil {
+			return err
+		}
+		return h.Create(task.Spec)
 	case contracts.TaskDeprovision:
 		return h.Destroy(task.Spec.InstanceID)
 	case contracts.TaskSuspend:

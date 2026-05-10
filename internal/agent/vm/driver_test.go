@@ -187,6 +187,7 @@ func TestExecute_AllTaskTypes(t *testing.T) {
 	lifecycleTypes := []contracts.TaskType{
 		contracts.TaskStart,     // stopped → running
 		contracts.TaskReboot,    // running → running
+		contracts.TaskReinstall, // running → running with fresh spec
 		contracts.TaskStop,      // running → stopped
 		contracts.TaskUnsuspend, // stopped → running (alias for start)
 		contracts.TaskSuspend,   // running → stopped (alias for stop)

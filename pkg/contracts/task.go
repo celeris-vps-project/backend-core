@@ -9,6 +9,7 @@ const (
 	TaskStart       TaskType = "start"
 	TaskStop        TaskType = "stop"
 	TaskReboot      TaskType = "reboot"
+	TaskReinstall   TaskType = "reinstall"
 	TaskSuspend     TaskType = "suspend"
 	TaskUnsuspend   TaskType = "unsuspend"
 	TaskCollectInfo TaskType = "collect_info"

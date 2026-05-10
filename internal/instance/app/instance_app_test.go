@@ -334,6 +334,48 @@ func TestStopInstance_WithLifecycleSchedulerEnqueuesTask(t *testing.T) {
 	}
 }
 
+func TestReinstallInstance_WithLifecycleSchedulerEnqueuesReinstall(t *testing.T) {
+	nodeRepo := newMemNodeAllocatorRepo()
+	instRepo := newMemInstRepo()
+	idGen := &seqIDGen{}
+	scheduler := &memLifecycleScheduler{}
+	svc := NewInstanceAppService(nodeRepo, instRepo, idGen, nil)
+
+	_ = createTestHostNode(nodeRepo, "node-7", "US-nyc-01", "US-nyc", "New York #1", 2)
+	inst, err := svc.PurchaseInstance("cust-1", "ord-1", "US-nyc", "web-01", "vps-basic", "9000", 2, 2048, 40, 1000)
+	if err != nil {
+		t.Fatalf("unexpected purchase error: %v", err)
+	}
+	if err := svc.ConfirmProvisioning(inst.ID(), inst.NodeID(), "10.0.0.21", "", "198.51.100.21", "nat", 22021); err != nil {
+		t.Fatalf("unexpected provisioning confirm error: %v", err)
+	}
+	svc.SetLifecycleScheduler(scheduler)
+
+	if err := svc.ReinstallInstance(inst.ID()); err != nil {
+		t.Fatalf("unexpected reinstall error: %v", err)
+	}
+	if len(scheduler.tasks) != 1 {
+		t.Fatalf("expected 1 scheduled task, got %d", len(scheduler.tasks))
+	}
+	task := scheduler.tasks[0]
+	if task.taskType != contracts.TaskReinstall {
+		t.Fatalf("expected reinstall task, got %s", task.taskType)
+	}
+	if task.nodeID != inst.NodeID() || task.spec.InstanceID != inst.ID() {
+		t.Fatalf("expected same node and instance id, got node=%s instance=%s", task.nodeID, task.spec.InstanceID)
+	}
+	if task.spec.OS != "9000" || task.spec.IPv4 != "10.0.0.21" || task.spec.InitialPassword == "" {
+		t.Fatalf("expected template/ip/password to be propagated, got os=%s ip=%s password=%q", task.spec.OS, task.spec.IPv4, task.spec.InitialPassword)
+	}
+	if task.spec.NetworkMode != contracts.NetworkModeNAT || task.spec.NATPort != 22021 {
+		t.Fatalf("expected NAT details to be propagated, got mode=%s port=%d", task.spec.NetworkMode, task.spec.NATPort)
+	}
+	stored, _ := svc.GetInstance(inst.ID())
+	if stored.ID() != inst.ID() || stored.NodeID() != inst.NodeID() || stored.OrderID() != inst.OrderID() {
+		t.Fatalf("expected ids to stay unchanged after scheduling reinstall")
+	}
+}
+
 func TestTerminateInstance_WithLifecycleSchedulerEnqueuesDeprovision(t *testing.T) {
 	nodeRepo := newMemNodeAllocatorRepo()
 	instRepo := newMemInstRepo()

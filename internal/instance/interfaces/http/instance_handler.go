@@ -217,6 +217,20 @@ func (h *InstanceHandler) Stop(ctx context.Context, c *hz_app.RequestContext) {
 	c.JSON(consts.StatusOK, utils.H{"data": h.toInstResp(inst)})
 }
 
+// POST /instances/:id/reinstall
+func (h *InstanceHandler) Reinstall(ctx context.Context, c *hz_app.RequestContext) {
+	id := c.Param("id")
+	if !h.ensureInstanceAccess(c, id) {
+		return
+	}
+	if err := h.svc.ReinstallInstance(id); err != nil {
+		c.JSON(consts.StatusUnprocessableEntity, apperr.Resp(classifyInstanceError(err), err.Error()))
+		return
+	}
+	inst, _ := h.svc.GetInstance(id)
+	c.JSON(consts.StatusOK, utils.H{"data": h.toInstResp(inst)})
+}
+
 // POST /instances/:id/suspend
 func (h *InstanceHandler) Suspend(ctx context.Context, c *hz_app.RequestContext) {
 	if err := h.svc.SuspendInstance(c.Param("id")); err != nil {

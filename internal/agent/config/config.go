@@ -9,8 +9,8 @@ import (
 
 // NATConfig holds NAT-specific configuration for the agent.
 type NATConfig struct {
-	SSHTargetPort   int    `json:"ssh_target_port" yaml:"ssh_target_port"`     // VM internal SSH port (default: 22)
-	InternalNetwork string `json:"internal_network" yaml:"internal_network"`   // NAT internal network CIDR (e.g. "10.0.0.0/24")
+	SSHTargetPort   int    `json:"ssh_target_port" yaml:"ssh_target_port"`   // VM internal SSH port (default: 22)
+	InternalNetwork string `json:"internal_network" yaml:"internal_network"` // NAT internal network CIDR (e.g. "10.0.0.0/24")
 }
 
 // Config holds the agent's runtime configuration.
@@ -23,6 +23,7 @@ type Config struct {
 	VirtBackend    string            `json:"virt_backend" yaml:"virt_backend"`       // "libvirt", "incus", or "stub"
 	VirtOpts       map[string]string `json:"virt_opts" yaml:"virt_opts"`             // backend-specific: {"uri":"qemu:///system"} or {"project":"default"}
 	NAT            NATConfig         `json:"nat" yaml:"nat"`                         // NAT mode configuration
+	Upgrade        bool              `json:"upgrade" yaml:"upgrade"`
 }
 
 // DefaultConfig returns the default configuration for the agent.

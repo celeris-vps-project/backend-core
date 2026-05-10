@@ -118,19 +118,42 @@ func pveName(instanceID string) string {
 func (d *PVEDriver) Create(spec contracts.ProvisionSpec) error {
 	name := pveName(spec.InstanceID)
 
-	// Resolve template VMID — use OS field as a template VMID hint, or fall back to default.
-	templateID := d.resolveTemplate(spec.OS)
-	if templateID == 0 {
-		return fmt.Errorf("pve create %s: no template configured (set template_vmid in virt_opts or use a numeric OS field)", name)
-	}
-
 	// 1. Get next available VMID
 	vmid, err := d.client.NextVMID()
 	if err != nil {
 		return fmt.Errorf("pve create %s: %w", name, err)
 	}
 
-	log.Printf("[pve-driver] CREATE %s: cloning template %d → vmid %d", name, templateID, vmid)
+	return d.cloneTemplateToVMID(spec, vmid, "create")
+}
+
+// Reinstall rebuilds an existing VM from the configured template while keeping
+// the current Proxmox VMID and Celeris instance ID unchanged.
+func (d *PVEDriver) Reinstall(spec contracts.ProvisionSpec) error {
+	name := pveName(spec.InstanceID)
+	vmid, err := d.findVMID(spec.InstanceID)
+	if err != nil {
+		return fmt.Errorf("pve reinstall %s: %w", name, err)
+	}
+
+	log.Printf("[pve-driver] REINSTALL %s: preserving vmid %d", name, vmid)
+	if err := d.deleteQEMUByVMID(name, vmid, 120*time.Second); err != nil {
+		return fmt.Errorf("pve reinstall %s (vmid=%d): %w", name, vmid, err)
+	}
+	return d.cloneTemplateToVMID(spec, vmid, "reinstall")
+}
+
+func (d *PVEDriver) cloneTemplateToVMID(spec contracts.ProvisionSpec, vmid int, action string) error {
+	name := pveName(spec.InstanceID)
+	actionLabel := strings.ToUpper(action)
+
+	// Resolve template VMID: use OS field as a template VMID hint, or fall back to default.
+	templateID := d.resolveTemplate(spec.OS)
+	if templateID == 0 {
+		return fmt.Errorf("pve %s %s: no template configured (set template_vmid in virt_opts or use a numeric OS field)", action, name)
+	}
+
+	log.Printf("[pve-driver] %s %s: cloning template %d -> vmid %d", actionLabel, name, templateID, vmid)
 
 	// 2. Clone the template
 	cloneParams := map[string]string{
@@ -143,12 +166,12 @@ func (d *PVEDriver) Create(spec contracts.ProvisionSpec) error {
 
 	upid, err := d.client.CloneQEMU(d.node, templateID, vmid, cloneParams)
 	if err != nil {
-		return fmt.Errorf("pve create %s clone: %w", name, err)
+		return fmt.Errorf("pve %s %s clone: %w", action, name, err)
 	}
 
 	// Wait for clone to complete (can take a while for large disks)
 	if err := d.client.WaitForTask(d.node, upid, 5*time.Minute); err != nil {
-		return fmt.Errorf("pve create %s clone wait: %w", name, err)
+		return fmt.Errorf("pve %s %s clone wait: %w", action, name, err)
 	}
 
 	// 3. Reconfigure the cloned VM
@@ -196,14 +219,14 @@ func (d *PVEDriver) Create(spec contracts.ProvisionSpec) error {
 	// 5. Start the VM
 	startUpid, err := d.client.StartQEMU(d.node, vmid)
 	if err != nil {
-		return fmt.Errorf("pve create %s start: %w", name, err)
+		return fmt.Errorf("pve %s %s start: %w", action, name, err)
 	}
 	if err := d.client.WaitForTask(d.node, startUpid, 60*time.Second); err != nil {
-		return fmt.Errorf("pve create %s start wait: %w", name, err)
+		return fmt.Errorf("pve %s %s start wait: %w", action, name, err)
 	}
 
-	log.Printf("[pve-driver] CREATE %s: done (vmid=%d cpu=%d mem=%dMB disk=%dGB)",
-		name, vmid, spec.CPU, spec.MemoryMB, spec.DiskGB)
+	log.Printf("[pve-driver] %s %s: done (vmid=%d cpu=%d mem=%dMB disk=%dGB)",
+		actionLabel, name, vmid, spec.CPU, spec.MemoryMB, spec.DiskGB)
 	return nil
 }
 
@@ -284,6 +307,15 @@ func (d *PVEDriver) Destroy(instanceID string) error {
 		return fmt.Errorf("pve destroy %s: %w", name, err)
 	}
 
+	if err := d.deleteQEMUByVMID(name, vmid, 120*time.Second); err != nil {
+		return fmt.Errorf("pve destroy %s (vmid=%d): %w", name, vmid, err)
+	}
+
+	log.Printf("[pve-driver] DESTROY %s (vmid=%d)", name, vmid)
+	return nil
+}
+
+func (d *PVEDriver) deleteQEMUByVMID(name string, vmid int, waitTimeout time.Duration) error {
 	// Force-stop first (ignore error if already stopped)
 	stopUpid, stopErr := d.client.StopQEMU(d.node, vmid)
 	if stopErr == nil {
@@ -296,14 +328,13 @@ func (d *PVEDriver) Destroy(instanceID string) error {
 		"destroy-unreferenced-disks": "1",
 	})
 	if err != nil {
-		return fmt.Errorf("pve destroy %s (vmid=%d): %w", name, vmid, err)
+		return fmt.Errorf("delete qemu %s (vmid=%d): %w", name, vmid, err)
 	}
 
-	if err := d.client.WaitForTask(d.node, upid, 120*time.Second); err != nil {
-		return fmt.Errorf("pve destroy %s wait: %w", name, err)
+	if err := d.client.WaitForTask(d.node, upid, waitTimeout); err != nil {
+		return fmt.Errorf("delete qemu %s wait: %w", name, err)
 	}
 
-	log.Printf("[pve-driver] DESTROY %s (vmid=%d)", name, vmid)
 	return nil
 }
 

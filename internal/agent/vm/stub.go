@@ -83,6 +83,20 @@ func (d *StubDriver) Reboot(instanceID string) error {
 	return nil
 }
 
+func (d *StubDriver) Reinstall(spec contracts.ProvisionSpec) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	name := spec.InstanceID
+	if _, ok := d.instances[name]; !ok {
+		return fmt.Errorf("stub: instance %s not found", name)
+	}
+	d.instances[name] = &stubInstance{Spec: spec, State: "running"}
+	log.Printf("[vm-stub] REINSTALL instance=%s virt=%s cpu=%d mem=%dMB disk=%dGB os=%s",
+		name, spec.VirtType, spec.CPU, spec.MemoryMB, spec.DiskGB, spec.OS)
+	return nil
+}
+
 func (d *StubDriver) Destroy(instanceID string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()

@@ -967,7 +967,7 @@ func runtimeStateFromTaskResult(task *contracts.Task, result contracts.TaskResul
 	state := normalizeRuntimeState(result.VMState)
 	if state == "unknown" {
 		switch task.Type {
-		case contracts.TaskProvision, contracts.TaskStart, contracts.TaskReboot, contracts.TaskUnsuspend:
+		case contracts.TaskProvision, contracts.TaskStart, contracts.TaskReboot, contracts.TaskReinstall, contracts.TaskUnsuspend:
 			state = "running"
 		case contracts.TaskStop, contracts.TaskSuspend:
 			state = "stopped"

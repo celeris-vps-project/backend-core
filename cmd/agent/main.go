@@ -6,6 +6,7 @@ import (
 	"backend-core/internal/agent/handler"
 	"backend-core/internal/agent/monitor"
 	"backend-core/internal/agent/nat"
+	"backend-core/internal/agent/upgrade"
 	"backend-core/internal/agent/vm"
 	"backend-core/pkg/contracts"
 	"context"
@@ -141,7 +142,16 @@ func main() {
 		}
 		log.Printf("[agent] node credential saved to %s", credFile)
 	}
-
+	if cfg.Upgrade {
+		upgrader := upgrade.NewUpgrader(
+			"https://api.github.com/repos/celeris-vps-project/backend-core/releases/latest",
+			version,
+			"/bin/sh",
+			"-c",
+			"curl -fsSL https://github.com/celeris-vps-project/backend-core/releases/download/{version}/celeris-agent-linux-amd64 && systemctl restart celeris-agent",
+		)
+		_ = upgrader.StartUpgradeLoop(context.Background())
+	}
 	collector := monitor.NewCollector(nodeID, driver)
 
 	// sync natForwards Once

@@ -216,7 +216,7 @@ func SyncNATForwards(rules []contracts.NATForwardRule, forwarder NATForwarder) e
 // started (and thus need boot confirmation polling).
 func needsBootWait(tt contracts.TaskType) bool {
 	switch tt {
-	case contracts.TaskProvision, contracts.TaskStart, contracts.TaskReboot, contracts.TaskUnsuspend:
+	case contracts.TaskProvision, contracts.TaskStart, contracts.TaskReboot, contracts.TaskReinstall, contracts.TaskUnsuspend:
 		return true
 	default:
 		return false

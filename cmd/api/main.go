@@ -446,6 +446,10 @@ func main() {
 			if err := instApp.ConfirmStarted(e.InstanceID); err != nil {
 				log.Printf("[event-bridge] ERROR: failed to confirm start for instance %s: %v", e.InstanceID, err)
 			}
+		case contracts.TaskReinstall:
+			if err := instApp.ConfirmReinstalled(e.InstanceID, e.IPv4, e.IPv6); err != nil {
+				log.Printf("[event-bridge] ERROR: failed to confirm reinstall for instance %s: %v", e.InstanceID, err)
+			}
 		case contracts.TaskStop:
 			if err := instApp.ConfirmStopped(e.InstanceID); err != nil {
 				log.Printf("[event-bridge] ERROR: failed to confirm stop for instance %s: %v", e.InstanceID, err)
@@ -795,6 +799,7 @@ func main() {
 		privateAPI.GET("/instances/:id", standardRL, instHandler.GetByID)
 		privateAPI.POST("/instances/:id/start", standardRL, instHandler.Start)
 		privateAPI.POST("/instances/:id/stop", standardRL, instHandler.Stop)
+		privateAPI.POST("/instances/:id/reinstall", standardRL, instHandler.Reinstall)
 		privateAPI.POST("/instances/:id/console-session", standardRL, consoleHandler.CreateSession)
 		privateAPI.POST("/ws/instances/ticket", standardRL, instanceWSHub.IssueTicket)
 
@@ -896,6 +901,7 @@ func main() {
 
 		// Instance management
 		adminAPI.POST("/instances", instHandler.Purchase)
+		adminAPI.POST("/instances/:id/reinstall", instHandler.Reinstall)
 		adminAPI.POST("/instances/:id/suspend", instHandler.Suspend)
 		adminAPI.POST("/instances/:id/unsuspend", instHandler.Unsuspend)
 		adminAPI.POST("/instances/:id/terminate", instHandler.Terminate)
