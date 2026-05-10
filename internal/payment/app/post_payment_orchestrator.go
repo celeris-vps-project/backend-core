@@ -386,8 +386,11 @@ func (s *PostPaymentOrchestrator) applyInvoiceTimeoutPlan(invoiceID, orderID str
 
 	log.Printf("[PostPaymentOrchestrator] invoice voided: %s (payment timeout)", invoiceID)
 	if plan.releaseProduct && plan.hasOrder {
+		// TODO:schedule 5 min for release in order to handle those user paid but order marked cancel
+
 		s.releaseReservedProduct(plan.order.ProductID, plan.order.ID, "payment timeout")
 		s.releaseCouponForOrder(plan.order.ID, "payment timeout")
+
 	}
 	if plan.cancelOrder {
 		s.cancelOrderForTimeout(orderID)

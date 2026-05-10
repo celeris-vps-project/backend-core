@@ -214,6 +214,11 @@ func (s *PaymentAppService) InitiatePayment(ctx context.Context, req *InitiatePa
 		if err != nil {
 			log.Printf("[PaymentAppService] WARNING: invoice creation failed for order %s: %v", req.OrderID, err)
 			s.orchestrator.ReleaseReservedProduct(payableOrder.ProductID, payableOrder.ID, "invoice creation failed")
+			if appliedCoupon {
+				if s.coupons.ReleaseCoupon(payableOrder.ID) != nil {
+					log.Printf("[PaymentAppService] WARNING: coupon release failed for order %s: %v", req.OrderID, err)
+				}
+			}
 			return nil, apperr.ErrUnprocessable(apperr.CodePaymentFailed, "invoice creation failed: "+err.Error())
 		}
 		order.InvoiceID = invoiceID

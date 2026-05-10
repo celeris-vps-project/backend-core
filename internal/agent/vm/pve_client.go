@@ -177,7 +177,9 @@ func (s *pveString) UnmarshalJSON(data []byte) error {
 }
 
 func (c *PVEClient) CreateQEMUVNCProxy(node string, vmid int) (*pveVNCProxy, error) {
-	data, err := c.Post(fmt.Sprintf("/nodes/%s/qemu/%d/vncproxy", node, vmid), nil)
+	data, err := c.Post(fmt.Sprintf("/nodes/%s/qemu/%d/vncproxy", node, vmid), map[string]string{
+		"websocket": "1",
+	})
 	if err != nil {
 		return nil, fmt.Errorf("pve vncproxy: %w", err)
 	}
@@ -237,6 +239,7 @@ func (c *PVEClient) DialQEMUVNCWebSocket(ctx context.Context, node string, vmid 
 		}
 		conn = r.conn
 	}
+	conn.PayloadType = websocket.BinaryFrame
 	go func() {
 		<-ctx.Done()
 		_ = conn.Close()

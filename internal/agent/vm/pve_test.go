@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	gorillawebsocket "github.com/gorilla/websocket"
 	"golang.org/x/net/websocket"
 )
 
@@ -335,6 +336,103 @@ func TestPVEClient_DialQEMUVNCWebSocketAllowsVNCInsecure(t *testing.T) {
 }
 
 // ── PVE Client HTTP tests ─────────────────────────────────────────────
+
+func TestPVEClient_CreateQEMUVNCProxyRequestsWebSocketMode(t *testing.T) {
+	var form string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api2/json/nodes/pve1/qemu/113/vncproxy" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		data, _ := io.ReadAll(r.Body)
+		form = string(data)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": map[string]interface{}{
+				"port":   "5900",
+				"ticket": "ticket",
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client, err := NewPVEClient(PVEClientConfig{
+		APIURL:      srv.URL,
+		TokenID:     "test@pam!t",
+		TokenSecret: "s",
+		Insecure:    true,
+	})
+	if err != nil {
+		t.Fatalf("NewPVEClient: %v", err)
+	}
+
+	proxy, err := client.CreateQEMUVNCProxy("pve1", 113)
+	if err != nil {
+		t.Fatalf("CreateQEMUVNCProxy: %v", err)
+	}
+	if proxy.Ticket != "ticket" || proxy.Port != "5900" {
+		t.Fatalf("unexpected proxy response: %+v", proxy)
+	}
+	if form != "websocket=1" {
+		t.Fatalf("expected websocket=1 form, got %q", form)
+	}
+}
+
+func TestPVEClient_DialQEMUVNCWebSocketWritesBinaryFrames(t *testing.T) {
+	received := make(chan int, 1)
+	upgrader := gorillawebsocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool { return true },
+	}
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("server upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		messageType, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("server read: %v", err)
+			return
+		}
+		if string(payload) != "RFB 003.008\n" {
+			t.Errorf("unexpected payload %q", string(payload))
+		}
+		received <- messageType
+	}))
+	defer srv.Close()
+
+	client, err := NewPVEClient(PVEClientConfig{
+		APIURL:      srv.URL,
+		TokenID:     "test@pam!t",
+		TokenSecret: "s",
+		VNCInsecure: true,
+	})
+	if err != nil {
+		t.Fatalf("NewPVEClient: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := client.DialQEMUVNCWebSocket(ctx, "pve1", 113, &pveVNCProxy{
+		Port:   "5900",
+		Ticket: "ticket",
+	})
+	if err != nil {
+		t.Fatalf("DialQEMUVNCWebSocket: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("RFB 003.008\n")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	select {
+	case payloadType := <-received:
+		if payloadType != gorillawebsocket.BinaryMessage {
+			t.Fatalf("payload type = %d, want %d", payloadType, gorillawebsocket.BinaryMessage)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for websocket payload")
+	}
+}
 
 func TestPVEDriver_WaitForBootReturnsRunningWithoutGuestAgentIP(t *testing.T) {
 	agentCalls := 0
