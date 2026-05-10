@@ -616,6 +616,7 @@ func (s *InstanceAppService) toInstanceStateEvent(inst *domain.Instance) events.
 		ControlStatus:   inst.ControlStatus(),
 		SuspendReason:   inst.SuspendReason(),
 		RuntimeState:    runtimeState,
+		RuntimeReported: runtimeState != "",
 		NetworkMode:     inst.NetworkMode(),
 		NATPort:         inst.NATPort(),
 		NATPorts:        natPortsFromRules(s.mustListNATPortMappings(inst.ID())),

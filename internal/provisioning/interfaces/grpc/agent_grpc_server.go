@@ -14,11 +14,17 @@ import (
 // same ProvisioningAppService used by the HTTP handlers.
 type AgentGRPCServer struct {
 	agentpb.UnimplementedAgentServiceServer
-	svc *app.ProvisioningAppService
+	svc     *app.ProvisioningAppService
+	console ConsoleService
 }
 
-func NewAgentGRPCServer(svc *app.ProvisioningAppService) *AgentGRPCServer {
-	return &AgentGRPCServer{svc: svc}
+type ConsoleService interface {
+	ClaimPendingSessions(nodeID string) []contracts.ConsoleSession
+	AttachAgent(nodeID string, stream contracts.ConsoleStream) error
+}
+
+func NewAgentGRPCServer(svc *app.ProvisioningAppService, console ConsoleService) *AgentGRPCServer {
+	return &AgentGRPCServer{svc: svc, console: console}
 }
 
 // Register handles agent bootstrap registration.
@@ -57,10 +63,14 @@ func (s *AgentGRPCServer) Heartbeat(ctx context.Context, req *agentpb.HeartbeatR
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "heartbeat failed: %v", err)
 	}
+	if s.console != nil {
+		ack.ConsoleSessions = s.console.ClaimPendingSessions(nodeID)
+	}
 	return &agentpb.HeartbeatResponse{
-		Ok:          ack.OK,
-		Tasks:       tasksToProto(ack.Tasks),
-		NatForwards: natForwardsToProto(ack.NATForwards),
+		Ok:              ack.OK,
+		Tasks:           tasksToProto(ack.Tasks),
+		NatForwards:     natForwardsToProto(ack.NATForwards),
+		ConsoleSessions: consoleSessionsToProto(ack.ConsoleSessions),
 	}, nil
 }
 
@@ -83,6 +93,17 @@ func (s *AgentGRPCServer) ReportTaskResult(ctx context.Context, req *agentpb.Tas
 		return nil, status.Errorf(codes.Internal, "report task result failed: %v", err)
 	}
 	return &agentpb.TaskResultResponse{Ok: true}, nil
+}
+
+func (s *AgentGRPCServer) OpenConsole(stream agentpb.AgentService_OpenConsoleServer) error {
+	nodeID, ok := NodeIDFromContext(stream.Context())
+	if !ok {
+		return status.Errorf(codes.Unauthenticated, "missing authenticated node identity")
+	}
+	if s.console == nil {
+		return status.Errorf(codes.Unavailable, "console service unavailable")
+	}
+	return s.console.AttachAgent(nodeID, &consoleProtoStream{stream: stream})
 }
 
 // ---- proto ---?contracts mapping helpers ----
@@ -166,4 +187,46 @@ func natForwardsToProto(rules []contracts.NATForwardRule) []*agentpb.NATForwardR
 		}
 	}
 	return out
+}
+
+func consoleSessionsToProto(items []contracts.ConsoleSession) []*agentpb.ConsoleSession {
+	out := make([]*agentpb.ConsoleSession, 0, len(items))
+	for _, item := range items {
+		if item.SessionID == "" || item.InstanceID == "" {
+			continue
+		}
+		out = append(out, &agentpb.ConsoleSession{
+			SessionId:  item.SessionID,
+			InstanceId: item.InstanceID,
+		})
+	}
+	return out
+}
+
+type consoleProtoStream struct {
+	stream agentpb.AgentService_OpenConsoleServer
+}
+
+func (s *consoleProtoStream) Send(frame contracts.ConsoleFrame) error {
+	return s.stream.Send(&agentpb.ConsoleFrame{
+		SessionId:  frame.SessionID,
+		InstanceId: frame.InstanceID,
+		Data:       frame.Data,
+		Error:      frame.Error,
+		Control:    frame.Control,
+	})
+}
+
+func (s *consoleProtoStream) Recv() (contracts.ConsoleFrame, error) {
+	frame, err := s.stream.Recv()
+	if err != nil {
+		return contracts.ConsoleFrame{}, err
+	}
+	return contracts.ConsoleFrame{
+		SessionID:  frame.GetSessionId(),
+		InstanceID: frame.GetInstanceId(),
+		Data:       frame.GetData(),
+		Error:      frame.GetError(),
+		Control:    frame.GetControl(),
+	}, nil
 }

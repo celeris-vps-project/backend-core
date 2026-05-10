@@ -157,6 +157,10 @@ func main() {
 			log.Printf("[agent] failed to sync NAT forwards: %v", err)
 		}
 	}
+	if len(ack.ConsoleSessions) > 0 {
+		log.Printf("[agent] received %d console session(s)", len(ack.ConsoleSessions))
+		handler.ProcessConsoleSessions(ctx, ack.ConsoleSessions, driver, grpcClient)
+	}
 
 	// ── Heartbeat loop ─────────────────────────────────────────────────
 	for range ticker.C {
@@ -175,6 +179,10 @@ func main() {
 					log.Printf("[agent] failed to report task result %s: %v", result.TaskID, err)
 				}
 			})
+		}
+		if len(ack.ConsoleSessions) > 0 {
+			log.Printf("[agent] received %d console session(s)", len(ack.ConsoleSessions))
+			handler.ProcessConsoleSessions(ctx, ack.ConsoleSessions, driver, grpcClient)
 		}
 	}
 }

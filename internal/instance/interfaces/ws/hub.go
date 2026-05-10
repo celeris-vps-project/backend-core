@@ -302,6 +302,7 @@ func (h *Hub) toInstanceStateEvent(inst *domain.Instance) events.InstanceStateUp
 		ControlStatus:   inst.ControlStatus(),
 		SuspendReason:   inst.SuspendReason(),
 		RuntimeState:    runtimeState,
+		RuntimeReported: runtimeState != "",
 		NetworkMode:     inst.NetworkMode(),
 		NATPort:         inst.NATPort(),
 		InitialPassword: inst.InitialPassword(),

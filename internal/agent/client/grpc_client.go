@@ -5,6 +5,7 @@ import (
 	"backend-core/pkg/contracts"
 	"context"
 	"fmt"
+	"io"
 	"sync"
 
 	"google.golang.org/grpc"
@@ -102,9 +103,10 @@ func (c *AgentClient) Heartbeat(ctx context.Context, hb contracts.Heartbeat) (*c
 		return nil, err
 	}
 	return &contracts.HeartbeatAck{
-		OK:          resp.GetOk(),
-		Tasks:       protoToTasks(resp.GetTasks()),
-		NATForwards: protoToNATForwards(resp.GetNatForwards()),
+		OK:              resp.GetOk(),
+		Tasks:           protoToTasks(resp.GetTasks()),
+		NATForwards:     protoToNATForwards(resp.GetNatForwards()),
+		ConsoleSessions: protoToConsoleSessions(resp.GetConsoleSessions()),
 	}, nil
 }
 
@@ -121,6 +123,55 @@ func (c *AgentClient) ReportTaskResult(ctx context.Context, result contracts.Tas
 		VmState:    result.VMState,
 	})
 	return err
+}
+
+type ConsoleStream interface {
+	Send(contracts.ConsoleFrame) error
+	Recv() (contracts.ConsoleFrame, error)
+	CloseSend() error
+}
+
+type consoleStream struct {
+	stream agentpb.AgentService_OpenConsoleClient
+}
+
+func (c *AgentClient) OpenConsole(ctx context.Context) (ConsoleStream, error) {
+	stream, err := c.svc.OpenConsole(c.authCtx(ctx))
+	if err != nil {
+		return nil, err
+	}
+	return &consoleStream{stream: stream}, nil
+}
+
+func (s *consoleStream) Send(frame contracts.ConsoleFrame) error {
+	return s.stream.Send(&agentpb.ConsoleFrame{
+		SessionId:  frame.SessionID,
+		InstanceId: frame.InstanceID,
+		Data:       frame.Data,
+		Error:      frame.Error,
+		Control:    frame.Control,
+	})
+}
+
+func (s *consoleStream) Recv() (contracts.ConsoleFrame, error) {
+	frame, err := s.stream.Recv()
+	if err != nil {
+		if err == io.EOF {
+			return contracts.ConsoleFrame{}, io.EOF
+		}
+		return contracts.ConsoleFrame{}, err
+	}
+	return contracts.ConsoleFrame{
+		SessionID:  frame.GetSessionId(),
+		InstanceID: frame.GetInstanceId(),
+		Data:       frame.GetData(),
+		Error:      frame.GetError(),
+		Control:    frame.GetControl(),
+	}, nil
+}
+
+func (s *consoleStream) CloseSend() error {
+	return s.stream.CloseSend()
 }
 
 // ---- proto �?contracts mapping helpers ----
@@ -198,6 +249,20 @@ func protoToNATForwards(prs []*agentpb.NATForwardRule) []contracts.NATForwardRul
 			GuestPort:  int(pr.GetGuestPort()),
 			Protocol:   pr.GetProtocol(),
 		}
+	}
+	return out
+}
+
+func protoToConsoleSessions(items []*agentpb.ConsoleSession) []contracts.ConsoleSession {
+	out := make([]contracts.ConsoleSession, 0, len(items))
+	for _, item := range items {
+		if item == nil || item.GetSessionId() == "" || item.GetInstanceId() == "" {
+			continue
+		}
+		out = append(out, contracts.ConsoleSession{
+			SessionID:  item.GetSessionId(),
+			InstanceID: item.GetInstanceId(),
+		})
 	}
 	return out
 }

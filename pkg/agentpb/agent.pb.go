@@ -250,12 +250,13 @@ func (x *HeartbeatRequest) GetVmStates() []*VMState {
 }
 
 type HeartbeatResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
-	Tasks         []*Task                `protobuf:"bytes,2,rep,name=tasks,proto3" json:"tasks,omitempty"`
-	NatForwards   []*NATForwardRule      `protobuf:"bytes,3,rep,name=nat_forwards,json=natForwards,proto3" json:"nat_forwards,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Ok              bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	Tasks           []*Task                `protobuf:"bytes,2,rep,name=tasks,proto3" json:"tasks,omitempty"`
+	NatForwards     []*NATForwardRule      `protobuf:"bytes,3,rep,name=nat_forwards,json=natForwards,proto3" json:"nat_forwards,omitempty"`
+	ConsoleSessions []*ConsoleSession      `protobuf:"bytes,4,rep,name=console_sessions,json=consoleSessions,proto3" json:"console_sessions,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *HeartbeatResponse) Reset() {
@@ -305,6 +306,13 @@ func (x *HeartbeatResponse) GetTasks() []*Task {
 func (x *HeartbeatResponse) GetNatForwards() []*NATForwardRule {
 	if x != nil {
 		return x.NatForwards
+	}
+	return nil
+}
+
+func (x *HeartbeatResponse) GetConsoleSessions() []*ConsoleSession {
+	if x != nil {
+		return x.ConsoleSessions
 	}
 	return nil
 }
@@ -929,6 +937,134 @@ func (x *TaskResultResponse) GetOk() bool {
 	return false
 }
 
+type ConsoleSession struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	InstanceId    string                 `protobuf:"bytes,2,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConsoleSession) Reset() {
+	*x = ConsoleSession{}
+	mi := &file_agent_v1_agent_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConsoleSession) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConsoleSession) ProtoMessage() {}
+
+func (x *ConsoleSession) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConsoleSession.ProtoReflect.Descriptor instead.
+func (*ConsoleSession) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ConsoleSession) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *ConsoleSession) GetInstanceId() string {
+	if x != nil {
+		return x.InstanceId
+	}
+	return ""
+}
+
+type ConsoleFrame struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	InstanceId    string                 `protobuf:"bytes,2,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	Data          []byte                 `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"`
+	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	Control       string                 `protobuf:"bytes,5,opt,name=control,proto3" json:"control,omitempty"` // "open", "ready", "close"
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConsoleFrame) Reset() {
+	*x = ConsoleFrame{}
+	mi := &file_agent_v1_agent_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConsoleFrame) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConsoleFrame) ProtoMessage() {}
+
+func (x *ConsoleFrame) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConsoleFrame.ProtoReflect.Descriptor instead.
+func (*ConsoleFrame) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ConsoleFrame) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *ConsoleFrame) GetInstanceId() string {
+	if x != nil {
+		return x.InstanceId
+	}
+	return ""
+}
+
+func (x *ConsoleFrame) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *ConsoleFrame) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *ConsoleFrame) GetControl() string {
+	if x != nil {
+		return x.Control
+	}
+	return ""
+}
+
 var File_agent_v1_agent_proto protoreflect.FileDescriptor
 
 const file_agent_v1_agent_proto_rawDesc = "" +
@@ -954,11 +1090,12 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\bvm_count\x18\x06 \x01(\x05R\avmCount\x12\x1f\n" +
 	"\vreported_at\x18\a \x01(\tR\n" +
 	"reportedAt\x12.\n" +
-	"\tvm_states\x18\b \x03(\v2\x11.agent.v1.VMStateR\bvmStates\"\x86\x01\n" +
+	"\tvm_states\x18\b \x03(\v2\x11.agent.v1.VMStateR\bvmStates\"\xcb\x01\n" +
 	"\x11HeartbeatResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12$\n" +
 	"\x05tasks\x18\x02 \x03(\v2\x0e.agent.v1.TaskR\x05tasks\x12;\n" +
-	"\fnat_forwards\x18\x03 \x03(\v2\x18.agent.v1.NATForwardRuleR\vnatForwards\"\xa4\x01\n" +
+	"\fnat_forwards\x18\x03 \x03(\v2\x18.agent.v1.NATForwardRuleR\vnatForwards\x12C\n" +
+	"\x10console_sessions\x18\x04 \x03(\v2\x18.agent.v1.ConsoleSessionR\x0fconsoleSessions\"\xa4\x01\n" +
 	"\x0eNATForwardRule\x12\x1f\n" +
 	"\vinstance_id\x18\x01 \x01(\tR\n" +
 	"instanceId\x12\x1b\n" +
@@ -1020,11 +1157,25 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"finishedAt\x12\x19\n" +
 	"\bvm_state\x18\a \x01(\tR\avmState\"$\n" +
 	"\x12TaskResultResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok2\xe6\x01\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"P\n" +
+	"\x0eConsoleSession\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1f\n" +
+	"\vinstance_id\x18\x02 \x01(\tR\n" +
+	"instanceId\"\x92\x01\n" +
+	"\fConsoleFrame\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1f\n" +
+	"\vinstance_id\x18\x02 \x01(\tR\n" +
+	"instanceId\x12\x12\n" +
+	"\x04data\x18\x03 \x01(\fR\x04data\x12\x14\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\x12\x18\n" +
+	"\acontrol\x18\x05 \x01(\tR\acontrol2\xa9\x02\n" +
 	"\fAgentService\x12A\n" +
 	"\bRegister\x12\x19.agent.v1.RegisterRequest\x1a\x1a.agent.v1.RegisterResponse\x12D\n" +
 	"\tHeartbeat\x12\x1a.agent.v1.HeartbeatRequest\x1a\x1b.agent.v1.HeartbeatResponse\x12M\n" +
-	"\x10ReportTaskResult\x12\x1b.agent.v1.TaskResultRequest\x1a\x1c.agent.v1.TaskResultResponseB\x1aZ\x18backend-core/pkg/agentpbb\x06proto3"
+	"\x10ReportTaskResult\x12\x1b.agent.v1.TaskResultRequest\x1a\x1c.agent.v1.TaskResultResponse\x12A\n" +
+	"\vOpenConsole\x12\x16.agent.v1.ConsoleFrame\x1a\x16.agent.v1.ConsoleFrame(\x010\x01B\x1aZ\x18backend-core/pkg/agentpbb\x06proto3"
 
 var (
 	file_agent_v1_agent_proto_rawDescOnce sync.Once
@@ -1038,7 +1189,7 @@ func file_agent_v1_agent_proto_rawDescGZIP() []byte {
 	return file_agent_v1_agent_proto_rawDescData
 }
 
-var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_agent_v1_agent_proto_goTypes = []any{
 	(*RegisterRequest)(nil),    // 0: agent.v1.RegisterRequest
 	(*RegisterResponse)(nil),   // 1: agent.v1.RegisterResponse
@@ -1051,25 +1202,30 @@ var file_agent_v1_agent_proto_goTypes = []any{
 	(*ProvisionSpec)(nil),      // 8: agent.v1.ProvisionSpec
 	(*TaskResultRequest)(nil),  // 9: agent.v1.TaskResultRequest
 	(*TaskResultResponse)(nil), // 10: agent.v1.TaskResultResponse
+	(*ConsoleSession)(nil),     // 11: agent.v1.ConsoleSession
+	(*ConsoleFrame)(nil),       // 12: agent.v1.ConsoleFrame
 }
 var file_agent_v1_agent_proto_depIdxs = []int32{
 	6,  // 0: agent.v1.HeartbeatRequest.vm_states:type_name -> agent.v1.VMState
 	7,  // 1: agent.v1.HeartbeatResponse.tasks:type_name -> agent.v1.Task
 	4,  // 2: agent.v1.HeartbeatResponse.nat_forwards:type_name -> agent.v1.NATForwardRule
-	5,  // 3: agent.v1.VMState.vm_transferred:type_name -> agent.v1.VMTransferred
-	8,  // 4: agent.v1.Task.spec:type_name -> agent.v1.ProvisionSpec
-	4,  // 5: agent.v1.ProvisionSpec.nat_forwards:type_name -> agent.v1.NATForwardRule
-	0,  // 6: agent.v1.AgentService.Register:input_type -> agent.v1.RegisterRequest
-	2,  // 7: agent.v1.AgentService.Heartbeat:input_type -> agent.v1.HeartbeatRequest
-	9,  // 8: agent.v1.AgentService.ReportTaskResult:input_type -> agent.v1.TaskResultRequest
-	1,  // 9: agent.v1.AgentService.Register:output_type -> agent.v1.RegisterResponse
-	3,  // 10: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
-	10, // 11: agent.v1.AgentService.ReportTaskResult:output_type -> agent.v1.TaskResultResponse
-	9,  // [9:12] is the sub-list for method output_type
-	6,  // [6:9] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	11, // 3: agent.v1.HeartbeatResponse.console_sessions:type_name -> agent.v1.ConsoleSession
+	5,  // 4: agent.v1.VMState.vm_transferred:type_name -> agent.v1.VMTransferred
+	8,  // 5: agent.v1.Task.spec:type_name -> agent.v1.ProvisionSpec
+	4,  // 6: agent.v1.ProvisionSpec.nat_forwards:type_name -> agent.v1.NATForwardRule
+	0,  // 7: agent.v1.AgentService.Register:input_type -> agent.v1.RegisterRequest
+	2,  // 8: agent.v1.AgentService.Heartbeat:input_type -> agent.v1.HeartbeatRequest
+	9,  // 9: agent.v1.AgentService.ReportTaskResult:input_type -> agent.v1.TaskResultRequest
+	12, // 10: agent.v1.AgentService.OpenConsole:input_type -> agent.v1.ConsoleFrame
+	1,  // 11: agent.v1.AgentService.Register:output_type -> agent.v1.RegisterResponse
+	3,  // 12: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
+	10, // 13: agent.v1.AgentService.ReportTaskResult:output_type -> agent.v1.TaskResultResponse
+	12, // 14: agent.v1.AgentService.OpenConsole:output_type -> agent.v1.ConsoleFrame
+	11, // [11:15] is the sub-list for method output_type
+	7,  // [7:11] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_agent_v1_agent_proto_init() }
@@ -1083,7 +1239,7 @@ func file_agent_v1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_v1_agent_proto_rawDesc), len(file_agent_v1_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   11,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

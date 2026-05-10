@@ -55,6 +55,7 @@ type InstanceResponse struct {
 	ControlStatus   string                   `json:"control_status,omitempty"`
 	SuspendReason   string                   `json:"suspend_reason,omitempty"`
 	RuntimeState    string                   `json:"runtime_state,omitempty"`
+	RuntimeReported bool                     `json:"runtime_reported"`
 	NetworkMode     string                   `json:"network_mode,omitempty"` // "dedicated" or "nat"
 	NATPort         int                      `json:"nat_port,omitempty"`     // NAT mode: SSH port on host
 	NATPorts        []int                    `json:"nat_ports,omitempty"`
@@ -286,16 +287,18 @@ func canAccessInstance(c *hz_app.RequestContext, customerID string) bool {
 }
 
 func (h *InstanceHandler) toInstResp(i *domain.Instance) InstanceResponse {
+	runtimeState := h.svc.InstanceRuntimeState(i)
 	resp := InstanceResponse{
 		ID: i.ID(), CustomerID: i.CustomerID(), OrderID: i.OrderID(), NodeID: i.NodeID(),
 		Hostname: i.Hostname(), Plan: i.Plan(), OS: i.OS(),
 		CPU: i.CPU(), MemoryMB: i.MemoryMB(), DiskGB: i.DiskGB(), BandwidthGB: i.BandwidthGB(),
 		IPv4: i.IPv4(), IPv6: i.IPv6(), HostIP: i.HostIP(),
-		Status:        h.svc.InstanceStatus(i),
-		ControlStatus: i.ControlStatus(),
-		SuspendReason: i.SuspendReason(),
-		RuntimeState:  h.svc.InstanceRuntimeState(i),
-		NetworkMode:   i.NetworkMode(), NATPort: i.NATPort(), InitialPassword: i.InitialPassword(),
+		Status:          h.svc.InstanceStatus(i),
+		ControlStatus:   i.ControlStatus(),
+		SuspendReason:   i.SuspendReason(),
+		RuntimeState:    runtimeState,
+		RuntimeReported: runtimeState != "",
+		NetworkMode:     i.NetworkMode(), NATPort: i.NATPort(), InitialPassword: i.InitialPassword(),
 		CreatedAt: i.CreatedAt().Format(time.RFC3339),
 	}
 	if mappings, err := h.instanceNATPortMappings(i); err == nil {

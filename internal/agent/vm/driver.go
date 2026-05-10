@@ -3,6 +3,7 @@ package vm
 import (
 	"backend-core/pkg/contracts"
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -63,6 +64,10 @@ type BootWaiter interface {
 	// WaitForBoot polls the hypervisor until the VM is ready or the timeout
 	// expires. Returns the final VMInfo on success.
 	WaitForBoot(instanceID string, timeout time.Duration) (*VMInfo, error)
+}
+
+type ConsoleConnector interface {
+	OpenConsole(instanceID string) (io.ReadWriteCloser, error)
 }
 
 // Execute dispatches a task to the appropriate Hypervisor method.

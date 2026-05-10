@@ -12,6 +12,8 @@ service AgentService {
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
   // ReportTaskResult is called after the agent finishes executing a task.
   rpc ReportTaskResult(TaskResultRequest) returns (TaskResultResponse);
+  // OpenConsole streams a short-lived VNC console session through the controller.
+  rpc OpenConsole(stream ConsoleFrame) returns (stream ConsoleFrame);
 }
 
 // ---- Registration ----
@@ -49,6 +51,7 @@ message HeartbeatResponse {
   bool                    ok           = 1;
   repeated Task           tasks        = 2;
   repeated NATForwardRule nat_forwards = 3;
+  repeated ConsoleSession console_sessions = 4;
 }
 
 message NATForwardRule {
@@ -122,3 +125,17 @@ message TaskResultResponse {
   bool ok = 1;
 }
 
+// ---- Console Tunnel ----
+
+message ConsoleSession {
+  string session_id = 1;
+  string instance_id = 2;
+}
+
+message ConsoleFrame {
+  string session_id = 1;
+  string instance_id = 2;
+  bytes  data = 3;
+  string error = 4;
+  string control = 5; // "open", "ready", "close"
+}

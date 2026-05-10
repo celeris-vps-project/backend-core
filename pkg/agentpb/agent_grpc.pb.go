@@ -22,6 +22,7 @@ const (
 	AgentService_Register_FullMethodName         = "/agent.v1.AgentService/Register"
 	AgentService_Heartbeat_FullMethodName        = "/agent.v1.AgentService/Heartbeat"
 	AgentService_ReportTaskResult_FullMethodName = "/agent.v1.AgentService/ReportTaskResult"
+	AgentService_OpenConsole_FullMethodName      = "/agent.v1.AgentService/OpenConsole"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -36,6 +37,8 @@ type AgentServiceClient interface {
 	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
 	// ReportTaskResult is called after the agent finishes executing a task.
 	ReportTaskResult(ctx context.Context, in *TaskResultRequest, opts ...grpc.CallOption) (*TaskResultResponse, error)
+	// OpenConsole streams a short-lived VNC console session through the controller.
+	OpenConsole(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ConsoleFrame, ConsoleFrame], error)
 }
 
 type agentServiceClient struct {
@@ -76,6 +79,19 @@ func (c *agentServiceClient) ReportTaskResult(ctx context.Context, in *TaskResul
 	return out, nil
 }
 
+func (c *agentServiceClient) OpenConsole(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ConsoleFrame, ConsoleFrame], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &AgentService_ServiceDesc.Streams[0], AgentService_OpenConsole_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ConsoleFrame, ConsoleFrame]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_OpenConsoleClient = grpc.BidiStreamingClient[ConsoleFrame, ConsoleFrame]
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -88,6 +104,8 @@ type AgentServiceServer interface {
 	Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
 	// ReportTaskResult is called after the agent finishes executing a task.
 	ReportTaskResult(context.Context, *TaskResultRequest) (*TaskResultResponse, error)
+	// OpenConsole streams a short-lived VNC console session through the controller.
+	OpenConsole(grpc.BidiStreamingServer[ConsoleFrame, ConsoleFrame]) error
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -106,6 +124,9 @@ func (UnimplementedAgentServiceServer) Heartbeat(context.Context, *HeartbeatRequ
 }
 func (UnimplementedAgentServiceServer) ReportTaskResult(context.Context, *TaskResultRequest) (*TaskResultResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportTaskResult not implemented")
+}
+func (UnimplementedAgentServiceServer) OpenConsole(grpc.BidiStreamingServer[ConsoleFrame, ConsoleFrame]) error {
+	return status.Error(codes.Unimplemented, "method OpenConsole not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -182,6 +203,13 @@ func _AgentService_ReportTaskResult_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_OpenConsole_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(AgentServiceServer).OpenConsole(&grpc.GenericServerStream[ConsoleFrame, ConsoleFrame]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_OpenConsoleServer = grpc.BidiStreamingServer[ConsoleFrame, ConsoleFrame]
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -202,6 +230,13 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _AgentService_ReportTaskResult_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "OpenConsole",
+			Handler:       _AgentService_OpenConsole_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+	},
 	Metadata: "agent/v1/agent.proto",
 }

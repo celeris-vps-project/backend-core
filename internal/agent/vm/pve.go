@@ -2,7 +2,9 @@ package vm
 
 import (
 	"backend-core/pkg/contracts"
+	"context"
 	"fmt"
+	"io"
 	"log"
 	"strings"
 	"time"
@@ -303,6 +305,18 @@ func (d *PVEDriver) Destroy(instanceID string) error {
 
 	log.Printf("[pve-driver] DESTROY %s (vmid=%d)", name, vmid)
 	return nil
+}
+
+func (d *PVEDriver) OpenConsole(instanceID string) (io.ReadWriteCloser, error) {
+	vmid, err := d.findVMID(instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("pve console %s: %w", pveName(instanceID), err)
+	}
+	proxy, err := d.client.CreateQEMUVNCProxy(d.node, vmid)
+	if err != nil {
+		return nil, err
+	}
+	return d.client.DialQEMUVNCWebSocket(context.Background(), d.node, vmid, proxy)
 }
 
 // Info returns the current runtime state of a VM.

@@ -12,6 +12,8 @@ import (
 	checkoutAppPkg "backend-core/internal/checkout/app"
 	checkoutInfra "backend-core/internal/checkout/infra"
 	checkoutHttp "backend-core/internal/checkout/interfaces/http"
+	consoleApp "backend-core/internal/console/app"
+	consoleHttp "backend-core/internal/console/interfaces/http"
 	"backend-core/internal/identity/app"
 	"backend-core/internal/identity/infra"
 	"backend-core/internal/identity/interfaces/http/middleware"
@@ -371,6 +373,8 @@ func main() {
 	instApp.SetEventPublisher(bus)
 	instApp.SetNATPortMappingReader(natPortRepo)
 	instApp.SetRuntimeStateReader(provSvc)
+	consoleSvc := consoleApp.NewService(instRepo, provSvc)
+	consoleHandler := consoleHttp.NewHandler(consoleSvc)
 	trafficRepo := instanceInfra.NewTrafficRepo(db)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -791,6 +795,7 @@ func main() {
 		privateAPI.GET("/instances/:id", standardRL, instHandler.GetByID)
 		privateAPI.POST("/instances/:id/start", standardRL, instHandler.Start)
 		privateAPI.POST("/instances/:id/stop", standardRL, instHandler.Stop)
+		privateAPI.POST("/instances/:id/console-session", standardRL, consoleHandler.CreateSession)
 		privateAPI.POST("/ws/instances/ticket", standardRL, instanceWSHub.IssueTicket)
 
 		// ── Checkout tier: Product purchase & unified checkout ──────────
@@ -802,6 +807,7 @@ func main() {
 
 	// ---- WebSocket routes (auth via ?ticket= one-time token) ----
 	h.GET("/api/v1/ws/instances", instanceWSHub.ServeWS)
+	h.GET("/api/v1/instances/console", consoleHandler.ServeWS)
 	h.GET("/api/v1/admin/ws/nodes", wsHub.ServeWS)
 	h.GET("/api/v1/admin/ws/performance", perfHub.ServeWS)
 
@@ -936,8 +942,11 @@ func main() {
 		h.GET("/*filepath", adaptor.HertzHandler(spaHandler))
 	}
 	// 5. Start gRPC server for agent communication (with node-token auth interceptor)
-	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(provisioningGrpc.AuthInterceptor(provSvc)))
-	agentpb.RegisterAgentServiceServer(grpcServer, provisioningGrpc.NewAgentGRPCServer(provSvc))
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(provisioningGrpc.AuthInterceptor(provSvc)),
+		grpc.StreamInterceptor(provisioningGrpc.StreamAuthInterceptor(provSvc)),
+	)
+	agentpb.RegisterAgentServiceServer(grpcServer, provisioningGrpc.NewAgentGRPCServer(provSvc, consoleSvc))
 	go func() {
 		lis, err := net.Listen("tcp", cfg.GRPC.Listen)
 		if err != nil {

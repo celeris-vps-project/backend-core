@@ -1,14 +1,18 @@
 package vm
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/net/websocket"
 )
 
 // PVEClient is a lightweight HTTP client for the Proxmox VE REST API.
@@ -137,6 +141,101 @@ func (c *PVEClient) do(method, path string, params map[string]string) (json.RawM
 	}
 
 	return pveResp.Data, nil
+}
+
+type pveVNCProxy struct {
+	Port   pveString `json:"port"`
+	Ticket string    `json:"ticket"`
+	Cert   string    `json:"cert"`
+	UpID   string    `json:"upid"`
+}
+
+type pveString string
+
+func (s *pveString) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*s = ""
+		return nil
+	}
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		*s = pveString(str)
+		return nil
+	}
+	var num int
+	if err := json.Unmarshal(data, &num); err == nil {
+		*s = pveString(strconv.Itoa(num))
+		return nil
+	}
+	return fmt.Errorf("pve string value: %s", string(data))
+}
+
+func (c *PVEClient) CreateQEMUVNCProxy(node string, vmid int) (*pveVNCProxy, error) {
+	data, err := c.Post(fmt.Sprintf("/nodes/%s/qemu/%d/vncproxy", node, vmid), nil)
+	if err != nil {
+		return nil, fmt.Errorf("pve vncproxy: %w", err)
+	}
+	var proxy pveVNCProxy
+	if err := json.Unmarshal(data, &proxy); err != nil {
+		return nil, fmt.Errorf("pve vncproxy decode: %w", err)
+	}
+	return &proxy, nil
+}
+
+func (c *PVEClient) DialQEMUVNCWebSocket(ctx context.Context, node string, vmid int, proxy *pveVNCProxy) (io.ReadWriteCloser, error) {
+	if proxy == nil || proxy.Port == "" || proxy.Ticket == "" {
+		return nil, fmt.Errorf("pve vnc websocket: proxy ticket and port are required")
+	}
+	u, err := url.Parse(c.baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("pve vnc websocket parse base url: %w", err)
+	}
+	switch u.Scheme {
+	case "https":
+		u.Scheme = "wss"
+	case "http":
+		u.Scheme = "ws"
+	default:
+		return nil, fmt.Errorf("pve vnc websocket unsupported scheme %q", u.Scheme)
+	}
+	u.Path = fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/vncwebsocket", node, vmid)
+	q := u.Query()
+	q.Set("port", string(proxy.Port))
+	q.Set("vncticket", proxy.Ticket)
+	u.RawQuery = q.Encode()
+
+	cfg, err := websocket.NewConfig(u.String(), c.baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("pve vnc websocket config: %w", err)
+	}
+	cfg.Header.Set("Authorization", fmt.Sprintf("PVEAPIToken=%s=%s", c.tokenID, c.tokenSecret))
+	if transport, ok := c.httpClient.Transport.(*http.Transport); ok && transport.TLSClientConfig != nil {
+		cfg.TlsConfig = transport.TLSClientConfig.Clone()
+	}
+	type dialResult struct {
+		conn *websocket.Conn
+		err  error
+	}
+	result := make(chan dialResult, 1)
+	go func() {
+		conn, err := websocket.DialConfig(cfg)
+		result <- dialResult{conn: conn, err: err}
+	}()
+	var conn *websocket.Conn
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case r := <-result:
+		if r.err != nil {
+			return nil, fmt.Errorf("pve vnc websocket dial: %w", r.err)
+		}
+		conn = r.conn
+	}
+	go func() {
+		<-ctx.Done()
+		_ = conn.Close()
+	}()
+	return conn, nil
 }
 
 // Get performs an authenticated GET request.

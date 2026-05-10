@@ -49,7 +49,26 @@ type InstanceRuntimeState struct {
 
 // HeartbeatAck is the controller's response, optionally including queued tasks.
 type HeartbeatAck struct {
-	OK          bool             `json:"ok"`
-	Tasks       []Task           `json:"tasks,omitempty"`
-	NATForwards []NATForwardRule `json:"nat_forwards,omitempty"`
+	OK              bool             `json:"ok"`
+	Tasks           []Task           `json:"tasks,omitempty"`
+	NATForwards     []NATForwardRule `json:"nat_forwards,omitempty"`
+	ConsoleSessions []ConsoleSession `json:"console_sessions,omitempty"`
+}
+
+type ConsoleSession struct {
+	SessionID  string `json:"session_id"`
+	InstanceID string `json:"instance_id"`
+}
+
+type ConsoleFrame struct {
+	SessionID  string `json:"session_id"`
+	InstanceID string `json:"instance_id,omitempty"`
+	Data       []byte `json:"data,omitempty"`
+	Error      string `json:"error,omitempty"`
+	Control    string `json:"control,omitempty"`
+}
+
+type ConsoleStream interface {
+	Send(ConsoleFrame) error
+	Recv() (ConsoleFrame, error)
 }

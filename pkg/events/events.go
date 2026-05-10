@@ -149,6 +149,7 @@ type InstanceStateUpdatedEvent struct {
 	ControlStatus   string  `json:"control_status,omitempty"`
 	SuspendReason   string  `json:"suspend_reason,omitempty"`
 	RuntimeState    string  `json:"runtime_state,omitempty"`
+	RuntimeReported bool    `json:"runtime_reported"`
 	NetworkMode     string  `json:"network_mode,omitempty"`
 	NATPort         int     `json:"nat_port,omitempty"`
 	NATPorts        []int   `json:"nat_ports,omitempty"`

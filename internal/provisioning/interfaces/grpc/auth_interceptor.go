@@ -58,3 +58,42 @@ func AuthInterceptor(svc *app.ProvisioningAppService) grpc.UnaryServerIntercepto
 		return handler(ctx, req)
 	}
 }
+
+func StreamAuthInterceptor(svc *app.ProvisioningAppService) grpc.StreamServerInterceptor {
+	return func(
+		srv interface{},
+		stream grpc.ServerStream,
+		info *grpc.StreamServerInfo,
+		handler grpc.StreamHandler,
+	) error {
+		if strings.HasSuffix(info.FullMethod, "/Register") {
+			return handler(srv, stream)
+		}
+		md, ok := metadata.FromIncomingContext(stream.Context())
+		if !ok {
+			return status.Errorf(codes.Unauthenticated, "missing metadata")
+		}
+		tokens := md.Get("node-token")
+		if len(tokens) == 0 || tokens[0] == "" {
+			return status.Errorf(codes.Unauthenticated, "missing node-token")
+		}
+		nodeID, err := svc.ValidateNodeToken(tokens[0])
+		if err != nil {
+			return status.Errorf(codes.Unauthenticated, "invalid node-token")
+		}
+		wrapped := &nodeIDServerStream{
+			ServerStream: stream,
+			ctx:          context.WithValue(stream.Context(), nodeIDContextKey, nodeID),
+		}
+		return handler(srv, wrapped)
+	}
+}
+
+type nodeIDServerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (s *nodeIDServerStream) Context() context.Context {
+	return s.ctx
+}
