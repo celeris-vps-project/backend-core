@@ -23,6 +23,7 @@ type Config struct {
 	Server    ServerConfig        `json:"server" yaml:"server"`
 	Admin     AdminConfig         `json:"admin" yaml:"admin"`
 	Log       LogConfig           `json:"log" yaml:"log"`
+	Upgrade   bool                `json:"upgrade" yaml:"upgrade"`
 }
 
 // AdminConfig holds the initial admin account settings.

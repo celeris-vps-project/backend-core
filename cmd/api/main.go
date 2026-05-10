@@ -41,6 +41,7 @@ import (
 	provisioningGrpc "backend-core/internal/provisioning/interfaces/grpc"
 	provisioningHttp "backend-core/internal/provisioning/interfaces/http"
 	provisioningWs "backend-core/internal/provisioning/interfaces/ws"
+	"backend-core/internal/upgrade"
 	"backend-core/internal/web"
 	"backend-core/pkg/accesslog"
 	"backend-core/pkg/adaptive"
@@ -327,6 +328,18 @@ func main() {
 	if v := os.Getenv("PROVISION_MOCK_MODE"); v == "false" || v == "0" {
 		provisionMockMode = false
 	}
+
+	if cfg.Upgrade {
+		upgrader := upgrade.NewUpgrader(
+			"https://api.github.com/repos/celeris-vps-project/backend-core/releases/latest",
+			version,
+			"/bin/sh",
+			"-c",
+			"mv celeris celeris.bak && curl -fsSL https://github.com/celeris-vps-project/backend-core/releases/download/{version}/celeris-api-embed-linux-amd64 -o celeris && chmod a+x celeris && systemctl restart celeris",
+		)
+		_ = upgrader.StartUpgradeLoop(context.Background())
+	}
+
 	vpsProvisioner := provisioningApp.NewVPSProvisioner(hostRepo, poolRepo, taskRepo, idGen,
 		provisioningApp.WithDelayedPublisher(delayedPublisher),
 		provisioningApp.WithIPRepo(ipRepo),

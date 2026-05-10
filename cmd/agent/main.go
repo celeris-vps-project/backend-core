@@ -6,8 +6,9 @@ import (
 	"backend-core/internal/agent/handler"
 	"backend-core/internal/agent/monitor"
 	"backend-core/internal/agent/nat"
-	"backend-core/internal/agent/upgrade"
+
 	"backend-core/internal/agent/vm"
+	"backend-core/internal/upgrade"
 	"backend-core/pkg/contracts"
 	"context"
 	"flag"
